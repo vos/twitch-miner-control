@@ -7,3 +7,6 @@ cookies/
 .env
 .worktrees/
 .claude/
+__pycache__/
+*.pyc
+.venv/

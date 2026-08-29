@@ -1,0 +1,3 @@
+[submodule "vendor/miner"]
+	path = vendor/miner
+	url = https://github.com/mpforce1/Twitch-Channel-Points-Miner.git

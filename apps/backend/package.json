@@ -1,0 +1,19 @@
+{
+  "name": "@app/backend",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "@fastify/cookie": "^11.0.0",
+    "better-sqlite3": "^11.7.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0",
+    "@types/node": "^22.10.0",
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}
