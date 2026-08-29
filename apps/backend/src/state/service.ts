@@ -35,6 +35,7 @@ export class StateService extends EventEmitter {
   private debounceTimer: NodeJS.Timeout | null = null;
   private ticker: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
+  private dirty = false;
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
@@ -60,8 +61,33 @@ export class StateService extends EventEmitter {
   }
 
   async refresh(): Promise<void> {
-    if (this.inFlight) return this.inFlight;
-    this.inFlight = this.doRefresh().finally(() => { this.inFlight = null; });
+    if (this.inFlight) {
+      // Something new arrived while a refresh was already in flight (a
+      // doorbell event, a concurrent caller, or the 60s tick). The
+      // in-flight request was built from data that's now out of date, so
+      // returning it as-is would silently drop this arrival -- the
+      // dashboard would then sit still until the *next* unrelated
+      // trigger, degrading the doorbell to plain polling. Mark dirty so
+      // the in-flight refresh's completion handler starts exactly one
+      // follow-up; many arrivals during the same window all set the same
+      // flag, so they coalesce into that single follow-up rather than
+      // queuing one round trip per arrival.
+      this.dirty = true;
+      return this.inFlight;
+    }
+    this.inFlight = this.doRefresh().finally(() => {
+      this.inFlight = null;
+      if (this.dirty) {
+        this.dirty = false;
+        // Fire-and-forget: callers awaiting *this* refresh() only wait
+        // for the request that was in flight when they called it, not
+        // for a coalesced follow-up triggered after the fact. The
+        // follow-up must run whether the just-finished refresh succeeded
+        // or failed -- doRefresh() never rejects (see its own try/catch),
+        // so this always executes.
+        void this.refresh();
+      }
+    });
     return this.inFlight;
   }
 
@@ -128,5 +154,9 @@ export class StateService extends EventEmitter {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.ticker = null;
     this.debounceTimer = null;
+    // Clear any pending dirty flag so an in-flight refresh that settles
+    // after stop() cannot resurrect a follow-up request -- stop() must
+    // leave nothing pending.
+    this.dirty = false;
   }
 }

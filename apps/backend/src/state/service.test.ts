@@ -35,6 +35,19 @@ const alpha = (points: number, isOnline = true) => ({
   }],
 });
 
+/** A manually-controlled promise, used to hold a request open so a test
+ * can deterministically arrange "another refresh arrives while the first
+ * is still in flight" without relying on microtask-timing luck. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 test("refresh publishes streamer state with a timestamp", async () => {
   const { service } = make([alpha(100)]);
   await service.refresh();
@@ -150,4 +163,133 @@ test("removing the last streamer clears state, is not stale, and emits change on
   clock += 1;
   await service.refresh();
   expect(changes.length).toBe(2);
+});
+
+// Fix round 1: a refresh() (or the ring() debounce firing) arriving while
+// an earlier refresh is still in flight must not be silently dropped.
+// Before the fix, refresh() just returned the stale in-flight promise and
+// never scheduled a follow-up -- the new event's data was never fetched
+// until the next unrelated trigger (next ring() or the 60s tick), which
+// silently degrades the doorbell to plain polling.
+
+test("a refresh arriving during an in-flight refresh triggers exactly one follow-up round trip", async () => {
+  const d1 = deferred<unknown>();
+  const request = vi.fn()
+    .mockImplementationOnce(() => d1.promise)
+    .mockImplementation(async () => alpha(100));
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    debounceMs: 50,
+    now: () => clock,
+  });
+
+  const p1 = service.refresh();
+  expect(request).toHaveBeenCalledTimes(1);
+
+  // A second arrival while the first request is still outstanding.
+  service.refresh();
+  expect(request).toHaveBeenCalledTimes(1); // coalesced, no new request yet
+
+  d1.resolve(alpha(100));
+  await p1;
+
+  // The follow-up must have actually been dispatched, not just "no error
+  // was thrown" -- assert the real second round trip happened.
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("several arrivals during one in-flight window produce exactly one follow-up, not one per arrival", async () => {
+  const d1 = deferred<unknown>();
+  const request = vi.fn()
+    .mockImplementationOnce(() => d1.promise)
+    .mockImplementation(async () => alpha(100));
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    debounceMs: 50,
+    now: () => clock,
+  });
+
+  const p1 = service.refresh();
+  service.refresh();
+  service.refresh();
+  service.refresh();
+  service.refresh();
+  expect(request).toHaveBeenCalledTimes(1);
+
+  d1.resolve(alpha(100));
+  await p1;
+
+  // Five arrivals during the same in-flight window collapse into a
+  // single follow-up -- a thundering burst must not become a burst of
+  // follow-up requests.
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("the follow-up still runs when the in-flight refresh rejects", async () => {
+  const d1 = deferred<unknown>();
+  const d2 = deferred<unknown>();
+  const request = vi.fn()
+    .mockImplementationOnce(() => d1.promise)
+    .mockImplementationOnce(() => d2.promise);
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    debounceMs: 50,
+    now: () => clock,
+  });
+
+  const p1 = service.refresh();
+  service.refresh(); // arrives during the in-flight (soon-to-fail) request
+  d1.reject(new Error("gql exploded"));
+  await p1; // doRefresh() catches internally, so p1 resolves, not rejects
+
+  // An error on the in-flight refresh must not strand the pending update
+  // -- the follow-up still fires (the second round trip is dispatched
+  // synchronously once the first settles, whether it succeeded or not).
+  expect(request).toHaveBeenCalledTimes(2);
+
+  // Let the follow-up's own request resolve, and wait deterministically
+  // (via the "change" event it emits on success, rather than guessing at
+  // microtask timing) for it to finish updating state.
+  const secondSettled = new Promise<void>((resolve) => {
+    service.once("change", () => resolve());
+  });
+  d2.resolve(alpha(100));
+  await secondSettled;
+
+  expect(service.snapshot().error).toBe(null);
+  expect(service.snapshot().streamers[0].points).toBe(100);
+});
+
+test("stop() during an in-flight refresh clears a pending dirty flag so no follow-up fires", async () => {
+  const d1 = deferred<unknown>();
+  const request = vi.fn()
+    .mockImplementationOnce(() => d1.promise)
+    .mockImplementation(async () => alpha(100));
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    debounceMs: 50,
+    now: () => clock,
+  });
+
+  const p1 = service.refresh();
+  service.refresh(); // sets the dirty flag
+  service.stop();
+  d1.resolve(alpha(100));
+  await p1;
+
+  // stop() must leave nothing pending -- the dirty flag must not
+  // resurrect a refresh once the in-flight request settles.
+  expect(request).toHaveBeenCalledTimes(1);
 });
