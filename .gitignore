@@ -5,3 +5,5 @@ config.json
 cookies/
 *.db
 .env
+.worktrees/
+.claude/
