@@ -15,6 +15,32 @@ rl.on("line", (line) => {
   if (req.op === "crash") process.exit(3);
   if (req.op === "silent") return;
 
+  if (req.op === "echo_params") {
+    // Echoes back the full received request object (minus id/op) so a
+    // test can assert exactly which fields the client put on the wire --
+    // used to prove the envelope (id/op) cannot be overridden by params.
+    const { id, op, ...rest } = req;
+    process.stdout.write(
+      `${JSON.stringify({ id: req.id, ok: true, data: { receivedOp: op, rest } })}\n`,
+    );
+    return;
+  }
+
+  if (req.op === "bad_json_style_error") {
+    // Mirrors python/helpers/state.py's bad-JSON path (lines 167-169):
+    // a response with no correlating id at all, because the helper never
+    // got far enough to know what id it was replying to.
+    process.stdout.write(
+      `${JSON.stringify({
+        id: null,
+        ok: false,
+        error: "bad json: simulated parse failure",
+        code: "BAD_REQUEST",
+      })}\n`,
+    );
+    return;
+  }
+
   if (req.op === "auth_fail") {
     process.stdout.write(
       `${JSON.stringify({
@@ -28,19 +54,22 @@ rl.on("line", (line) => {
   }
 
   if (req.op === "slow_chunks") {
-    // Write the response one character at a time with the event loop
-    // yielding in between, forcing the OS pipe (and therefore the
-    // client's stdout handler) to see it as many separate chunks rather
-    // than one line-sized write.
+    // Deliberately split the response across two writes separated by a
+    // real timer tick (not setImmediate/microtask, which the OS pipe can
+    // still coalesce back into one read on a fast machine). Waiting a
+    // real 20ms with the first half already flushed forces the kernel to
+    // deliver it as a separate read to the client before the remainder
+    // exists at all -- so a client that assumes one `data` event is one
+    // complete line will either hang (never sees the newline in the
+    // first chunk) or throw parsing truncated JSON, rather than
+    // incidentally passing because the halves got glued back together.
     const payload = `${JSON.stringify({ id: req.id, ok: true, data: { echoed: "slow_chunks" } })}\n`;
-    let i = 0;
-    const writeNext = () => {
-      if (i >= payload.length) return;
-      process.stdout.write(payload[i]);
-      i += 1;
-      setImmediate(writeNext);
-    };
-    writeNext();
+    const splitAt = Math.floor(payload.length / 2);
+    process.stdout.write(payload.slice(0, splitAt), () => {
+      setTimeout(() => {
+        process.stdout.write(payload.slice(splitAt));
+      }, 20);
+    });
     return;
   }
 
