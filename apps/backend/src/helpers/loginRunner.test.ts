@@ -1,0 +1,136 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, test } from "vitest";
+import { LoginRunner, type LoginProgress } from "./loginRunner.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fake = join(here, "../../test/fixtures/fake-login.mjs");
+const stubborn = join(here, "../../test/fixtures/stubborn-login.mjs");
+
+const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function run(env: Record<string, string> = {}) {
+  const runner = new LoginRunner({
+    command: process.execPath, args: [fake], cwd: process.cwd(), env,
+  });
+  const seen: LoginProgress[] = [];
+  runner.on("progress", (p) => seen.push(p));
+  return new Promise<LoginProgress[]>((resolve) => {
+    runner.on("done", () => resolve(seen));
+    runner.start();
+  });
+}
+
+test("emits the device code for the UI to display", async () => {
+  const seen = await run();
+  expect(seen[0]).toEqual({
+    stage: "code", userCode: "ABCD1234",
+    verificationUri: "https://www.twitch.tv/activate", expiresAt: 999,
+  });
+});
+
+test("reaches ok on success", async () => {
+  expect((await run()).at(-1)).toEqual({ stage: "ok", username: "alex" });
+});
+
+test("surfaces an error stage on failure", async () => {
+  const last = (await run({ FAKE_LOGIN: "fail" })).at(-1);
+  expect(last).toEqual({ stage: "error", error: "token rejected by Twitch" });
+});
+
+test("current exposes the latest progress for late subscribers", async () => {
+  const runner = new LoginRunner({
+    command: process.execPath, args: [fake], cwd: process.cwd(), env: {},
+  });
+  await new Promise<void>((resolve) => {
+    runner.on("done", () => resolve());
+    runner.start();
+  });
+  expect(runner.current).toEqual({ stage: "ok", username: "alex" });
+});
+
+// Correction 5: a line whose "stage" is not a recognised LoginProgress
+// variant must be discarded exactly like malformed JSON, never presented
+// to consumers (via "progress" or `current`) as valid progress.
+test("discards a line with an unrecognised stage instead of emitting it", async () => {
+  const seen = await run({ FAKE_LOGIN: "badstage" });
+  for (const p of seen) {
+    expect(["code", "pending", "ok", "error"]).toContain(p.stage);
+  }
+  expect(seen.at(-1)).toEqual({ stage: "ok", username: "alex" });
+});
+
+// Correction 1: a spawn failure (bad interpreter path, non-executable
+// helper, ...) emits "error" and never "exit". Without a dedicated
+// "error" handler, `current` stays null, "progress" never fires, and
+// "done" never fires -- an HTTP request awaiting login completion would
+// hang forever. This must reach a terminal error and fire "done" exactly
+// once, without relying on a timeout to prove it.
+test("surfaces a spawn failure as a terminal error instead of hanging", async () => {
+  const runner = new LoginRunner({
+    command: "/nonexistent/definitely-not-a-real-binary",
+    args: [],
+    cwd: process.cwd(),
+    env: {},
+  });
+  let doneCount = 0;
+  runner.on("done", () => { doneCount += 1; });
+  await new Promise<void>((resolve) => {
+    runner.on("done", () => resolve());
+    runner.start();
+  });
+  expect(runner.current?.stage).toBe("error");
+  expect((runner.current as { error: string }).error).toMatch(/./);
+  // Give any stray duplicate "exit" event a chance to fire before we
+  // assert the count stayed at exactly one.
+  await settle(50);
+  expect(doneCount).toBe(1);
+});
+
+// Correction 2: a helper that floods stderr past the OS pipe's ~64KB
+// buffer must not deadlock the runner (which would otherwise never read
+// it), and the collected (tail-capped) text should end up in the
+// synthesized error message so an operator can diagnose a failed login
+// from a Python traceback.
+test("drains stderr and surfaces its tail when the helper dies silently", async () => {
+  const seen = await run({ FAKE_LOGIN: "stderr-flood" });
+  const last = seen.at(-1);
+  expect(last?.stage).toBe("error");
+  expect((last as { error: string }).error).toContain("TRACEBACK_MARKER_END");
+});
+
+// Correction 3: cancel() must escalate to SIGKILL if the helper ignores
+// SIGTERM, matching apps/backend/src/miner/supervisor.ts's approach.
+test("cancel escalates to SIGKILL when the helper ignores SIGTERM", async () => {
+  const runner = new LoginRunner({
+    command: process.execPath, args: [stubborn], cwd: process.cwd(), env: {},
+    graceMs: 200,
+  });
+  const done = new Promise<void>((resolve) => runner.on("done", () => resolve()));
+  runner.start();
+  await settle(50); // let the fixture emit its code/pending lines first
+  const started = Date.now();
+  runner.cancel();
+  await done;
+  expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+  expect(runner.current?.stage).toBe("error");
+});
+
+// Correction 3: cancel() before start(), or after the child has already
+// exited, must be a safe no-op -- never throw, never leave a dangling
+// timer.
+test("cancel is a safe no-op before start and after exit", async () => {
+  const neverStarted = new LoginRunner({
+    command: process.execPath, args: [fake], cwd: process.cwd(), env: {},
+  });
+  expect(() => neverStarted.cancel()).not.toThrow();
+
+  const finished = new LoginRunner({
+    command: process.execPath, args: [fake], cwd: process.cwd(), env: {},
+  });
+  await new Promise<void>((resolve) => {
+    finished.on("done", () => resolve());
+    finished.start();
+  });
+  expect(() => finished.cancel()).not.toThrow();
+});
