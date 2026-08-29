@@ -558,7 +558,7 @@ git commit -m "feat: map config.json onto miner objects via run.py adapter"
 
 **Interfaces:**
 - Consumes: `EventHook`, `Events` (Task 2)
-- Produces: `DoorbellHook(url: str, token: str, queue_size: int = 256)` with `.send(message, event)`, `.validate_record(record)`, `.pending()` and `.stop()` — used by `run.py` (Task 3) and received by the backend endpoint in Task 12
+- Produces: `DoorbellHook(url: str, token: str, queue_size: int = 256)` with `.send(message, event)`, `.validate_record(record)`, `.flush(timeout)` and `.stop()` — used by `run.py` (Task 3) and received by the backend endpoint in Task 12
 
 - [ ] **Step 1: Write the failing test**
 
