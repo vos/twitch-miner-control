@@ -5,18 +5,51 @@ the miner's own GQL layer so persisted-query hashes stay upstream's problem.
 """
 import json
 import os
+import re
 import sys
 
 import requests
 
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
 
-AUTH_MARKERS = ("401", "403", "unauthorized", "authentication")
+# Word-boundary match for a bare status code, e.g. "401 Client Error" or
+# "HTTP 403" -- but NOT "40100ms" or "8401f" (word boundaries require a
+# transition into/out of a run of digits, and "40100"/"8401f" never have
+# a non-digit/non-word character directly touching "401"/"403" at the
+# right spot). Deliberately excludes a status code immediately preceded
+# by "=" (e.g. "retry-after=403") -- see docstring on
+# _text_looks_like_auth for why.
+_STATUS_RE = re.compile(r"(?<!=)\b(401|403)\b")
+_WORD_MARKERS = ("unauthorized", "authentication")
 
 
 def _text_looks_like_auth(text: str) -> bool:
+    """Last-resort text fallback -- the structural HTTPError/status_code
+    check is the reliable path (see _is_http_auth_error) and always runs
+    first. This fallback exists only for exceptions that never carry a
+    structured status code at all (e.g. a plain RuntimeError from a fake,
+    or a genuinely worded but non-HTTPError failure).
+
+    A bare substring match on "401"/"403" is dangerously loose: it also
+    matches inside "40100ms", "8401f" (a request id), or
+    "retry-after=403" (a rate-limit parameter value, not a status code).
+    A false positive here causes a spurious logout, which is exactly as
+    damaging as never detecting a real auth failure -- so this errs
+    conservative rather than broad:
+      - the status code must sit on a word boundary (rules out "40100",
+        "8401f"), AND
+      - must not be immediately preceded by "=" (rules out
+        "retry-after=403", which `\\b` alone does not exclude since "="
+        counts as a non-word boundary too).
+    This means some exotic phrasings (e.g. "code=401") will be missed by
+    the fallback and fall through to `code: "GQL"` -- an acceptable
+    false negative, since the structural check remains the primary,
+    reliable path for anything that's actually an HTTPError.
+    """
     lowered = text.lower()
-    return any(marker in lowered for marker in AUTH_MARKERS)
+    if _STATUS_RE.search(lowered):
+        return True
+    return any(marker in lowered for marker in _WORD_MARKERS)
 
 
 def _is_http_auth_error(exc) -> bool:

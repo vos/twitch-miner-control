@@ -248,3 +248,91 @@ def test_genuine_non_auth_gql_failure_stays_gql_and_does_not_reload_cookies():
     assert out["ok"] is False
     assert out["code"] == "GQL"
     assert len(reloads) == 0
+
+
+def _fails_with(exc_factory):
+    """Builds a fake GQL whose get_id_from_login raises the given exception.
+    Uses `lookup`, not `state`, for the same reason as
+    test_genuine_non_auth_gql_failure_stays_gql_and_does_not_reload_cookies:
+    a `state` batch swallows non-auth per-streamer errors instead of
+    surfacing a top-level code, so it can't distinguish GQL from AUTH here.
+    """
+    class Failing(FakeGQL):
+        def get_id_from_login(self, username):
+            raise exc_factory()
+
+    return Failing()
+
+
+def test_timeout_with_401_as_a_substring_of_a_larger_number_is_not_auth():
+    """Regression guard for a real false positive: a bare '401'/'403'
+    substring match previously classified this as AUTH because '401' is a
+    substring of '40100'. A spurious logout from a timeout message is just
+    as damaging as never detecting a real auth failure."""
+    reloads = []
+    session = SimpleNamespace(
+        gql=_fails_with(lambda: TimeoutError("Connection timed out after 40100ms")),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: True,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+    assert len(reloads) == 0
+
+
+def test_request_id_containing_401_is_not_auth():
+    """Regression guard: a Twitch request id like '8401f' must not trip
+    auth detection just because it contains the digits '401'."""
+    reloads = []
+    session = SimpleNamespace(
+        gql=_fails_with(lambda: RuntimeError("server error, request id 8401f")),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: True,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+    assert len(reloads) == 0
+
+
+def test_rate_limit_retry_after_403_parameter_is_not_auth():
+    """Regression guard for the tricky case: 'retry-after=403' is a
+    rate-limit parameter value, not an HTTP status code, even though a
+    bare word-boundary regex (\\b(401|403)\\b) alone would still match it
+    -- '=' counts as a non-word boundary. We explicitly exclude a status
+    code immediately preceded by '=' to rule this out. See
+    _text_looks_like_auth's docstring for the full rationale."""
+    reloads = []
+    session = SimpleNamespace(
+        gql=_fails_with(lambda: RuntimeError("rate limited: retry-after=403")),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: True,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+    assert len(reloads) == 0
+
+
+def test_genuine_401_client_error_text_still_classifies_as_auth():
+    """Regression guard for the fix made in round 1: a plain exception
+    (not wrapped in a RetryError/GQLError, and not a requests.HTTPError
+    with a structured status_code -- i.e. only the text fallback can catch
+    it) whose message is a genuine '401 Client Error: Unauthorized' must
+    still classify as AUTH. This is exactly the shape
+    test_auth_failure_triggers_one_cookie_reload_then_reports_auth already
+    pins for 'state', repeated here through 'lookup' for symmetry with the
+    other text-fallback tests in this file."""
+    reloads = []
+    session = SimpleNamespace(
+        gql=_fails_with(lambda: RuntimeError(
+            "401 Client Error: Unauthorized for url: https://gql.twitch.tv/gql"
+        )),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: False,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"
+    assert len(reloads) == 1
