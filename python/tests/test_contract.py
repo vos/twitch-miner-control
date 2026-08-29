@@ -16,6 +16,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
+from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, USER_AGENTS
 
 
 def params(fn):
@@ -56,14 +57,11 @@ def test_client_session_and_gql_construction():
     assert "login" in params(ClientSession.__init__)
     assert "user_agent" in params(ClientSession.__init__)
     assert params(GQLFactory.create) == ["self", "client_session"]
-    for method in [
-        "get_channel_points_context",
-        "with_is_stream_live_query",
-        "channel_follows",
-        "get_id_from_login",
-        "post_gql_request_batch",
-    ]:
-        assert callable(getattr(GQL, method)), method
+    assert params(GQL.get_channel_points_context) == ["self", "username"]
+    assert params(GQL.with_is_stream_live_query) == ["self", "channel_id"]
+    assert params(GQL.get_id_from_login) == ["self", "streamer_username"]
+    assert params(GQL.channel_follows) == ["self", "limit", "order"]
+    assert params(GQL.post_gql_request_batch) == ["self", "operation_name", "request_json", "parser"]
 
 
 def test_streamer_settings_fields_we_expose():
@@ -73,7 +71,15 @@ def test_streamer_settings_fields_we_expose():
         "chat",
     }
     assert exposed.issubset(set(StreamerSettings.__slots__))
+    assert exposed.issubset(set(params(StreamerSettings.__init__)))
     assert params(Streamer.__init__)[1] == "username"
+    assert "settings" in params(Streamer.__init__)
     assert {"ALWAYS", "NEVER", "ONLINE", "OFFLINE"}.issubset(
         {m.name for m in ChatPresence}
     )
+
+
+def test_constants_used_by_the_session_bootstrap():
+    assert isinstance(CLIENT_ID, str) and CLIENT_ID
+    assert isinstance(CLIENT_VERSION, str) and CLIENT_VERSION
+    assert "FIREFOX" in USER_AGENTS["Linux"]
