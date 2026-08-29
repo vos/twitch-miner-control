@@ -22,4 +22,4 @@ dev = ["pytest>=8.3.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
-pythonpath = [".", "vendor/miner"]
+pythonpath = [".", "python", "vendor/miner"]
