@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+config.json
+cookies/
+*.db
+.env
