@@ -17,6 +17,12 @@ export interface SupervisorOptions {
   backoffBaseMs?: number;
   backoffCapMs?: number;
   maxRestarts?: number;
+  /**
+   * How long a miner must stay up before a later crash is treated as a
+   * fresh problem rather than a continuation of a crash loop (see
+   * STABILITY_MS below for the default and rationale).
+   */
+  stabilityMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -30,6 +36,43 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Twitch cookies.
  */
 const STOP_GRACE_MS = 20_000;
+
+/**
+ * How long a miner must run before a subsequent crash resets the
+ * restart budget, if the caller does not override stabilityMs.
+ *
+ * restartCount/maxRestarts exists to bound a *rapid crash loop*
+ * (broken config, dead auth, etc. that will not fix itself), not to
+ * bound the miner's total lifetime crash count. A long-running miner
+ * that hits an occasional transient Twitch/network blip and recovers
+ * cleanly each time must not eventually exhaust the budget and park in
+ * CRASHED just because it has been running for weeks. Five minutes is
+ * long enough that no plausible backoff schedule (base * 2^n, capped)
+ * would still be mid-loop at that point for any reasonable maxRestarts,
+ * so reaching five stable minutes is a reliable signal the miner is
+ * genuinely healthy again, not still flapping.
+ */
+const STABILITY_MS = 5 * 60_000;
+
+/**
+ * How long spawnOnce() waits after Node confirms the process exists
+ * before it is willing to call it RUNNING, if the child neither exits
+ * nor errors first. This is raced against exit/error (whichever comes
+ * first wins), so a child that crashes quickly is never reported
+ * RUNNING regardless of how this constant is tuned -- but it does need
+ * to be generous enough to outlast realistic interpreter/runtime
+ * startup jitter between process creation and the child's own code
+ * actually running, or a quick-crashing child could still slip through
+ * the gap between "OS confirms the process exists" and "the child's
+ * own code has run long enough to crash". Measured empirically against
+ * this repo's Node-based test fixture (which is far lighter than a
+ * real Python interpreter with heavy imports): interpreter+module-load
+ * overhead alone was ~35-50ms before any of the fixture's own code ran,
+ * so a fixture configured to crash 45ms after that point exited at
+ * ~95-100ms wall-clock from spawn. 250ms leaves comfortable margin over
+ * that measurement for CI jitter.
+ */
+const SPAWN_SETTLE_MS = 250;
 
 export class Supervisor extends EventEmitter {
   state: MinerState = "STOPPED";
@@ -56,8 +99,15 @@ export class Supervisor extends EventEmitter {
 
   private get grace() { return this.options.graceMs ?? STOP_GRACE_MS; }
   private get fastExit() { return this.options.fastExitMs ?? 10_000; }
+  private get stability() { return this.options.stabilityMs ?? STABILITY_MS; }
 
   private setState(state: MinerState): void {
+    // Guard against re-emitting a state the caller is already in --
+    // e.g. three redundant stop() calls on an already-STOPPED
+    // supervisor would otherwise fire "state" three more times, and a
+    // UI naively rendering "miner stopped" toast-per-event would spam
+    // the operator.
+    if (this.state === state) return;
     this.state = state;
     this.emit("state", state);
   }
@@ -105,20 +155,32 @@ export class Supervisor extends EventEmitter {
     child.on("error", (err) => this.onSpawnError(generation, err));
     this.child = child;
 
-    // Wait for the OS to confirm the process actually exists (or fails
-    // to spawn at all -- ENOENT/EACCES surface as 'error' before
-    // 'spawn'). This alone is not enough of a readiness signal: 'spawn'
-    // fires as soon as fork/exec succeeds, well before the child has
-    // executed any of its own startup code (e.g. installing its SIGTERM
-    // handler). If start() resolved immediately on 'spawn', a caller
-    // that calls stop() right away could send SIGTERM before the child
-    // has registered its handler, hitting the OS default disposition
-    // instead of the miner's graceful-shutdown path -- not unsafe (the
-    // default disposition still terminates the process), but it would
-    // make stop() nondeterministically skip the miner's own cleanup. The
-    // short settle delay below gives interpreter startup (signal
-    // handlers are installed essentially at the top of any real
-    // entrypoint, long before slow imports) time to complete first.
+    // Wait for the OS to confirm the process actually exists (the
+    // 'spawn' event), THEN race a short settle window against the child
+    // dying (exit/error) before we're willing to call it RUNNING.
+    // Whichever happens first wins: if the child exits/errors at any
+    // point -- including partway through the settle window -- `finish`
+    // is called immediately by that event, `settled` short-circuits the
+    // timer's later call, and the code below sees a non-null exitCode
+    // and skips straight past the RUNNING transition. This is what
+    // makes a quick-crashing child (e.g. delayed_crash with a short
+    // DIE_AFTER_MS) reliably observed as CRASHED rather than
+    // momentarily reported RUNNING: onExit/onSpawnError already move
+    // the state to CRASHED as soon as their event fires, and nothing
+    // here can clobber that back to RUNNING afterwards, because the
+    // exitCode check below runs after the same event has already been
+    // observed by this race.
+    //
+    // The settle window itself (SPAWN_SETTLE_MS, see above) is
+    // deliberately NOT a production safety mechanism for signal
+    // delivery: stop() and start() both route through the same
+    // serialize() lock, so a stop() called during this window queues
+    // behind spawnOnce() rather than racing it, and SIGTERM can never
+    // be sent early or dropped as a result of this delay. Its only job
+    // is to give a child that's about to crash enough real wall-clock
+    // time to actually do so before we give up waiting and assume it's
+    // alive; it is cheap insurance against a future refactor that calls
+    // kill() directly (bypassing the lock) too.
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -126,7 +188,8 @@ export class Supervisor extends EventEmitter {
         settled = true;
         resolve();
       };
-      child.once("spawn", () => setTimeout(finish, 50));
+      child.once("spawn", () => setTimeout(finish, SPAWN_SETTLE_MS));
+      child.once("exit", finish);
       child.once("error", finish);
     });
     if (this.generation !== generation || this.child !== child) {
@@ -166,6 +229,11 @@ export class Supervisor extends EventEmitter {
       this.setState("CRASHED");
       return;
     }
+    if (uptime >= this.stability) {
+      // Ran long enough to be considered a healthy stretch, not a
+      // continuation of a crash loop -- give it a fresh restart budget.
+      this.restartCount = 0;
+    }
     void this.scheduleRestart(generation, code);
   }
 
@@ -175,6 +243,16 @@ export class Supervisor extends EventEmitter {
       this.setState("CRASHED");
       return;
     }
+    // The miner has crashed and a restart is pending: it is not running,
+    // and must not be reported as RUNNING (e.g. to a dashboard) while
+    // this backoff sleep is in flight. RESTARTING is the existing state
+    // that best matches "no live miner right now, but the supervisor is
+    // actively working towards one" -- the same meaning restart()
+    // already gives it for a caller-initiated cycle, so callers get one
+    // consistent "don't treat this as healthy nor as terminal" signal
+    // rather than a new state value that every consumer would need to
+    // learn to handle identically anyway.
+    this.setState("RESTARTING");
     const base = this.options.backoffBaseMs ?? 1000;
     const cap = this.options.backoffCapMs ?? 300_000;
     const delay = Math.min(base * 2 ** this.restartCount, cap);
@@ -192,13 +270,42 @@ export class Supervisor extends EventEmitter {
     return this.serialize(() => this.terminate());
   }
 
-  private async terminate(): Promise<void> {
+  /**
+   * @param finalState state to settle into once the process is confirmed
+   * gone. terminate() itself is also used mid-restart() (where the
+   * caller wants to stay in RESTARTING rather than have terminate()
+   * announce a transient STOPPED that immediately flips to STARTING).
+   */
+  private async terminate(finalState: MinerState = "STOPPED"): Promise<void> {
+    // This flag -- and bumping the generation counter -- must be set
+    // BEFORE any early return, not after. A miner that has crashed past
+    // fastExitMs has this.child === null while scheduleRestart() sleeps
+    // in its backoff window with a respawn pending. The early return
+    // below is exactly the path a stop() call takes in that situation
+    // (there is no live child to signal), so if intentionalStop were set
+    // only after it, an operator's stop() would silently no-op here,
+    // the pending restart's generation check would still pass, and the
+    // miner would resurrect itself once the backoff delay elapsed --
+    // reporting STOPPED to the operator while a live Twitch session
+    // came back moments later. Bumping the generation here too makes
+    // this defence-in-depth rather than a single point of failure: even
+    // if intentionalStop were somehow missed, scheduleRestart's
+    // generation check would still catch it.
+    this.intentionalStop = true;
+    // Bumping the generation here means the child's own onExit/
+    // onSpawnError handlers (registered in spawnOnce with the OLD
+    // generation number) will see a mismatch and bail out without
+    // touching this.child or state themselves once this process
+    // actually exits below -- so terminate() must take over both of
+    // those responsibilities itself rather than deferring to them.
+    this.generation += 1;
+
     const child = this.child;
     if (!child || child.exitCode !== null) {
-      this.setState("STOPPED");
+      this.child = null;
+      this.setState(finalState);
       return;
     }
-    this.intentionalStop = true;
     await new Promise<void>((resolve) => {
       let settled = false;
       const finish = () => {
@@ -221,13 +328,23 @@ export class Supervisor extends EventEmitter {
       }, this.grace);
       child.kill("SIGTERM");
     });
-    this.setState("STOPPED");
+    // The generation bump above means onExit (registered against the
+    // old generation) will no-op on this child's exit event, so null it
+    // out here instead of relying on onExit to do it.
+    if (this.child === child) this.child = null;
+    this.setState(finalState);
   }
 
   restart(): Promise<void> {
     return this.serialize(async () => {
       this.setState("RESTARTING");
-      await this.terminate();
+      // Pass "RESTARTING" through so terminate() re-asserts the state
+      // we're already in instead of settling into STOPPED -- otherwise
+      // a state-change listener would see the spurious sequence
+      // RESTARTING -> STOPPED -> STARTING -> RUNNING and a UI could
+      // flash "miner stopped" mid-restart even though the miner was
+      // never actually left in a stopped, idle state.
+      await this.terminate("RESTARTING");
       this.restartCount = 0;
       await this.spawnOnce();
     });
