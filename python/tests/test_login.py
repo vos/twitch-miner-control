@@ -107,6 +107,45 @@ def test_expired_code_stops_polling_instead_of_looping_forever():
     assert "expired" in lines[-1]["error"]
 
 
+def test_expires_at_is_wall_clock_not_monotonic():
+    """expiresAt crosses the NDJSON wire to Node, which renders a countdown
+    as `expiresAt - Date.now()`. It must be a wall-clock epoch value, not
+    time.monotonic()'s unspecified (typically time-since-boot) epoch.
+
+    The monotonic `now` here starts at a huge offset far from any real wall
+    clock epoch, while `wall_clock` returns a small, known, fixed epoch. If
+    the implementation ever again derives expiresAt from `now()`, the
+    emitted value will land near the huge monotonic offset instead of
+    `wall_clock() + expires_in`, and this assertion fails. The polling
+    deadline must still be driven by the monotonic clock independently:
+    this test's `now` is a plain fixed-value callable (not iter_now()), so
+    a poll-expiry regression that reads `now()` instead of `wall_clock()`
+    for expiresAt would also change this test's emitted stages, not just
+    the numeric value -- but here we only assert the wire value, matching
+    what production actually consumes it for.
+    """
+    fixed_wall_clock_epoch = 1_700_000_000.0
+    huge_monotonic_offset = 999_999_999.0
+
+    login = FakeLogin([DEVICE_OK, FakeResponse(200, {"access_token": "tok"})])
+    session = SimpleNamespace(login=login, cookies_file="/tmp/alex.pkl")
+    out = io.StringIO()
+    device_login(
+        session,
+        out=out,
+        sleep=lambda _s: None,
+        now=iter_now(start=huge_monotonic_offset),
+        wall_clock=lambda: fixed_wall_clock_epoch,
+    )
+    lines = [json.loads(x) for x in out.getvalue().strip().split("\n")]
+
+    code_line = lines[0]
+    assert code_line["stage"] == "code"
+    assert code_line["expiresAt"] == fixed_wall_clock_epoch + 1800
+    # Must not be anywhere near the monotonic clock's domain.
+    assert abs(code_line["expiresAt"] - huge_monotonic_offset) > 1_000_000
+
+
 def test_device_request_failure_reports_error():
     login, lines = run([FakeResponse(500, {})])
     assert lines[-1]["stage"] == "error"

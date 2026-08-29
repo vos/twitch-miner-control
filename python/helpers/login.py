@@ -23,7 +23,8 @@ def _emit(out, payload):
     out.flush()
 
 
-def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic):
+def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
+                  wall_clock=time.time):
     login = session.login
     response = login.send_oauth_request(
         DEVICE_URL, {"client_id": login.client_id, "scopes": SCOPES}
@@ -35,13 +36,19 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic):
 
     body = response.json()
     interval = body.get("interval", 5)
-    deadline = now() + body.get("expires_in", 1800)
+    expires_in = body.get("expires_in", 1800)
+    # `deadline` drives the internal polling loop below and must be monotonic
+    # (immune to NTP steps/DST changes). `expiresAt` crosses the NDJSON wire
+    # to a Node process that renders a countdown from it, so it must be a
+    # wall-clock epoch value -- time.monotonic()'s epoch is unspecified
+    # (typically time-since-boot) and meaningless outside this process.
+    deadline = now() + expires_in
     _emit(out, {
         "stage": "code",
         "userCode": body["user_code"],
         "verificationUri": body.get("verification_uri",
                                     "https://www.twitch.tv/activate"),
-        "expiresAt": deadline,
+        "expiresAt": wall_clock() + expires_in,
     })
 
     poll = {
