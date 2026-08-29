@@ -18,11 +18,11 @@ export interface SupervisorOptions {
   backoffCapMs?: number;
   maxRestarts?: number;
   /**
-   * How long a miner must stay up before a later crash is treated as a
-   * fresh problem rather than a continuation of a crash loop (see
-   * STABILITY_MS below for the default and rationale).
+   * Width of the sliding crash-rate window used to decide whether the
+   * miner is crash-looping (see CRASH_WINDOW_MS below for the default
+   * and rationale).
    */
-  stabilityMs?: number;
+  crashWindowMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,21 +38,32 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const STOP_GRACE_MS = 20_000;
 
 /**
- * How long a miner must run before a subsequent crash resets the
- * restart budget, if the caller does not override stabilityMs.
+ * Width of the sliding crash-rate window used to decide whether the
+ * miner is crash-looping, if the caller does not override
+ * crashWindowMs.
  *
  * restartCount/maxRestarts exists to bound a *rapid crash loop*
  * (broken config, dead auth, etc. that will not fix itself), not to
- * bound the miner's total lifetime crash count. A long-running miner
- * that hits an occasional transient Twitch/network blip and recovers
- * cleanly each time must not eventually exhaust the budget and park in
- * CRASHED just because it has been running for weeks. Five minutes is
- * long enough that no plausible backoff schedule (base * 2^n, capped)
- * would still be mid-loop at that point for any reasonable maxRestarts,
- * so reaching five stable minutes is a reliable signal the miner is
- * genuinely healthy again, not still flapping.
+ * bound the miner's total lifetime crash count. Sizing this against a
+ * single run's uptime (as an earlier version of this file did) is
+ * unsound: a miner that reliably survives just past that per-run
+ * threshold before dying again (an expiring token, a nightly OOM at a
+ * fixed uptime) would have its budget reset on every single crash, so
+ * maxRestarts would never engage and the miner would restart forever
+ * with no terminal operator signal. A sliding window sidesteps this by
+ * judging crash *rate* rather than any one run's duration. The fastest
+ * legitimate recovery sequence -- five backoff attempts in a row
+ * (base * 2^n for n = 0..4, i.e. 1+2+4+8+16 multiples of
+ * backoffBaseMs) -- spans only ~31 backoff units end to end, so any
+ * window far longer than that cannot mistake a normal recovery
+ * sequence for a crash loop. An hour is comfortably clear of that: a
+ * miner that crashes once a day (e.g. a nightly OOM) never accumulates
+ * two crashes in the same window and so never trips the cap, while a
+ * miner crashing every few minutes (an expiring token, a wedged
+ * browser session) keeps landing crashes inside the same window and
+ * reaches the cap as intended.
  */
-const STABILITY_MS = 5 * 60_000;
+const CRASH_WINDOW_MS = 60 * 60_000;
 
 /**
  * How long spawnOnce() waits after Node confirms the process exists
@@ -83,6 +94,13 @@ export class Supervisor extends EventEmitter {
   private intentionalStop = false;
   private startedAt = 0;
   /**
+   * Timestamps (Date.now()) of unintentional crashes still inside the
+   * crash-rate window, oldest first. Pruned on every new crash so it
+   * never grows unbounded; an unbroken healthy stretch of one window's
+   * width empties it out completely.
+   */
+  private crashTimes: number[] = [];
+  /**
    * Monotonically increasing id for the current child process
    * "generation". Exit/error handlers close over the generation they
    * were registered for and bail out if a respawn has since moved
@@ -99,7 +117,7 @@ export class Supervisor extends EventEmitter {
 
   private get grace() { return this.options.graceMs ?? STOP_GRACE_MS; }
   private get fastExit() { return this.options.fastExitMs ?? 10_000; }
-  private get stability() { return this.options.stabilityMs ?? STABILITY_MS; }
+  private get crashWindow() { return this.options.crashWindowMs ?? CRASH_WINDOW_MS; }
 
   private setState(state: MinerState): void {
     // Guard against re-emitting a state the caller is already in --
@@ -229,17 +247,25 @@ export class Supervisor extends EventEmitter {
       this.setState("CRASHED");
       return;
     }
-    if (uptime >= this.stability) {
-      // Ran long enough to be considered a healthy stretch, not a
-      // continuation of a crash loop -- give it a fresh restart budget.
-      this.restartCount = 0;
-    }
+    // Record this crash and evict anything that has aged out of the
+    // window, rather than resetting the whole budget based on how long
+    // this one run happened to stay up (see CRASH_WINDOW_MS above for
+    // why the latter is unsound). restartCount is kept as the current
+    // window's crash count -- a healthy miner that crashes rarely sees
+    // this settle back down to 1 each time, while a genuine crash loop
+    // sees it climb.
+    const now = Date.now();
+    this.crashTimes.push(now);
+    this.crashTimes = this.crashTimes.filter((t) => now - t <= this.crashWindow);
+    this.restartCount = this.crashTimes.length;
     void this.scheduleRestart(generation, code);
   }
 
   private async scheduleRestart(generation: number, code: number | null): Promise<void> {
-    if (this.restartCount >= (this.options.maxRestarts ?? 5)) {
-      this.buffer.push(`giving up after ${this.restartCount} restarts`);
+    if (this.restartCount > (this.options.maxRestarts ?? 5)) {
+      this.buffer.push(
+        `giving up after ${this.restartCount} restarts within ${this.crashWindow}ms`,
+      );
       this.setState("CRASHED");
       return;
     }
@@ -255,8 +281,16 @@ export class Supervisor extends EventEmitter {
     this.setState("RESTARTING");
     const base = this.options.backoffBaseMs ?? 1000;
     const cap = this.options.backoffCapMs ?? 300_000;
-    const delay = Math.min(base * 2 ** this.restartCount, cap);
-    this.restartCount += 1;
+    // restartCount was just set (in onExit) to this crash's ordinal
+    // position within the current window, so restartCount - 1 is the
+    // number of restarts already attempted within this window --
+    // exactly the exponent the pre-window code derived from its
+    // monotonic counter for an unbroken crash loop. For a miner that
+    // recovers and re-enters the window after some entries have aged
+    // out, this naturally (and desirably) shrinks the exponent back
+    // down too, instead of the backoff delay ratcheting up forever
+    // over the miner's entire lifetime.
+    const delay = Math.min(base * 2 ** (this.restartCount - 1), cap);
     this.buffer.push(`miner exited (code ${code}); restarting in ${delay}ms`);
     await sleep(delay);
     // A stop()/restart() may have happened while we were sleeping;
@@ -345,7 +379,13 @@ export class Supervisor extends EventEmitter {
       // flash "miner stopped" mid-restart even though the miner was
       // never actually left in a stopped, idle state.
       await this.terminate("RESTARTING");
+      // An operator-initiated restart is not a crash; clear the crash
+      // history too, not just the count, so it stays consistent with
+      // restartCount and a subsequent genuine crash starts a fresh
+      // window rather than inheriting history from before the operator
+      // stepped in.
       this.restartCount = 0;
+      this.crashTimes = [];
       await this.spawnOnce();
     });
   }

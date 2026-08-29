@@ -172,29 +172,77 @@ test.each([5, 45])(
   },
 );
 
-// --- Important (2): restartCount must decay after a healthy run, not
-// accumulate over the miner's lifetime ---
-test("repeated healthy crash-recoveries do not exhaust the restart budget", async () => {
-  // Each cycle runs well past the stability window before crashing again,
-  // simulating a miner that recovers fine each time (e.g. a transient
-  // Twitch disconnect) rather than crash-looping. With maxRestarts: 2,
-  // a non-decaying counter would give up after the 3rd crash; with decay,
-  // arbitrarily many *healthy* recoveries must never park in CRASHED.
+// --- N1 regression: restartCount must not be reset by a lucky per-run
+// uptime check. The old rule ("this run stayed up longer than
+// stabilityMs, so wipe the counter") resets the budget on every single
+// crash for a miner that reliably survives just past that threshold
+// before dying again (an expiring token, a nightly OOM at a fixed
+// uptime, etc.) -- maxRestarts then never engages and the miner
+// restarts forever with no terminal operator signal. The fix replaces
+// the per-run reset with a sliding crash-rate window (crashWindowMs):
+// what matters is not "did this one run last a while" but "how many
+// crashes have landed recently."
+//
+// Test 1 below still passes a `stabilityMs` override. That field only
+// exists on the pre-fix implementation and is read here purely to
+// reproduce the historical defect when this test is run against
+// supervisor.ts as committed before this fix (see the report for that
+// run's output) -- the fixed implementation has no such field and
+// silently ignores the extra key; `crashWindowMs` is what actually
+// governs the fixed code's behaviour in this test.
+test("cap engages for a slow crash loop that would have reset a per-run stability check", async () => {
   const s = make("delayed_crash", {
-    fastExitMs: 50,
+    fastExitMs: 20, // crashes must land past this to count as genuine
+                     // crashes (not the unstartable-config fast-exit path)
     backoffBaseMs: 10,
     maxRestarts: 2,
-    stabilityMs: 100, // small override so a healthy stretch decays
-                       // restartCount within a fast test, instead of
-                       // requiring the real 5-minute default
-    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "120" },
+    crashWindowMs: 5000, // fixed code: comfortably covers this whole test,
+                          // so all crashes accumulate in one window
+    stabilityMs: 10,      // pre-fix code only: smaller than every run's
+                          // ~40ms uptime, so the old per-run check resets
+                          // restartCount to 0 after every single crash
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "40" },
   });
   await s.start();
-  // 4 crash/recover cycles -- more than maxRestarts -- each followed by
-  // a healthy run long enough to decay the counter before the next crash.
-  for (let i = 0; i < 4; i++) {
-    await settle(160); // past DIE_AFTER_MS(120): this cycle's miner crashes
-    await settle(160); // past backoff + a healthy stretch of the respawn
+  // Each cycle: ~40ms alive (past fastExitMs(20) and past stabilityMs(10),
+  // i.e. exactly the spacing that would fool the old per-run reset) then
+  // crash, then a short backoff before the next attempt. Drive well past
+  // maxRestarts(2) worth of crashes -- old code loops forever; fixed code
+  // must park in CRASHED once the window holds more than maxRestarts.
+  for (let i = 0; i < 6 && s.state !== "CRASHED"; i++) {
+    await settle(120);
+  }
+  expect(s.state).toBe("CRASHED");
+});
+
+// --- N1 regression, other half: a genuinely healthy miner (crashes far
+// enough apart that they never share a crashWindowMs window) must never
+// be punished, no matter how many times it crashes over its lifetime.
+// Asserting on restartCount (not just state) keeps this from passing
+// vacuously -- a supervisor that let restartCount grow unbounded while
+// happening not to hit CRASHED yet would still fail this.
+test("a healthy miner that recovers between crashes is never punished", async () => {
+  const s = make("delayed_crash", {
+    fastExitMs: 20,
+    backoffBaseMs: 10,
+    maxRestarts: 2,
+    crashWindowMs: 80, // narrow window: each crash below is spaced well
+                        // outside it, so the window empties out completely
+                        // between crashes and never accumulates
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "40" },
+  });
+  await s.start();
+  // 5 crash/recover cycles -- more than maxRestarts(2) crashes over the
+  // miner's lifetime -- each separated by a healthy stretch far longer
+  // than crashWindowMs(80ms), so no two crashes ever land in the same
+  // window.
+  for (let i = 0; i < 5; i++) {
+    await settle(60);  // past DIE_AFTER_MS(40): this cycle's miner crashes
+    await settle(300); // backoff, respawn, then a long healthy stretch --
+                        // comfortably longer than crashWindowMs(80ms)
+    expect(s.state).not.toBe("CRASHED");
+    expect(s.restartCount).toBeLessThanOrEqual(1);
   }
   expect(s.state).not.toBe("CRASHED");
+  expect(s.restartCount).toBeLessThanOrEqual(1);
 });
