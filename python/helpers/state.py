@@ -7,12 +7,47 @@ import json
 import os
 import sys
 
-AUTH_MARKERS = ("401", "unauthorized", "authentication")
+import requests
+
+from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
+
+AUTH_MARKERS = ("401", "403", "unauthorized", "authentication")
+
+
+def _text_looks_like_auth(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in AUTH_MARKERS)
+
+
+def _is_http_auth_error(exc) -> bool:
+    """Exact: an HTTP 401/403 from the transport layer."""
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = getattr(exc, "response", None)
+        if response is not None and response.status_code in (401, 403):
+            return True
+    return False
 
 
 def _is_auth_error(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return any(marker in text for marker in AUTH_MARKERS)
+    if _is_http_auth_error(exc):
+        return True
+    # The miner wraps failures (post_gql_request_single retries and re-raises
+    # as RetryError/GQLResponseErrors); a 401 can be buried in the nested
+    # error list rather than in this exception's own str(). RetryError wraps
+    # each attempt's failure in an AttemptStrategy.ExceptionContext, whose
+    # `.exception` holds the real underlying exception (e.g. the HTTPError
+    # itself) -- so the exact status_code check must recurse into that, not
+    # just re-run the text fallback on its repr(). See
+    # vendor/miner/.../classes/gql/Errors.py and utils/AttemptStrategy.py.
+    if isinstance(exc, GQLError):
+        nested = getattr(exc, "errors", None) or []
+        for item in nested:
+            inner = getattr(item, "exception", item)
+            if _is_http_auth_error(inner):
+                return True
+            if _text_looks_like_auth(repr(item)):
+                return True
+    return _text_looks_like_auth(str(exc))
 
 
 class Handler:

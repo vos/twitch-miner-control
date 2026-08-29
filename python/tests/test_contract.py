@@ -15,6 +15,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
+from TwitchChannelPointsMiner.classes.gql.Errors import GQLError, RetryError
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
 from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, USER_AGENTS
 
@@ -83,3 +84,12 @@ def test_constants_used_by_the_session_bootstrap():
     assert isinstance(CLIENT_ID, str) and CLIENT_ID
     assert isinstance(CLIENT_VERSION, str) and CLIENT_VERSION
     assert "FIREFOX" in USER_AGENTS["Linux"]
+
+
+def test_gql_error_surface_used_by_auth_detection():
+    """helpers/state.py's _is_auth_error walks RetryError.errors (a
+    list[AttemptStrategy.ExceptionContext], each with an `.exception`
+    attribute) looking for a wrapped HTTPError/401. Pin the surface it
+    depends on beyond the four named GQL methods."""
+    assert issubclass(RetryError, GQLError)
+    assert "errors" in params(RetryError.__init__)

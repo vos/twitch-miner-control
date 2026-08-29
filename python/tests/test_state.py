@@ -3,6 +3,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import requests
+
+from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
 
 from helpers.state import Handler, serve
 
@@ -158,3 +161,90 @@ def test_serve_survives_a_malformed_line():
     lines = [json.loads(x) for x in stdout.getvalue().strip().split("\n")]
     assert lines[0]["ok"] is False
     assert lines[1]["id"] == 2
+
+
+def _http_error(status_code):
+    """A deliberately marker-free message: real proxies/CDNs in front of an
+    API do not always echo the status code or the words "unauthorized" /
+    "authentication" in the exception text. This is the actual gap a naive
+    string match misses -- the only reliable signal is the structural
+    `.response.status_code`, not any particular wording.
+    """
+    response = SimpleNamespace(status_code=status_code)
+    return requests.exceptions.HTTPError(
+        "Server responded with an error", response=response
+    )
+
+
+def _retry_error_wrapping(exc):
+    """Mirrors how AttemptStrategy/__handle_result really build a RetryError:
+    RetryError.errors is a list[ExceptionContext], and ExceptionContext.__repr__
+    is `f"{self.exception}"` when there's no stack trace (see
+    vendor/miner/TwitchChannelPointsMiner/utils/AttemptStrategy.py). We don't
+    import ExceptionContext (it's not part of our pinned seam) so we fake the
+    same repr behaviour with a minimal stand-in.
+    """
+    class FakeExceptionContext:
+        def __init__(self, exception):
+            self.exception = exception
+
+        def __repr__(self):
+            return f"{self.exception}"
+
+    return RetryError("SomeOperation", [FakeExceptionContext(exc)])
+
+
+def test_retry_error_wrapped_401_is_classified_auth():
+    """The miner never lets a raw requests.HTTPError escape post_gql_request_single
+    -- it always retries and wraps failures in RetryError (see
+    Integration.py __handle_result). A real expired-cookie 401 therefore reaches
+    us as a RetryError whose nested errors wrap an HTTPError. The HTTPError's
+    message text is deliberately marker-free here (see _http_error) so this
+    test actually exercises the structural status_code check, not the string
+    fallback -- a naive str(exc).lower() match would miss this case, which is
+    exactly the defect being fixed. Must be classified AUTH, not GQL, or the
+    backend never surfaces LOGIN_REQUIRED on a real expired token."""
+    reloads = []
+
+    class AuthFail(FakeGQL):
+        def get_channel_points_context(self, username):
+            raise _retry_error_wrapping(_http_error(401))
+
+    session = SimpleNamespace(
+        gql=AuthFail(),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: False,
+    )
+    out = Handler(session).handle({"id": 1, "op": "state", "streamers": ["alpha"]})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"
+    assert len(reloads) == 1
+
+
+def test_genuine_non_auth_gql_failure_stays_gql_and_does_not_reload_cookies():
+    """Guards against over-matching: a RetryError with no auth-shaped nested
+    error must not be misclassified as AUTH, which would trigger a spurious
+    cookie reload / re-login.
+
+    Uses `lookup`, not `state`: a `state` batch already swallows per-streamer
+    non-auth errors into an `error` field on that streamer (see
+    test_one_failing_streamer_does_not_fail_the_whole_batch) rather than
+    surfacing top-level `ok: False`, so it can't distinguish GQL from AUTH at
+    the `handle()` level. `lookup` has no such per-item catch, so a raised
+    exception reaches `handle()`'s own except block directly.
+    """
+    reloads = []
+
+    class NonAuthFail(FakeGQL):
+        def get_id_from_login(self, username):
+            raise _retry_error_wrapping(RuntimeError("connection reset by peer"))
+
+    session = SimpleNamespace(
+        gql=NonAuthFail(),
+        reload_cookies=lambda: (reloads.append(1), True)[1],
+        is_logged_in=lambda: True,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+    assert len(reloads) == 0
