@@ -26,6 +26,14 @@ def _emit(out, payload):
 def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
                   wall_clock=time.time):
     login = session.login
+    # A fresh config carries username "", which Twitch resolves to
+    # {"data": {"user": null}} and which then crashes the vendored
+    # __set_user_id. Fail before sending the user through the whole
+    # device-code flow only to reject the token at the very end.
+    if not (login.username or "").strip():
+        _emit(out, {"stage": "error",
+                    "error": "no Twitch username set -- add one in Settings first"})
+        return False
     response = login.send_oauth_request(
         DEVICE_URL, {"client_id": login.client_id, "scopes": SCOPES}
     )
@@ -70,7 +78,24 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
             _emit(out, {"stage": "error", "error": "no access_token in response"})
             return False
         login.set_token(token)
-        if not login.check_login():
+        # TwitchLogin.__set_user_id guards with `"user" in
+        # json_response["data"]`, which is true when the key is present
+        # with a null value, and then subscripts it. Twitch answers
+        # {"data": {"user": null}} for any login that does not resolve --
+        # a typo, a renamed account, or the empty string a fresh config
+        # carries -- so check_login() raises TypeError rather than
+        # returning False. Report that as a normal login error instead of
+        # exiting non-zero with a traceback the UI cannot interpret.
+        try:
+            logged_in = login.check_login()
+        except TypeError:
+            _emit(out, {
+                "stage": "error",
+                "error": f"Twitch has no account named {login.username!r} -- "
+                         "check the username in Settings",
+            })
+            return False
+        if not logged_in:
             _emit(out, {"stage": "error", "error": "token rejected by Twitch"})
             return False
         login.save_cookies(session.cookies_file)

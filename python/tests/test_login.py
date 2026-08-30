@@ -163,3 +163,45 @@ def test_failed_check_login_is_reported_as_error():
     lines = [json.loads(x) for x in out.getvalue().strip().split("\n")]
     assert lines[-1]["stage"] == "error"
     assert login.saved_to is None
+
+
+class RaisingCheckLogin(FakeLogin):
+    """Reproduces the vendored miner's crash on an unresolvable username.
+
+    TwitchLogin.__set_user_id guards with `"user" in json_response["data"]`,
+    which is true when the key exists with a null value, then subscripts
+    it. Twitch answers {"data": {"user": null}} for any login that does not
+    exist -- including the empty string a fresh config carries -- so
+    check_login() raises TypeError instead of returning False.
+    """
+
+    def check_login(self):
+        raise TypeError("'NoneType' object is not subscriptable")
+
+
+def run_with_login(login, **kw):
+    session = SimpleNamespace(login=login, cookies_file="/tmp/alex.pkl")
+    out = io.StringIO()
+    device_login(session, out=out, sleep=lambda _s: None, now=iter_now(), **kw)
+    lines = [json.loads(x) for x in out.getvalue().strip().split("\n")]
+    return login, lines
+
+
+def test_unresolvable_username_reports_an_error_instead_of_crashing():
+    login = RaisingCheckLogin([DEVICE_OK, FakeResponse(200, {"access_token": "tok"})])
+    login.username = "nosuchuser"
+    _, lines = run_with_login(login)
+    assert lines[-1]["stage"] == "error"
+    assert "nosuchuser" in lines[-1]["error"]
+
+
+def test_blank_username_is_reported_before_any_network_call():
+    login = RaisingCheckLogin([DEVICE_OK, FakeResponse(200, {"access_token": "tok"})])
+    login.username = ""
+    _, lines = run_with_login(login)
+    assert lines[-1]["stage"] == "error"
+    assert "username" in lines[-1]["error"].lower()
+    # The whole point is not making the user complete the device-code
+    # flow before telling them the username is missing.
+    assert login.requests == []
+    assert lines == [lines[-1]]
