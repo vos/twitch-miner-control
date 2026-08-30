@@ -16,3 +16,15 @@ if (typeof window !== "undefined" && !window.matchMedia) {
     dispatchEvent: () => false,
   }) as MediaQueryList;
 }
+
+// jsdom does not implement ResizeObserver either, and Mantine's ScrollArea
+// (used by the Logs screen) observes its viewport on mount. Without this
+// stub every test that renders a ScrollArea fails before any assertion.
+if (typeof window !== "undefined" && !window.ResizeObserver) {
+  class StubResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  window.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
+}
