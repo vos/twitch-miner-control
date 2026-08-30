@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Overrides the base's NodeNext module/resolution: the backend is a real
+    // Node process resolved by Node itself, but this package is bundled by
+    // Vite (esbuild/rollup) and never runs through Node's own resolver.
+    // NodeNext's CJS/ESM-interop type rules misclassify dual-published
+    // deps like @testing-library/user-event (default import types as the
+    // whole CJS namespace instead of the unwrapped default). "bundler" is
+    // the mode Vite's own React+TS template uses for exactly this reason.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "composite": true,
+    "noEmit": true,
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}

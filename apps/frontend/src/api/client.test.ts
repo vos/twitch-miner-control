@@ -4,7 +4,11 @@ import { UnauthorizedError, api } from "./client.js";
 afterEach(() => { vi.unstubAllGlobals(); });
 
 function stub(status: number, body: unknown) {
-  const fetchMock = vi.fn(async () => ({
+  // Typed to match fetch's real (input, init) signature -- not just the
+  // zero-arg shape TS would otherwise infer from this callback -- so
+  // `fetchMock.mock.calls[0][1]` below is a valid tuple index rather than
+  // reaching past an inferred `[]`.
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init: RequestInit) => ({
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
