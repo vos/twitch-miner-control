@@ -192,7 +192,19 @@ test("id:null error responses (bad-JSON style) are attributed to the sole in-fli
 test("id:null error responses are surfaced as an event, not silently dropped, when unattributable", async () => {
   const c = make({ requestTimeoutMs: 500 });
   const unattributed: unknown[] = [];
-  c.on("unattributed-error", (err) => unattributed.push(err));
+  // Wait for the real event instead of a fixed sleep-then-check: a fixed
+  // 100ms window was only a proxy for "has the helper been spawned and
+  // answered yet", and under CPU contention (e.g. the full workspace test
+  // run spawning many concurrent child processes) that can take longer
+  // than 100ms on a slow tick, making this fail even though the event
+  // eventually does fire. Awaiting the event itself removes the race
+  // entirely while still bounding the test via requestTimeoutMs below.
+  const firstUnattributed = new Promise((resolve) => {
+    c.on("unattributed-error", (err) => {
+      unattributed.push(err);
+      resolve(err);
+    });
+  });
 
   // Two requests in flight: an id:null error response cannot be safely
   // attributed to either one, so both must be left pending (not silently
@@ -201,7 +213,7 @@ test("id:null error responses are surfaced as an event, not silently dropped, wh
   const a = c.request("silent");
   const b = c.request("bad_json_style_error");
 
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await firstUnattributed;
   expect(unattributed).toHaveLength(1);
   expect(unattributed[0]).toMatchObject({ code: "BAD_REQUEST" });
 

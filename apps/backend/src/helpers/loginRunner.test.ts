@@ -107,8 +107,21 @@ test("cancel escalates to SIGKILL when the helper ignores SIGTERM", async () => 
     graceMs: 200,
   });
   const done = new Promise<void>((resolve) => runner.on("done", () => resolve()));
+  // Wait for the fixture's first real progress line instead of a fixed
+  // sleep. In stubborn-login.mjs, `process.on("SIGTERM", ...)` is
+  // registered before that line is ever emitted, so observing this event
+  // guarantees the handler is already armed in the child. A fixed sleep
+  // here was not a reliable proxy for that: under CPU contention a freshly
+  // spawned node child can take longer than the sleep just to start
+  // interpreting its script, so cancel() could fire before the handler was
+  // registered -- letting SIGTERM's default (kill-immediately) action tear
+  // the child down well under the grace period and making this test flaky
+  // under load rather than actually exercising the SIGKILL escalation.
+  const firstProgress = new Promise<void>((resolve) => {
+    runner.once("progress", () => resolve());
+  });
   runner.start();
-  await settle(50); // let the fixture emit its code/pending lines first
+  await firstProgress;
   const started = Date.now();
   runner.cancel();
   await done;
