@@ -211,3 +211,49 @@ test("id:null error responses are surfaced as an event, not silently dropped, wh
   await expect(a).rejects.toThrow(/timed out/);
   await expect(b).rejects.toThrow(/timed out/);
 });
+
+// --- restart(): recycling without retiring the client -------------------
+// stop() is final by design (request() throws afterwards), so it cannot be
+// used to pick up a changed spawn environment. restart() replaces the OS
+// process and leaves the client usable.
+
+test("restart() replaces the process and leaves the client usable", async () => {
+  const c = make();
+  const first = (await c.request("whoami")) as { pid: number };
+  await c.restart();
+  const second = (await c.request("whoami")) as { pid: number };
+  expect(second.pid).not.toBe(first.pid);
+});
+
+test("restart() picks up an environment that changed since the last spawn", async () => {
+  let username = "";
+  const env: Record<string, string> = {};
+  Object.defineProperty(env, "TWITCH_USERNAME", {
+    enumerable: true,
+    get: () => username,
+  });
+  const c = make({ env });
+  await expect(c.request("whoami")).resolves.toMatchObject({ username: "" });
+  username = "alex";
+  // Without the respawn the old process keeps answering with its own
+  // frozen environment, however many times the accessor changes.
+  await expect(c.request("whoami")).resolves.toMatchObject({ username: "" });
+  await c.restart();
+  await expect(c.request("whoami")).resolves.toMatchObject({ username: "alex" });
+});
+
+test("restart() rejects in-flight requests rather than stranding them", async () => {
+  const c = make();
+  const pending = c.request("silent");
+  await c.restart();
+  await expect(pending).rejects.toThrow(/helper exited/);
+  await expect(c.request("ping")).resolves.toEqual({ echoed: "ping" });
+});
+
+test("restart() after stop() stays stopped", async () => {
+  const c = make();
+  await c.request("ping");
+  await c.stop();
+  await c.restart();
+  await expect(c.request("ping")).rejects.toThrow(/has been stopped/);
+});

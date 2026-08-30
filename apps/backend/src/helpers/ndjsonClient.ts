@@ -196,8 +196,42 @@ export class NdjsonClient extends EventEmitter {
     });
   }
 
+  /**
+   * Retires the client for good. `request()` throws afterwards -- use
+   * `restart()` if the helper needs replacing but the client kept alive.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
+    await this.killChild();
+  }
+
+  /**
+   * Replaces the helper process without retiring the client: the next
+   * `request()` spawns a fresh child through `ensure()`.
+   *
+   * Needed because a helper's environment is fixed for the life of its
+   * process, and this one outlives changes to it. `python/helpers/_session.py`
+   * derives the cookie pickle path from TWITCH_USERNAME once, at startup,
+   * and `reload_cookies()` re-reads that same frozen path forever after --
+   * so a helper spawned before the user's Twitch username was known keeps
+   * reading `cookies/.pkl` no matter what the config later says. Only a new
+   * process fixes that.
+   *
+   * Any in-flight request is rejected by the exit handler, exactly as for
+   * an unexpected exit; callers that still want the answer must re-issue.
+   * A no-op once `stop()` has been called -- stop is final.
+   */
+  async restart(): Promise<void> {
+    if (this.stopped) return;
+    await this.killChild();
+  }
+
+  /**
+   * Terminates the current child, if one is live, and resolves once it is
+   * gone. Leaves `stopped` untouched -- the caller decides whether this is
+   * a retirement or a recycle.
+   */
+  private async killChild(): Promise<void> {
     const child = this.child;
     if (!child || child.exitCode !== null || child.signalCode !== null) {
       this.child = null;

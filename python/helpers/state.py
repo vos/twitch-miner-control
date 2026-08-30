@@ -8,6 +8,20 @@ import os
 import re
 import sys
 
+# `python/` for the helpers package, `vendor/miner` for the miner package.
+# These must run at import time, not inside main(): production spawns this
+# file as a script (`python <pythonDir>/helpers/state.py`, see
+# apps/backend/src/index.ts), where sys.path[0] is `python/helpers/` and
+# neither package is importable -- so the module-level imports below would
+# fail before main() ever ran. run.py hoists the same way (run.py:12);
+# helpers/login.py can keep its inserts in main() only because every one of
+# its module-level imports is stdlib. The pytest suite hides the difference:
+# pyproject.toml's `pythonpath` puts both on sys.path before the tests
+# import anything, so state.py imported cleanly while being unrunnable.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, ".."))
+sys.path.insert(0, os.path.join(_HERE, "..", "..", "vendor", "miner"))
+
 import requests
 
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
@@ -174,10 +188,8 @@ def serve(handler: Handler, stdin=sys.stdin, stdout=sys.stdout) -> None:
 
 
 def main() -> None:
-    here = os.path.dirname(os.path.abspath(__file__))
-    # `python/` for the helpers package, `vendor/miner` for the miner package.
-    sys.path.insert(0, os.path.join(here, ".."))
-    sys.path.insert(0, os.path.join(here, "..", "..", "vendor", "miner"))
+    # Imported here rather than at module scope so that importing this
+    # module (the unit tests do) does not build a Twitch client session.
     from helpers._session import build_session
 
     session = build_session(os.environ["TWITCH_USERNAME"],

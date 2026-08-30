@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import type { History } from "../db/history.js";
-import type { LoginRunner } from "../helpers/loginRunner.js";
+import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
 import type { NdjsonClient } from "../helpers/ndjsonClient.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { StateService } from "../state/service.js";
@@ -55,6 +55,32 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   const hub = new SseHub();
   let staged: AppConfig | null = null;
 
+  /**
+   * Replaces the long-lived state helper, then pulls fresh numbers.
+   *
+   * The helper is spawned once and kept, but `python/helpers/_session.py`
+   * freezes the cookie pickle's path as `{TWITCH_USERNAME}.pkl` when it
+   * starts, and `reload_cookies()` re-reads that same frozen path. A helper
+   * spawned at boot -- before the user has entered a username or logged in
+   * -- therefore reads `cookies/.pkl` for the life of the process, so a
+   * user who logs in successfully is still reported logged out until the
+   * backend restarts. Only a new process picks the change up, which is why
+   * this runs on the two events that can change the username or the cookie
+   * file: a successful login, and a config apply.
+   *
+   * Recycling rejects whatever request was in flight. StateService turns
+   * that into a stale snapshot rather than a hang, so a refresh is kicked
+   * off immediately to replace those numbers instead of leaving the
+   * dashboard stale until the next 60s tick. A doorbell ring's pending
+   * debounce timer is untouched by any of this and still fires.
+   */
+  async function recycleHelper(): Promise<void> {
+    await deps.helper.restart();
+    // Never rejects (StateService#doRefresh swallows), but this is called
+    // fire-and-forget from an event handler, so guard it anyway.
+    await deps.stateService.refresh().catch(() => {});
+  }
+
   app.register(async (instance) => {
     await registerAuth(instance, { password: deps.password });
     hub.register(instance);
@@ -74,6 +100,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       if (staged === null) return { applied: false };
       saveConfig(deps.configPath, staged);
       staged = null;
+      // The applied config may name a different Twitch username, so the
+      // state helper has to be recycled alongside the miner -- see
+      // recycleHelper(). Awaited (it is a local process kill, not a network
+      // call) so the response means both children are already gone.
+      await recycleHelper();
       await deps.supervisor.restart();
       return { applied: true };
     });
@@ -163,7 +194,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   deps.stateService.on("change", (snapshot) => hub.broadcast("state", snapshot));
   deps.supervisor.on("state", (state) => hub.broadcast("miner", { state }));
-  deps.loginRunner.on("progress", (p) => hub.broadcast("login", p));
+  deps.loginRunner.on("progress", (p: LoginProgress) => {
+    hub.broadcast("login", p);
+    // A completed login writes the cookie pickle the state helper reads,
+    // under whatever username the config names now -- neither of which the
+    // running helper can see. Fire-and-forget: the SSE frame above must not
+    // wait on a process restart.
+    if (p.stage === "ok") void recycleHelper();
+  });
 
   return app;
 }

@@ -1,5 +1,9 @@
 import io
 import json
+import os
+import pathlib
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -336,3 +340,57 @@ def test_genuine_401_client_error_text_still_classifies_as_auth():
     assert out["ok"] is False
     assert out["code"] == "AUTH"
     assert len(reloads) == 1
+
+
+# --- Runnable as a script ----------------------------------------------
+# Production spawns this helper as `python <pythonDir>/helpers/state.py`
+# (apps/backend/src/index.ts), where sys.path[0] is `python/helpers/` and
+# neither the `helpers` package nor the vendored miner is importable. The
+# rest of this file exercises state.py as an *import*, which pytest makes
+# work via `pythonpath` in pyproject.toml -- a crutch production does not
+# have. These tests deliberately run it the way production does, with
+# PYTHONPATH cleared, so the import-time path setup cannot regress
+# unnoticed again.
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+STATE_SCRIPT = REPO_ROOT / "python" / "helpers" / "state.py"
+
+
+def _run_as_script(script, stdin_text, tmp_path):
+    env = dict(os.environ)
+    # Both spellings: pytest's `pythonpath` ini setting never reaches a
+    # child, but an inherited PYTHONPATH from the shell would, and would
+    # silently restore the crutch this test exists to remove.
+    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = ""
+    env["TWITCH_USERNAME"] = "alex"
+    env["COOKIES_DIR"] = str(tmp_path / "cookies")
+    return subprocess.run(
+        [sys.executable, str(script)],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(tmp_path),
+        env=env,
+    )
+
+
+def test_state_py_runs_as_a_script_without_pythonpath(tmp_path):
+    """The exact invocation index.ts uses. Fails with ModuleNotFoundError
+    if the sys.path setup is left inside main()."""
+    proc = _run_as_script(STATE_SCRIPT, '{"id": 1, "op": "ping"}\n', tmp_path)
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+    assert json.loads(proc.stdout.strip()) == {
+        "id": 1, "ok": True, "data": {"pong": True}
+    }
+
+
+def test_state_py_script_imports_the_vendored_miner(tmp_path):
+    """Pins the specific failure: the module-level
+    `from TwitchChannelPointsMiner...` import at the top of state.py must
+    resolve without help from the environment."""
+    proc = _run_as_script(STATE_SCRIPT, "", tmp_path)
+    assert "ModuleNotFoundError" not in proc.stderr
+    assert "TwitchChannelPointsMiner" not in proc.stderr
+    assert proc.returncode == 0, f"stderr:\n{proc.stderr}"

@@ -15,6 +15,22 @@ rl.on("line", (line) => {
   if (req.op === "crash") process.exit(3);
   if (req.op === "silent") return;
 
+  if (req.op === "whoami") {
+    // Reports the environment this process was SPAWNED with. Used to prove
+    // that recycling the client really replaced the OS process, rather
+    // than just re-reading a value inside the existing one -- which is the
+    // whole point, since helpers/_session.py freezes the cookie path from
+    // TWITCH_USERNAME at startup and never re-reads the variable.
+    process.stdout.write(
+      `${JSON.stringify({
+        id: req.id,
+        ok: true,
+        data: { username: process.env.TWITCH_USERNAME ?? null, pid: process.pid },
+      })}\n`,
+    );
+    return;
+  }
+
   if (req.op === "echo_params") {
     // Echoes back the full received request object (minus id/op) so a
     // test can assert exactly which fields the client put on the wire --

@@ -1,9 +1,13 @@
+import { EventEmitter, once } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
+import { NdjsonClient } from "../helpers/ndjsonClient.js";
 import { StateService } from "../state/service.js";
 import { buildServer } from "./server.js";
 
@@ -23,7 +27,10 @@ async function make() {
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
     logs: () => ["line one", "line two"], on: vi.fn(),
   };
-  const client = { request: vi.fn(async () => ({ streamers: [] })) };
+  const client = {
+    request: vi.fn(async () => ({ streamers: [] })),
+    restart: vi.fn(async () => {}),
+  };
   const state = new StateService({
     client: client as never, history, getStreamers: () => ["alpha"],
   });
@@ -330,4 +337,146 @@ test("an SSE client with no session cookie is refused", async () => {
   const res = await fetch(`http://127.0.0.1:${port}/api/stream`);
   expect(res.status).toBe(401);
   await res.text();
+});
+
+// --- Helper recycling (fix round 1, Important 1) ------------------------
+// The state helper is spawned once and kept for the process lifetime.
+// python/helpers/_session.py freezes `cookies_file` as `{username}.pkl` at
+// build time and reload_cookies() re-reads that same fixed path, so a
+// helper spawned before the Twitch username was known reads `cookies/.pkl`
+// forever. index.ts's live TWITCH_USERNAME accessor only helps a process
+// that is about to be spawned -- the long-lived one has to be replaced.
+//
+// These use a real NdjsonClient over the echo fixture, whose `whoami` op
+// reports the environment its own process was spawned with, so they prove
+// a new OS process actually saw the new username.
+
+const helperFixture = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../test/fixtures/echo-helper.mjs",
+);
+
+async function makeLive() {
+  const dir = mkdtempSync(join(tmpdir(), "srv-live-"));
+  const configPath = join(dir, "config.json");
+  const history = new History(openDb(":memory:"));
+  // Exactly the accessor index.ts installs: the username is read from the
+  // config file at each spawn, never snapshotted.
+  const env: Record<string, string> = {};
+  Object.defineProperty(env, "TWITCH_USERNAME", {
+    enumerable: true,
+    get: () => loadConfig(configPath).username,
+  });
+  const helper = new NdjsonClient({
+    command: process.execPath, args: [helperFixture], cwd: dir, env,
+  });
+  // Empty streamer list: the post-recycle refresh then completes without
+  // sending anything to the fixture, keeping these tests about identity.
+  const state = new StateService({ client: helper, history, getStreamers: () => [] });
+  const supervisor = {
+    state: "RUNNING" as const, restart: vi.fn(async () => {}),
+    start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
+    logs: () => [], on: vi.fn(),
+  };
+  const loginRunner = Object.assign(new EventEmitter(), {
+    current: null, start: vi.fn(), cancel: vi.fn(),
+  });
+  const app = buildServer({
+    configPath, password: PASSWORD, doorbellToken: "doorbell-token",
+    supervisor: supervisor as never, stateService: state, history,
+    helper, loginRunner: loginRunner as never,
+  });
+  await app.ready();
+  const login = await app.inject({
+    method: "POST", url: "/api/session", payload: { password: PASSWORD },
+  });
+  return {
+    app, helper, state, loginRunner, configPath,
+    cookies: { session: login.cookies[0].value },
+    async dispose() {
+      state.stop();
+      await helper.stop();
+      await app.close();
+    },
+  };
+}
+
+/** Waits for the client to report its child gone, with a legible timeout. */
+async function afterRespawn(helper: NdjsonClient, trigger: () => void): Promise<void> {
+  const respawned = once(helper, "respawn");
+  trigger();
+  let timer: NodeJS.Timeout;
+  await Promise.race([
+    respawned,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("the state helper was never recycled")),
+        2000,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer!));
+}
+
+test("a successful login recycles the state helper against the current username", async () => {
+  const t = await makeLive();
+  try {
+    await expect(t.helper.request("whoami")).resolves.toMatchObject({ username: "" });
+    // The username reached the config while the helper was already up.
+    saveConfig(t.configPath, validConfig as never);
+    await afterRespawn(t.helper, () => {
+      t.loginRunner.emit("progress", { stage: "ok", username: "alex" });
+    });
+    await expect(t.helper.request("whoami")).resolves.toMatchObject({
+      username: "alex",
+    });
+  } finally {
+    await t.dispose();
+  }
+});
+
+test("a failed login does not recycle the state helper", async () => {
+  const t = await makeLive();
+  try {
+    const before = (await t.helper.request("whoami")) as { pid: number };
+    t.loginRunner.emit("progress", { stage: "error", error: "token rejected" });
+    t.loginRunner.emit("progress", { stage: "pending" });
+    const after = (await t.helper.request("whoami")) as { pid: number };
+    expect(after.pid).toBe(before.pid);
+  } finally {
+    await t.dispose();
+  }
+});
+
+test("applying a config recycles the state helper against the new username", async () => {
+  const t = await makeLive();
+  try {
+    await expect(t.helper.request("whoami")).resolves.toMatchObject({ username: "" });
+    await t.app.inject({
+      method: "PUT", url: "/api/config", cookies: t.cookies, payload: validConfig,
+    });
+    const res = await t.app.inject({
+      method: "POST", url: "/api/config/apply", cookies: t.cookies,
+    });
+    expect(res.statusCode).toBe(200);
+    // apply() awaits the recycle, so no polling is needed here.
+    await expect(t.helper.request("whoami")).resolves.toMatchObject({
+      username: "alex",
+    });
+  } finally {
+    await t.dispose();
+  }
+});
+
+test("an apply with nothing staged leaves the state helper alone", async () => {
+  const t = await makeLive();
+  try {
+    const before = (await t.helper.request("whoami")) as { pid: number };
+    await t.app.inject({
+      method: "POST", url: "/api/config/apply", cookies: t.cookies,
+    });
+    const after = (await t.helper.request("whoami")) as { pid: number };
+    expect(after.pid).toBe(before.pid);
+  } finally {
+    await t.dispose();
+  }
 });
