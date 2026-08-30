@@ -196,7 +196,16 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         // recycleHelper(). Awaited (it is a local process kill, not a
         // network call) so the response means both children are already gone.
         await recycleHelper();
-        await deps.supervisor.restart();
+        // Same guard index.ts applies at boot: a miner started without a
+        // usable session, or without an account to mine as, exits at once
+        // and parks in CRASHED. Saving a username from the sign-in screen
+        // necessarily happens before the first login, so apply must be
+        // able to persist config without starting anything. The miner is
+        // started by the login flow once a session exists.
+        const runnable =
+          !deps.loginStatus.required && loadConfig(deps.configPath).username !== "";
+        if (runnable) await deps.supervisor.restart();
+        else await deps.supervisor.stop();
       } catch (cause) {
         return reply.code(500).send({
           error: `config.json was saved but the miner could not be restarted: ${messageOf(cause)}. The miner is still running the previous configuration -- restart it from the dashboard.`,

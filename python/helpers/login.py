@@ -51,13 +51,16 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
     # wall-clock epoch value -- time.monotonic()'s epoch is unspecified
     # (typically time-since-boot) and meaningless outside this process.
     deadline = now() + expires_in
-    _emit(out, {
-        "stage": "code",
+    # Carried on every later frame: the UI replaces its whole progress
+    # object with each one, so a frame that omits these erases the code
+    # the user is in the middle of typing.
+    code_fields = {
         "userCode": body["user_code"],
         "verificationUri": body.get("verification_uri",
                                     "https://www.twitch.tv/activate"),
         "expiresAt": wall_clock() + expires_in,
-    })
+    }
+    _emit(out, {"stage": "code", **code_fields})
 
     poll = {
         "client_id": login.client_id,
@@ -71,7 +74,7 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
             return False
         token_response = login.send_oauth_request(TOKEN_URL, poll)
         if token_response.status_code != 200:
-            _emit(out, {"stage": "pending"})
+            _emit(out, {"stage": "pending", **code_fields})
             continue
         token = token_response.json().get("access_token")
         if not token:

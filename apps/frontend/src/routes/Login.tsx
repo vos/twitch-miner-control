@@ -6,7 +6,9 @@ import { api } from "../api/client.js";
 
 type Progress =
   | { stage: "code"; userCode: string; verificationUri: string; expiresAt: number }
-  | { stage: "pending" }
+  // Pending frames repeat the code fields so the card stays on screen
+  // while the helper polls -- see code_fields in python/helpers/login.py.
+  | { stage: "pending"; userCode?: string; verificationUri?: string; expiresAt?: number }
   | { stage: "ok"; username: string }
   | { stage: "error"; error: string }
   | null;
@@ -92,7 +94,8 @@ export function TwitchLogin() {
         <Text>Signed in as {progress.username}</Text>
       )}
       {progress?.stage === "pending" && <Text>Waiting for you to enter the code…</Text>}
-      {progress?.stage === "code" && (
+      {(progress?.stage === "code" || progress?.stage === "pending")
+        && progress.userCode && progress.verificationUri && (
         <Card withBorder>
           <Stack>
             <Text>Open{" "}

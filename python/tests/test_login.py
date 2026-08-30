@@ -205,3 +205,21 @@ def test_blank_username_is_reported_before_any_network_call():
     # flow before telling them the username is missing.
     assert login.requests == []
     assert lines == [lines[-1]]
+
+
+def test_pending_keeps_the_code_visible():
+    """The UI replaces its whole progress object with each frame, so a bare
+    {"stage": "pending"} erased the user code and activation link the user
+    was in the middle of typing. Every pending frame has to carry them.
+    """
+    login, lines = run([
+        DEVICE_OK,
+        FakeResponse(400, {"message": "authorization_pending"}),
+        FakeResponse(200, {"access_token": "tok"}),
+    ])
+    pending = [l for l in lines if l["stage"] == "pending"]
+    assert pending, "expected at least one pending frame"
+    for frame in pending:
+        assert frame["userCode"] == "ABCD1234"
+        assert frame["verificationUri"] == "https://www.twitch.tv/activate"
+        assert "expiresAt" in frame

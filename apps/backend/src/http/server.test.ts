@@ -126,6 +126,7 @@ test("PUT /api/config rejects an invalid config with 400", async () => {
 });
 
 test("POST /api/config/apply writes the config and restarts", async () => {
+  ctx.loginStatus.markLoggedIn();
   await ctx.app.inject({
     method: "PUT", url: "/api/config", cookies: auth(), payload: validConfig,
   });
@@ -136,6 +137,36 @@ test("POST /api/config/apply writes the config and restarts", async () => {
   expect(ctx.supervisor.restart).toHaveBeenCalledOnce();
   const saved = await ctx.app.inject({ method: "GET", url: "/api/config", cookies: auth() });
   expect(saved.json().streamers[0].username).toBe("alpha");
+});
+
+test("POST /api/config/apply saves without starting the miner when logged out", async () => {
+  // index.ts guards its own boot-time start with `loggedIn && username`.
+  // Apply had no such guard, so saving a username from the sign-in screen
+  // (which must happen *before* login) started a miner with no session
+  // behind it and parked it in CRASHED.
+  await ctx.app.inject({
+    method: "PUT", url: "/api/config", cookies: auth(), payload: validConfig,
+  });
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/config/apply", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(ctx.supervisor.restart).not.toHaveBeenCalled();
+  const saved = await ctx.app.inject({ method: "GET", url: "/api/config", cookies: auth() });
+  expect(saved.json().username).toBe("alex");
+});
+
+test("POST /api/config/apply does not start a miner without a username", async () => {
+  ctx.loginStatus.markLoggedIn();
+  await ctx.app.inject({
+    method: "PUT", url: "/api/config", cookies: auth(),
+    payload: { ...validConfig, username: "", streamers: [] },
+  });
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/config/apply", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(ctx.supervisor.restart).not.toHaveBeenCalled();
 });
 
 test("POST /api/config/apply with nothing staged does not restart", async () => {

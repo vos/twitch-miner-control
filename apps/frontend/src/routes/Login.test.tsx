@@ -128,3 +128,14 @@ test("does not start login with an empty username", async () => {
   await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
   expect(calls.some((c) => c.url === "/api/twitch/login")).toBe(false);
 });
+
+test("keeps the code on screen while polling is pending", async () => {
+  // Pending frames carry the code fields precisely so the user can keep
+  // reading the code while the helper polls.
+  stub({ login: { stage: "pending", userCode: "ABCD1234",
+                  verificationUri: "https://www.twitch.tv/activate", expiresAt: 1 } });
+  view();
+  expect(await screen.findByText("ABCD1234")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: /twitch.tv\/activate/i })).toBeInTheDocument();
+  expect(screen.getByText(/waiting/i)).toBeInTheDocument();
+});
