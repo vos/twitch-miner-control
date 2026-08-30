@@ -12,6 +12,13 @@ import { StateService } from "../state/service.js";
 import { buildServer } from "./server.js";
 
 const PASSWORD = "hunter2";
+// The built frontend (Task 20). A real dist/ is never present in this test
+// tree, so every test that needs a staticRoot points at this minimal stand-in
+// instead.
+const PUBLIC_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../test/fixtures/public",
+);
 const validConfig = {
   version: 1, username: "alex", followers: true, followersOrder: "ASC",
   defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
@@ -44,6 +51,7 @@ async function make() {
     history,
     helper: client as never,
     loginRunner: loginRunner as never,
+    staticRoot: PUBLIC_ROOT,
   });
   await app.ready();
   const login = await app.inject({
@@ -479,4 +487,70 @@ test("an apply with nothing staged leaves the state helper alone", async () => {
   } finally {
     await t.dispose();
   }
+});
+
+// --- Serving the built frontend (Task 20) -------------------------------
+// buildServer only mounts @fastify/static and the SPA fallback when
+// staticRoot is set; `make()` now points it at test/fixtures/public, a
+// minimal stand-in for apps/frontend/dist so these run without a real build
+// on disk.
+
+test("GET /api/status requires a session and returns 401 without one", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status" });
+  expect(res.statusCode).toBe(401);
+});
+
+test("an authenticated GET /api/status carries the miner state", async () => {
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/status", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().miner).toBe("RUNNING");
+});
+
+test("a non-API path serves the SPA's index.html", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/streamers" });
+  expect(res.statusCode).toBe(200);
+  expect(res.body).toContain('<div id="root">');
+});
+
+test("unknown API paths 404 as JSON rather than falling back to the SPA", async () => {
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/nonexistent", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(404);
+  expect(res.json()).toEqual({ error: "not found" });
+});
+
+// --- Not-found handler must decode before matching (Correction 2) ------
+// The auth hook reads request.routeOptions.url, which find-my-way has
+// already percent-decoded. A 404 handler runs precisely because nothing
+// matched, so there is no routeOptions.url here -- only the raw request.url
+// off the wire. Testing that raw string for an "/api/" prefix repeats the
+// bug the auth hook was fixed for: "/%61pi/nope" decodes to "/api/nope" but
+// does not start with "/api/" unless decoded first, so it would wrongly
+// fall through to the SPA and hand an API client an HTML body instead of a
+// JSON 404.
+
+test("an encoded API path still 404s as JSON instead of falling back to the SPA", async () => {
+  const res = await ctx.app.inject({
+    method: "GET", url: "/%61pi/nope", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(404);
+  expect(res.json()).toEqual({ error: "not found" });
+});
+
+test("a malformed percent-escape in the path never reaches our handler as a crash", async () => {
+  // decodeURIComponent("/%") throws -- the handler's try/catch guards
+  // against that reaching our code. In practice, with routes registered,
+  // Fastify's own router (find-my-way) already rejects a URL it cannot
+  // decode with FST_ERR_BAD_URL before dispatch ever reaches our
+  // notFoundHandler, so this case never gets far enough to exercise our
+  // catch over a real request -- confirmed by the "NOTFOUND HANDLER HIT"
+  // vs. FST_ERR_BAD_URL difference between a route-less and a routed app.
+  // The assertion that matters here is the one that is actually reachable:
+  // a malformed escape is answered with a clean 400, not an unhandled
+  // exception or a 500.
+  const res = await ctx.app.inject({ method: "GET", url: "/%", cookies: auth() });
+  expect(res.statusCode).toBe(400);
 });

@@ -100,9 +100,11 @@ const stateService = new StateService({
     loadConfig(configPath).streamers.filter((s) => s.enabled).map((s) => s.username),
 });
 
+const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
+
 const app = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
-  helper, loginRunner,
+  helper, loginRunner, staticRoot,
 });
 
 const loggedIn = await helper

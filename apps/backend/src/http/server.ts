@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import fastifyStatic from "@fastify/static";
 import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import type { History } from "../db/history.js";
@@ -48,6 +49,14 @@ export interface ServerDeps {
   history: History;
   helper: NdjsonClient;
   loginRunner: LoginRunner;
+  /**
+   * Absolute path to the built frontend (`apps/frontend/dist`). When set,
+   * the static build is mounted at `/*` and unmatched non-API paths fall
+   * back to `index.html` for client-side routing. Left undefined in every
+   * test in this file -- those exercise the API in isolation and never
+   * need a built frontend on disk.
+   */
+  staticRoot?: string;
 }
 
 export function buildServer(deps: ServerDeps): FastifyInstance {
@@ -173,6 +182,33 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return { started: true };
     });
   });
+
+  if (deps.staticRoot) {
+    void app.register(fastifyStatic, { root: deps.staticRoot });
+    // A 404 handler runs precisely because no route matched, so unlike the
+    // auth hook (which reads the router's already-decoded routeOptions.url)
+    // there is no matched pattern here -- request.url, raw off the wire, is
+    // all there is. Fastify's router percent-decodes before matching, so a
+    // path like `/%61pi/nope` reaches this handler with a raw URL that does
+    // not start with "/api/" even though it names an API path. Decoding
+    // first keeps that case a JSON 404 instead of a false-positive SPA
+    // fallback. decodeURIComponent throws on a malformed escape (e.g. a
+    // bare "%"), which is not an API path either way, so the raw string is
+    // a fine fallback input for the prefix check.
+    app.setNotFoundHandler((request, reply) => {
+      const rawPath = request.url.split("?")[0];
+      let path = rawPath;
+      try {
+        path = decodeURIComponent(rawPath);
+      } catch {
+        // Malformed percent-escape -- fall back to the raw path.
+      }
+      if (path.startsWith("/api/") || path.startsWith("/internal/")) {
+        return reply.code(404).send({ error: "not found" });
+      }
+      return reply.sendFile("index.html");
+    });
+  }
 
   // The only route mounted at the root. It carries its own shared token
   // because the caller is the miner subprocess, not a browser, so it has no
