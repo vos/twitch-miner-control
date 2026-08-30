@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolvePythonBin } from "./config/pythonBin.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
@@ -20,7 +21,7 @@ import { StateService } from "./state/service.js";
 const dataDir = resolve(process.env.DATA_DIR ?? "./data");
 const pythonDir = resolve(process.env.PYTHON_DIR ?? "./python");
 const vendorDir = resolve(process.env.MINER_DIR ?? join(pythonDir, "..", "vendor", "miner"));
-const python = process.env.PYTHON_BIN ?? "python3";
+const python = resolvePythonBin(process.env.PYTHON_BIN);
 const configPath = join(dataDir, "config.json");
 const cookiesDir = join(dataDir, "cookies");
 const password = process.env.APP_PASSWORD;
