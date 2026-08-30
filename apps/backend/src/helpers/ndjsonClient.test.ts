@@ -224,6 +224,70 @@ test("id:null error responses are surfaced as an event, not silently dropped, wh
   await expect(b).rejects.toThrow(/timed out/);
 });
 
+test("id:null success responses are surfaced as an event, not silently dropped", async () => {
+  const c = make({ requestTimeoutMs: 500 });
+  const seen = new Promise<Error>((resolve) => {
+    c.on("unattributed-error", (err: Error) => resolve(err));
+  });
+
+  // The frame carries no id, so it cannot settle the request that provoked
+  // it -- that one still has to die on its own timeout. What must NOT
+  // happen is the frame vanishing: before this fix a helper bug of this
+  // shape left the caller stalled for the full 30s request timeout with a
+  // "timed out" message and no trace of the malformed frame anywhere.
+  const stalled = c.request("orphan_success");
+
+  await expect(seen).resolves.toMatchObject({
+    name: "NdjsonError",
+    message: expect.stringContaining("no request id"),
+  });
+  await expect(stalled).rejects.toThrow(/timed out/);
+});
+
+// --- C2: the window between a helper dying and Node delivering "exit" ---
+// ensure() reuses this.child while exitCode and signalCode are both null,
+// which is true for that entire window. A write into it raises EPIPE on a
+// stream that had no "error" listener, so it became an uncaught exception
+// that killed the backend -- skipping the SIGTERM handler in index.ts and
+// orphaning the miner and both helpers.
+
+test("a request issued after the helper died but before its exit event fails cleanly", async () => {
+  const c = make({ requestTimeoutMs: 5_000 });
+  await expect(c.request("ping")).resolves.toEqual({ echoed: "ping" });
+
+  // Rejection handlers are attached at call time, not after the awaits
+  // below: these promises can settle several macrotasks before the
+  // assertions run, and a late-attached handler is itself an unhandled
+  // rejection.
+  const settle = (p: Promise<unknown>) =>
+    p.then(() => null, (cause: Error) => cause);
+
+  const crashed = settle(c.request("crash"));
+  // Hold the event loop synchronously right through the child's death --
+  // a synchronous better-sqlite3 write or a doorbell burst does exactly
+  // this. No "exit" can be delivered while this loop runs, so ensure()
+  // below still sees exitCode === null and hands back the dead child.
+  const until = Date.now() + 400;
+  while (Date.now() < until) {
+    // deliberately busy: a timer would yield to the event loop and let
+    // "exit" land, which is the very thing this test must prevent.
+  }
+  // Same tick as the busy-wait above -- no await in between, or the window
+  // closes before the write happens.
+  const afterDeath = settle(c.request("ping"));
+
+  expect(await crashed).toBeInstanceOf(Error);
+
+  const failure = await afterDeath;
+  expect(failure).toBeInstanceOf(Error);
+  // Either the write callback reported EPIPE or the exit handler got there
+  // first; both are clean failures naming the helper. What must not happen
+  // is an uncaught EPIPE (which kills the process, failing this whole file)
+  // or a silent stall that only ends at requestTimeoutMs.
+  expect((failure as Error).message).toMatch(/EPIPE|exited/);
+  expect((failure as Error).message).not.toMatch(/timed out/);
+});
+
 // --- restart(): recycling without retiring the client -------------------
 // stop() is final by design (request() throws afterwards), so it cannot be
 // used to pick up a changed spawn environment. restart() replaces the OS

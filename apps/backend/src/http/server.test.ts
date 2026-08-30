@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
-import { NdjsonClient } from "../helpers/ndjsonClient.js";
+import { LoginStatus } from "../helpers/loginStatus.js";
+import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { StateService } from "../state/service.js";
 import { buildServer } from "./server.js";
 
@@ -28,6 +29,7 @@ let ctx: Awaited<ReturnType<typeof make>>;
 
 async function make() {
   const dir = mkdtempSync(join(tmpdir(), "srv-"));
+  const configPath = join(dir, "config.json");
   const history = new History(openDb(":memory:"));
   const supervisor = {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
@@ -37,13 +39,15 @@ async function make() {
   const client = {
     request: vi.fn(async () => ({ streamers: [] })),
     restart: vi.fn(async () => {}),
+    on: vi.fn(),
   };
   const state = new StateService({
     client: client as never, history, getStreamers: () => ["alpha"],
   });
   const loginRunner = { current: null, start: vi.fn(), on: vi.fn(), cancel: vi.fn() };
+  const loginStatus = new LoginStatus();
   const app = buildServer({
-    configPath: join(dir, "config.json"),
+    configPath,
     password: PASSWORD,
     doorbellToken: "doorbell-token",
     supervisor: supervisor as never,
@@ -51,13 +55,17 @@ async function make() {
     history,
     helper: client as never,
     loginRunner: loginRunner as never,
+    loginStatus,
     staticRoot: PUBLIC_ROOT,
   });
   await app.ready();
   const login = await app.inject({
     method: "POST", url: "/api/session", payload: { password: PASSWORD },
   });
-  return { app, supervisor, client, history, state, loginRunner, cookie: login.cookies[0].value };
+  return {
+    app, supervisor, client, history, state, loginRunner, loginStatus, configPath,
+    cookie: login.cookies[0].value,
+  };
 }
 
 beforeEach(async () => { ctx = await make(); });
@@ -75,6 +83,29 @@ test("GET /api/config returns defaults before anything is saved", async () => {
   const res = await ctx.app.inject({ method: "GET", url: "/api/config", cookies: auth() });
   expect(res.statusCode).toBe(200);
   expect(res.json().streamers).toEqual([]);
+});
+
+// C1: a fresh install's `GET /api/config` (the unedited DEFAULT_CONFIG,
+// `username: ""`) must be a value the API accepts back unchanged, or the
+// documented first run (unlock -> sign in -> add streamers -> Apply &
+// Restart) is unreachable through the UI -- the only way in would be
+// hand-editing config.json, exactly what this project exists to eliminate.
+// This must fail against the original code, where usernameSchema required
+// 4-25 chars and DEFAULT_CONFIG.username was "": PUT of the untouched
+// defaults (even with a streamer added, as a real first run would) came
+// back 400 and config.json was never created.
+test("GET-then-PUT round trip on a fresh install's default config succeeds", async () => {
+  const got = await ctx.app.inject({ method: "GET", url: "/api/config", cookies: auth() });
+  expect(got.statusCode).toBe(200);
+  const fresh = got.json();
+  expect(fresh.username).toBe("");
+
+  const firstRun = { ...fresh, streamers: [{ username: "alpha", enabled: true, settings: {} }] };
+  const put = await ctx.app.inject({
+    method: "PUT", url: "/api/config", cookies: auth(), payload: firstRun,
+  });
+  expect(put.statusCode).toBe(200);
+  expect(put.json().pending).toBe(true);
 });
 
 test("PUT /api/config stages without restarting the miner", async () => {
@@ -121,6 +152,49 @@ test("GET /api/status reports supervisor state and staleness", async () => {
 });
 
 test("GET /api/status derives loginRequired when no Twitch account is set up", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(res.json().loginRequired).toBe(true);
+});
+
+// --- loginRequired reflects LoginStatus, not loginRunner.current (I3) ---
+// `loginRunner.current` is the progress of a login attempt made by *this*
+// process: it reads null (-> loginRequired) for a genuinely logged-in user
+// after every restart, and stays "ok" forever once any attempt succeeded in-
+// process, even long after the session it produced expired. These prove
+// the status now used instead answers both cases correctly.
+
+test("a session established before this process started is not reported as loginRequired", async () => {
+  saveConfig(ctx.configPath, validConfig as never);
+  // No login was ever attempted in this process -- loginRunner.current is
+  // still null, exactly as after a real restart -- but the boot check_login
+  // (simulated here by marking loginStatus directly, as index.ts would)
+  // found a usable session.
+  ctx.loginStatus.markLoggedIn();
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(res.json().loginRequired).toBe(false);
+});
+
+test("an AUTH error from the state helper flips loginRequired back on", async () => {
+  saveConfig(ctx.configPath, validConfig as never);
+  ctx.loginStatus.markLoggedIn();
+  const before = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(before.json().loginRequired).toBe(false);
+
+  ctx.state.emit("auth-error", new NdjsonError("session dead", "AUTH"));
+
+  const after = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(after.json().loginRequired).toBe(true);
+});
+
+test("an unattributed AUTH error from the helper flips loginRequired back on", async () => {
+  saveConfig(ctx.configPath, validConfig as never);
+  ctx.loginStatus.markLoggedIn();
+
+  const onCall = ctx.client.on.mock.calls.find(([event]) => event === "unattributed-error");
+  expect(onCall).toBeDefined();
+  const handler = onCall![1] as (error: unknown) => void;
+  handler(new NdjsonError("session dead", "AUTH"));
+
   const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
   expect(res.json().loginRequired).toBe(true);
 });
@@ -338,6 +412,39 @@ test("an authenticated SSE client connects and receives broadcasts", async () =>
   controller.abort();
 });
 
+// --- Shutdown with an attached SSE client (I4) --------------------------
+// Node's http.Server#close() waits for every open connection to end
+// before its callback fires. A hijacked /api/stream socket never ends on
+// its own, so with a browser tab open, app.close() hung indefinitely --
+// process.exit(0) in index.ts's SIGTERM handler never ran, and the
+// container was SIGKILLed on every deploy that had a dashboard open.
+// Deliberately does not abort the client before closing: the whole point
+// is a still-open connection, exactly as a live browser tab leaves it.
+
+test("app.close() completes promptly even with an SSE client still attached", async () => {
+  await ctx.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = ctx.app.server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+
+  const controller = new AbortController();
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream`, {
+    headers: { cookie: `session=${ctx.cookie}` },
+    signal: controller.signal,
+  });
+  expect(res.status).toBe(200);
+  // Drain the initial frame so the connection is fully established, not
+  // mid-handshake, before closing.
+  await res.body!.getReader().read();
+
+  const closed = ctx.app.close().then(() => "closed" as const);
+  const timedOut = new Promise<"timeout">((resolve) => {
+    setTimeout(() => resolve("timeout"), 3_000);
+  });
+  expect(await Promise.race([closed, timedOut])).toBe("closed");
+
+  controller.abort();
+});
+
 test("an SSE client with no session cookie is refused", async () => {
   await ctx.app.listen({ port: 0, host: "127.0.0.1" });
   const address = ctx.app.server.address();
@@ -392,7 +499,7 @@ async function makeLive() {
   const app = buildServer({
     configPath, password: PASSWORD, doorbellToken: "doorbell-token",
     supervisor: supervisor as never, stateService: state, history,
-    helper, loginRunner: loginRunner as never,
+    helper, loginRunner: loginRunner as never, loginStatus: new LoginStatus(),
   });
   await app.ready();
   const login = await app.inject({

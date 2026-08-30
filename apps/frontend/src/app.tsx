@@ -1,4 +1,4 @@
-import { AppShell, Badge, Group, NavLink, Title } from "@mantine/core";
+import { Alert, AppShell, Badge, Button, Group, NavLink, Text, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
 import { PasswordGate } from "./components/PasswordGate.js";
@@ -19,11 +19,18 @@ const SCREENS = {
 export function App() {
   const [screen, setScreen] = useState<keyof typeof SCREENS>("dashboard");
   const [minerState, setMinerState] = useState("…");
+  // I3: this used to be read nowhere in the frontend. `/api/status` already
+  // reports it correctly (LoginStatus, not the login runner's own transient
+  // progress -- see apps/backend/src/helpers/loginStatus.ts), so an expired
+  // token showed up as a stale dashboard with a bare GQL error string and no
+  // call to action. true until the first poll answers, matching the server's
+  // own default-to-required stance.
+  const [loginRequired, setLoginRequired] = useState(true);
 
   useEffect(() => {
     const load = () =>
-      api.get<{ miner: string }>("/api/status")
-        .then((s) => setMinerState(s.miner))
+      api.get<{ miner: string; loginRequired: boolean }>("/api/status")
+        .then((s) => { setMinerState(s.miner); setLoginRequired(s.loginRequired); })
         .catch(() => undefined);
     void load();
     const timer = setInterval(load, 5000);
@@ -47,7 +54,22 @@ export function App() {
             />
           ))}
         </AppShell.Navbar>
-        <AppShell.Main>{SCREENS[screen].element}</AppShell.Main>
+        <AppShell.Main>
+          {loginRequired && screen !== "account" && (
+            <Alert
+              role="alert" color="yellow" mb="md" data-testid="login-required-banner"
+              title="Twitch sign-in needed"
+            >
+              <Group justify="space-between" wrap="nowrap">
+                <Text size="sm">
+                  The miner cannot run without a signed-in Twitch account.
+                </Text>
+                <Button size="xs" onClick={() => setScreen("account")}>Sign in</Button>
+              </Group>
+            </Alert>
+          )}
+          {SCREENS[screen].element}
+        </AppShell.Main>
       </AppShell>
     </PasswordGate>
   );

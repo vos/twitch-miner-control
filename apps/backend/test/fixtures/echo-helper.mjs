@@ -57,6 +57,17 @@ rl.on("line", (line) => {
     return;
   }
 
+  if (req.op === "orphan_success") {
+    // A *success* frame with no correlating id. No correct helper can
+    // produce this (state.py always echoes the id back), but a buggy one
+    // could -- and the client used to drop it silently, stalling the caller
+    // until its request timeout fired and then blaming a timeout.
+    process.stdout.write(
+      `${JSON.stringify({ id: null, ok: true, data: { echoed: req.op } })}\n`,
+    );
+    return;
+  }
+
   if (req.op === "auth_fail") {
     process.stdout.write(
       `${JSON.stringify({

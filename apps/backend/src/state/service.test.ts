@@ -99,6 +99,50 @@ test("a successful refresh clears a previous error", async () => {
   expect(service.snapshot().error).toBe(null);
 });
 
+// I3: `code: "AUTH"` is state.py's verdict that it reloaded the cookie
+// pickle and still could not authenticate -- the session is dead, not
+// merely a flaky request. The HTTP layer needs its own event to turn this
+// into a visible "sign in again" prompt, distinct from ordinary refresh
+// failures (a GQL hiccup must not send the user back to the login screen).
+test("a refresh failure carrying code AUTH emits auth-error", async () => {
+  const authError = Object.assign(new Error("session dead"), { code: "AUTH" });
+  const { service } = make([authError]);
+  const seen: unknown[] = [];
+  service.on("auth-error", (err) => seen.push(err));
+  await service.refresh();
+  expect(seen).toEqual([authError]);
+});
+
+test("an ordinary refresh failure does not emit auth-error", async () => {
+  const { service } = make([new Error("gql exploded")]);
+  const seen: unknown[] = [];
+  service.on("auth-error", (err) => seen.push(err));
+  await service.refresh();
+  expect(seen).toEqual([]);
+});
+
+// I5: arming the interval alone left the first tick a full period away, so
+// for 60s after every restart the dashboard rendered a confident "Total
+// channel points: 0" built from no data at all, beside a badge nobody was
+// looking at. start() must kick a refresh immediately so the snapshot is
+// either real or explicitly "never updated" -- never a fabricated zero.
+test("start() kicks an immediate refresh instead of waiting for the first interval tick", async () => {
+  vi.useFakeTimers();
+  const { service, request } = make([alpha(100)]);
+  expect(service.snapshot().lastUpdated).toBeNull();
+
+  service.start();
+  // Zero time has elapsed: if start() only armed setInterval, nothing
+  // would have been requested yet.
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(service.snapshot().lastUpdated).not.toBeNull();
+
+  service.stop();
+  vi.useRealTimers();
+});
+
 test("ring coalesces a burst into a single refresh", async () => {
   vi.useFakeTimers();
   const { service, request } = make([alpha(100), alpha(100), alpha(100)]);

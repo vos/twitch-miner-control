@@ -36,7 +36,14 @@ export function Dashboard() {
 
       <Card withBorder>
         <Text size="sm" c="dimmed">Total channel points</Text>
-        <Text size="xl" fw={700} data-testid="total-points">{nf.format(total)}</Text>
+        <Text size="xl" fw={700} data-testid="total-points">
+          {/* A real 0 (every tracked streamer genuinely has none) and "we
+              have not looked yet" must never render the same way -- the
+              latter used to show a confident "0" for a full refresh
+              interval after every restart, beside a badge nobody reads
+              closely enough to notice contradicts it. */}
+          {snapshot.lastUpdated === null ? "—" : nf.format(total)}
+        </Text>
       </Card>
 
       <Title order={4}>Live now ({live.length})</Title>

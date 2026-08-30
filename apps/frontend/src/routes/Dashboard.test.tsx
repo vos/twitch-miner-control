@@ -61,6 +61,17 @@ test("surfaces a refresh error without hiding the last known numbers", async () 
   expect(screen.getByText("123,456")).toBeInTheDocument();
 });
 
+// I5: the backend now kicks a refresh at boot instead of only arming its
+// 60s interval, but the very first render (before that refresh's response
+// has come back) still has lastUpdated: null -- and rendering "0" there is
+// indistinguishable from a real, checked total of zero. This must fail
+// against code that renders nf.format(total) unconditionally.
+test("shows a placeholder total, not a fabricated zero, before any refresh has completed", async () => {
+  stub({ ...snapshot, lastUpdated: null, streamers: [] });
+  view();
+  expect(await screen.findByTestId("total-points")).toHaveTextContent("—");
+});
+
 test("renders a streamer whose points could not be read as unknown, not zero", async () => {
   stub({ ...snapshot, streamers: [
     { username: "ghost", displayName: null, points: null, isOnline: null,

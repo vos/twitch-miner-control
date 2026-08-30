@@ -1,10 +1,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
+import type { ZodError } from "zod";
 import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import type { History } from "../db/history.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
-import type { NdjsonClient } from "../helpers/ndjsonClient.js";
+import type { LoginStatus } from "../helpers/loginStatus.js";
+import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { StateService } from "../state/service.js";
 import { registerAuth } from "./auth.js";
@@ -40,6 +42,28 @@ function finiteParam(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * Renders a rejected config as something a person can act on.
+ *
+ * `ZodError#message` is a JSON dump of the raw issue array -- brackets,
+ * `expected`/`received` keys and all -- and the frontend puts whatever the
+ * API returns straight into an alert, so the user was shown a serialized
+ * parser internal instead of a sentence. Each issue becomes
+ * "<where>: <what>" and they are joined, which keeps every issue (a config
+ * can fail in several places at once) while staying one readable line.
+ */
+function describeConfigError(error: ZodError): string {
+  const issues = error.issues.map((issue) => {
+    const where = issue.path.length > 0 ? issue.path.join(".") : "config";
+    return `${where}: ${issue.message}`;
+  });
+  return issues.length > 0 ? issues.join("; ") : "config is not valid";
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 export interface ServerDeps {
   configPath: string;
   password: string;
@@ -49,6 +73,13 @@ export interface ServerDeps {
   history: History;
   helper: NdjsonClient;
   loginRunner: LoginRunner;
+  /**
+   * Whether the stored Twitch session is currently usable. Owned outside
+   * the server because the answer is established before it exists (the
+   * boot `check_login` in index.ts) and changed by things that are not HTTP
+   * requests (a helper reporting AUTH, a login completing).
+   */
+  loginStatus: LoginStatus;
   /**
    * Absolute path to the built frontend (`apps/frontend/dist`). When set,
    * the static build is mounted at `/*` and unmatched non-API paths fall
@@ -60,7 +91,18 @@ export interface ServerDeps {
 }
 
 export function buildServer(deps: ServerDeps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  // /api/stream hijacks its socket for a live SSE connection that never
+  // ends on its own. Node's http.Server#close() waits for every open
+  // connection to end before its callback fires -- a hijacked socket
+  // counts as open exactly like any other -- so app.close() hung
+  // indefinitely with even one browser tab holding the dashboard open,
+  // which meant process.exit(0) in index.ts's SIGTERM handler never ran
+  // and Docker SIGKILLed the container on every deploy. forceCloseConnections
+  // makes close() forcibly destroy every open socket (Node's
+  // server.closeAllConnections(), available since Node 18.2) instead of
+  // waiting for them to end gracefully -- appropriate here because a
+  // shutting-down backend has nothing left to say to a client anyway.
+  const app = Fastify({ logger: false, forceCloseConnections: true });
   const hub = new SseHub();
   let staged: AppConfig | null = null;
 
@@ -90,6 +132,31 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     await deps.stateService.refresh().catch(() => {});
   }
 
+  /**
+   * Records the Twitch account a successful login belongs to.
+   *
+   * Without this, nothing ever wrote `username` back: a fresh install could
+   * complete the device-code flow and still hold `username: ""`, which
+   * leaves the state helper reading `cookies/.pkl` and the miner refusing
+   * to start. Writes straight to disk rather than through `staged`, because
+   * this is a fact about the account, not an edit the user has to confirm
+   * -- and it must survive without an Apply. A no-op when the name already
+   * matches, so a re-login does not rewrite the file.
+   */
+  function persistUsername(username: string): void {
+    try {
+      const current = loadConfig(deps.configPath);
+      if (current.username === username) return;
+      saveConfig(deps.configPath, { ...current, username });
+      // Staged edits were made against the old username; keep them, but do
+      // not let an Apply write the stale name back over the one Twitch just
+      // confirmed.
+      if (staged !== null) staged = { ...staged, username };
+    } catch (cause) {
+      app.log.error({ err: cause }, "could not persist the logged-in username");
+    }
+  }
+
   app.register(async (instance) => {
     await registerAuth(instance, { password: deps.password });
     hub.register(instance);
@@ -99,31 +166,53 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     instance.put("/api/config", async (request, reply) => {
       const parsed = configSchema.safeParse(request.body);
       if (!parsed.success) {
-        return reply.code(400).send({ error: parsed.error.message });
+        return reply.code(400).send({ error: describeConfigError(parsed.error) });
       }
       staged = parsed.data;
       return { pending: true };
     });
 
-    instance.post("/api/config/apply", async () => {
+    instance.post("/api/config/apply", async (_request, reply) => {
       if (staged === null) return { applied: false };
-      saveConfig(deps.configPath, staged);
+      // Split into two guarded phases because they fail differently and the
+      // user has to be told which one happened. Unhandled, a throw from
+      // either one became a bare "Internal Server Error" -- and after the
+      // write had landed, `pendingChanges` then read false, so the UI
+      // claimed the changes were live while the miner was still running the
+      // old config.
+      try {
+        saveConfig(deps.configPath, staged);
+      } catch (cause) {
+        // config.json is untouched (saveConfig writes to a temp file and
+        // renames), so the staged changes are still the pending ones.
+        return reply.code(500).send({
+          error: `could not write config.json: ${messageOf(cause)}. Your changes are still pending.`,
+        });
+      }
       staged = null;
-      // The applied config may name a different Twitch username, so the
-      // state helper has to be recycled alongside the miner -- see
-      // recycleHelper(). Awaited (it is a local process kill, not a network
-      // call) so the response means both children are already gone.
-      await recycleHelper();
-      await deps.supervisor.restart();
+      try {
+        // The applied config may name a different Twitch username, so the
+        // state helper has to be recycled alongside the miner -- see
+        // recycleHelper(). Awaited (it is a local process kill, not a
+        // network call) so the response means both children are already gone.
+        await recycleHelper();
+        await deps.supervisor.restart();
+      } catch (cause) {
+        return reply.code(500).send({
+          error: `config.json was saved but the miner could not be restarted: ${messageOf(cause)}. The miner is still running the previous configuration -- restart it from the dashboard.`,
+        });
+      }
       return { applied: true };
     });
 
     instance.get("/api/status", async () => {
       const snapshot = deps.stateService.snapshot();
+      // Two independent reasons to send the user to the sign-in screen: no
+      // account has been named yet (a fresh install), or the session behind
+      // that account is not usable -- see LoginStatus for why the login
+      // *runner*'s progress cannot answer this.
       const loginRequired =
-        deps.loginRunner.current === null ||
-        deps.loginRunner.current.stage === "error" ||
-        loadConfig(deps.configPath).username === "";
+        loadConfig(deps.configPath).username === "" || deps.loginStatus.required;
       return {
         miner: deps.supervisor.state,
         loginRequired,
@@ -232,11 +321,31 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   deps.supervisor.on("state", (state) => hub.broadcast("miner", { state }));
   deps.loginRunner.on("progress", (p: LoginProgress) => {
     hub.broadcast("login", p);
+    if (p.stage !== "ok") return;
+    deps.loginStatus.markLoggedIn();
+    // The helper reports the login Twitch actually accepted, which is the
+    // authority on how the account is spelled. Persisting it before the
+    // recycle below matters: helperEnv() in index.ts reads TWITCH_USERNAME
+    // out of config.json at spawn time, so a helper started first would
+    // keep resolving the old (or empty) cookie pickle path.
+    persistUsername(p.username);
     // A completed login writes the cookie pickle the state helper reads,
     // under whatever username the config names now -- neither of which the
     // running helper can see. Fire-and-forget: the SSE frame above must not
     // wait on a process restart.
-    if (p.stage === "ok") void recycleHelper();
+    void recycleHelper();
+  });
+
+  // A helper response carrying code "AUTH" means state.py reloaded the
+  // cookie pickle and still could not authenticate: the session is gone,
+  // whatever a past login attempt reported. Both paths a rejected request
+  // can take are covered -- one attributed to a caller (StateService's
+  // refresh) and one that could not be attributed to any single request.
+  deps.stateService.on("auth-error", () => deps.loginStatus.markLoggedOut());
+  deps.helper.on("unattributed-error", (error: unknown) => {
+    if (error instanceof NdjsonError && error.code === "AUTH") {
+      deps.loginStatus.markLoggedOut();
+    }
   });
 
   return app;

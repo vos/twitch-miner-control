@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
+import type { AppConfig } from "./schema.js";
 import { configSchema } from "./schema.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./store.js";
 
@@ -12,6 +13,16 @@ beforeEach(() => {
   path = join(dir, "config.json");
 });
 
+// Left as a plain inferred literal (not typed `: AppConfig`) rather than
+// annotated: settingsSchema's `defaults`/`streamers[].settings` shape is
+// built via `Object.fromEntries(BOOL_SETTINGS.map(...))` (schema.ts), which
+// TS cannot infer literal keys through, so a directly `AppConfig`-typed
+// object literal here rejects `makePredictions` as an unknown property even
+// though zod accepts it fine at runtime -- a pre-existing type-inference
+// gap in schema.ts, unrelated to what this file tests. `as AppConfig` casts
+// below (not excess-property-checked, since `valid` isn't a fresh literal
+// at the cast site) get the saveConfig() calls, which need the narrower
+// type, past it without touching schema.ts or any assertion in this file.
 const valid = {
   version: 1,
   username: "alex",
@@ -73,12 +84,12 @@ describe("store", () => {
   });
 
   test("round-trips a saved config", () => {
-    saveConfig(path, valid);
+    saveConfig(path, valid as AppConfig);
     expect(loadConfig(path)).toEqual(valid);
   });
 
   test("writes snake_case keys that Python accepts", () => {
-    saveConfig(path, valid);
+    saveConfig(path, valid as AppConfig);
     const raw = JSON.parse(readFileSync(path, "utf8"));
     expect(raw.defaults).toEqual({ make_predictions: false });
     expect(raw.followersOrder).toBe("ASC");
@@ -94,7 +105,7 @@ describe("store", () => {
   });
 
   test("leaves no temp files behind after a save", () => {
-    saveConfig(path, valid);
+    saveConfig(path, valid as AppConfig);
     expect(readdirSync(dir)).toEqual(["config.json"]);
   });
 });

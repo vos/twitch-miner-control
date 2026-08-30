@@ -29,10 +29,26 @@ const settingsSchema = z
 /** Twitch login rules: 4-25 chars, letters/digits/underscore. */
 export const usernameSchema = z.string().regex(/^[a-zA-Z0-9_]{4,25}$/);
 
+/**
+ * The account username, which is allowed to be *unset* on a fresh install.
+ *
+ * `DEFAULT_CONFIG` (config/store.ts) is what `loadConfig()` returns before
+ * `config.json` exists, and the UI's first run reads that object, edits it
+ * and writes it straight back. Requiring a real Twitch login here made the
+ * value the API hands out a value the API refuses to take back: PUT
+ * /api/config answered the untouched defaults with a 400, so a fresh
+ * install could not be configured through the UI at all. The empty string
+ * is therefore a legitimate stored state meaning "no Twitch account chosen
+ * yet" -- `/api/status` reports `loginRequired` for it, and index.ts
+ * refuses to start the miner without it. Streamer usernames keep the
+ * strict rule: there is no such thing as an unnamed streamer.
+ */
+export const accountUsernameSchema = z.union([z.literal(""), usernameSchema]);
+
 export const configSchema = z
   .object({
     version: z.literal(1),
-    username: usernameSchema,
+    username: accountUsernameSchema,
     followers: z.boolean(),
     followersOrder: z.enum(["ASC", "DESC"]),
     defaults: settingsSchema,

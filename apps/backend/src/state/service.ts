@@ -130,6 +130,16 @@ export class StateService extends EventEmitter {
     } catch (cause) {
       // Keep the last known numbers; snapshot() will report them as stale.
       this.lastError = cause instanceof Error ? cause.message : String(cause);
+      // `code: "AUTH"` is state.py's verdict that it reloaded the cookie
+      // pickle and still could not authenticate, i.e. the Twitch session is
+      // dead rather than the request flaky. Re-emitted as its own event so
+      // the HTTP layer can turn it into a visible "sign in again" prompt;
+      // duck-typed on `code` rather than `instanceof NdjsonError` so a
+      // stubbed client in a test can raise one without importing the
+      // helper transport.
+      if ((cause as { code?: unknown } | null)?.code === "AUTH") {
+        this.emit("auth-error", cause);
+      }
       this.emit("change", this.snapshot());
     }
   }
@@ -147,6 +157,13 @@ export class StateService extends EventEmitter {
   start(): void {
     if (this.ticker) return;
     this.ticker = setInterval(() => void this.refresh(), this.deps.intervalMs ?? 60_000);
+    // Arming the interval alone left the first tick a full period away, so
+    // for 60s after every restart the dashboard rendered a confident total
+    // of 0 built from no data at all. Kick one refresh immediately so the
+    // snapshot is either real or explicitly "never updated" -- never a
+    // fabricated zero. Fire-and-forget: doRefresh() never rejects, and
+    // start() must not block boot on a Twitch round trip.
+    void this.refresh();
   }
 
   stop(): void {

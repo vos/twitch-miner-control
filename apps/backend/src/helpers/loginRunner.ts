@@ -190,9 +190,21 @@ export class LoginRunner extends EventEmitter {
   cancel(): void {
     const child = this.child;
     if (!child) return; // not started, or already finished -- safe no-op.
+    // A second cancel() before the child exits (e.g. a doubled shutdown
+    // signal) must not orphan the first timer: overwriting `killTimer`
+    // without clearing it first left that original timer scheduled with
+    // no reference anyone could clear, so it fired its SIGKILL on its own
+    // schedule regardless of what this call does. Clearing it here means
+    // there is ever only one live killTimer for this child.
+    if (this.killTimer) clearTimeout(this.killTimer);
     this.killTimer = setTimeout(() => {
       child.kill("SIGKILL");
     }, this.grace);
     child.kill("SIGTERM");
+  }
+
+  /** True while a login helper process is spawned and has not yet exited. */
+  get running(): boolean {
+    return this.child !== null;
   }
 }

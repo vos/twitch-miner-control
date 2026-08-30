@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { LoginRunner, type LoginProgress } from "./loginRunner.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -146,4 +146,59 @@ test("cancel is a safe no-op before start and after exit", async () => {
     finished.start();
   });
   expect(() => finished.cancel()).not.toThrow();
+});
+
+// cancel() sets a killTimer to escalate to SIGKILL if the grace period
+// elapses. Calling it twice while the child is still alive used to
+// overwrite `killTimer` without clearing the previous one first, orphaning
+// that first timer with no reference anyone could clear -- it stayed
+// scheduled and fired on its own regardless of what the second call did.
+test("cancel() twice clears the first timer instead of orphaning it", async () => {
+  const runner = new LoginRunner({
+    command: process.execPath, args: [stubborn], cwd: process.cwd(), env: {},
+    graceMs: 200,
+  });
+  const firstProgress = new Promise<void>((resolve) => {
+    runner.once("progress", () => resolve());
+  });
+  runner.start();
+  await firstProgress;
+
+  const clearSpy = vi.spyOn(global, "clearTimeout");
+  runner.cancel();
+  const firstTimer = (runner as unknown as { killTimer: unknown }).killTimer;
+  expect(firstTimer).not.toBeNull();
+  runner.cancel();
+  expect(clearSpy).toHaveBeenCalledWith(firstTimer);
+  clearSpy.mockRestore();
+
+  // Let the (second, non-orphaned) timer actually escalate to SIGKILL so
+  // the stubborn child -- which ignores SIGTERM -- is cleaned up rather
+  // than leaked past this test.
+  const done = new Promise<void>((resolve) => runner.on("done", () => resolve()));
+  await done;
+  expect(runner.current?.stage).toBe("error");
+});
+
+// Correction: the missing regression test for a clean cancel -> exit --
+// killTimer must be cleared once the child actually exits, not left
+// dangling to fire a SIGKILL at an already-gone process later.
+test("a clean cancel-to-exit clears the kill timer rather than leaving it to fire later", async () => {
+  const runner = new LoginRunner({
+    // fake-login.mjs registers no SIGTERM handler, so the default action
+    // (immediate termination) applies -- well under the long graceMs
+    // below, proving the timer is cleared by the exit, not by expiring.
+    command: process.execPath, args: [fake], cwd: process.cwd(), env: {},
+    graceMs: 5_000,
+  });
+  const firstProgress = new Promise<void>((resolve) => {
+    runner.once("progress", () => resolve());
+  });
+  runner.start();
+  await firstProgress;
+
+  const done = new Promise<void>((resolve) => runner.on("done", () => resolve()));
+  runner.cancel();
+  await done;
+  expect((runner as unknown as { killTimer: unknown }).killTimer).toBeNull();
 });

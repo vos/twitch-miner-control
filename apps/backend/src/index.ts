@@ -11,6 +11,7 @@ import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
+import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
@@ -102,14 +103,25 @@ const stateService = new StateService({
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
 
+// `loginRequired` used to be derived purely from `loginRunner.current` --
+// the progress of a login attempt made by *this* process -- which reads
+// `true` for a genuinely logged-in user after every restart (nothing in
+// this process has attempted a login yet) and `false` forever once any
+// attempt succeeded, even long after the session it produced has expired.
+// LoginStatus is the single source of truth instead, seeded below from the
+// boot check_login round trip and kept current afterwards by AUTH errors
+// (wired inside buildServer).
+const loginStatus = new LoginStatus();
+
 const app = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
-  helper, loginRunner, staticRoot,
+  helper, loginRunner, loginStatus, staticRoot,
 });
 
 const loggedIn = await helper
   .request<{ loggedIn: boolean }>("check_login")
   .catch(() => ({ loggedIn: false }));
+if (loggedIn.loggedIn) loginStatus.markLoggedIn();
 
 stateService.start();
 if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
@@ -124,8 +136,20 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     shuttingDown = true;
     void (async () => {
       stateService.stop();
+      // cancel() itself is synchronous (it only sends signals and arms its
+      // own SIGKILL escalation timer), so awaiting it directly awaited
+      // nothing -- process.exit(0) below could run before the SIGKILL
+      // timer ever fired, orphaning a login helper that ignored SIGTERM.
+      // `running` is checked before cancel() (both synchronous, so there
+      // is no race) to avoid waiting on a "done" that will never come when
+      // no login was ever started.
+      const loginDone = loginRunner.running
+        ? new Promise<void>((resolve) => loginRunner.once("done", () => resolve()))
+        : Promise.resolve();
       loginRunner.cancel();
-      await Promise.allSettled([supervisor.stop(), helper.stop(), app.close()]);
+      await Promise.allSettled([
+        supervisor.stop(), helper.stop(), app.close(), loginDone,
+      ]);
       db.close();
       process.exit(0);
     })();

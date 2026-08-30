@@ -84,6 +84,19 @@ export class NdjsonClient extends EventEmitter {
     // `spawn` returns synchronously before this fires, so any request(s)
     // already queued against this child must be rejected here.
     child.on("error", (err) => this.onSpawnError(child, err));
+    // stdin is a stream of its own and does NOT inherit the child's "error"
+    // handler. ensure() hands back a child whose exitCode and signalCode are
+    // both still null for the whole window between the OS process dying and
+    // Node delivering "exit" -- a window a synchronous better-sqlite3 write
+    // or a doorbell burst can hold open for hundreds of milliseconds. A
+    // write() into that dead pipe raises EPIPE on this stream, and with no
+    // listener Node turns it into an uncaught exception that kills the
+    // backend outright -- bypassing the SIGTERM handler in index.ts and so
+    // orphaning the miner and both helpers, which is exactly the harm that
+    // handler exists to prevent. The pending request is failed by the
+    // per-write callback in request(); this listener only has to keep the
+    // event from being fatal.
+    child.stdin?.on("error", () => {});
     this.reader = reader;
     this.child = child;
     return child;
@@ -121,7 +134,20 @@ export class NdjsonClient extends EventEmitter {
             new NdjsonError(message.error ?? "helper error", message.code),
           );
         }
+        return;
       }
+      // A *success* frame with no id is a helper bug -- the protocol always
+      // echoes the request id back (python/helpers/state.py:104-122), so no
+      // correct helper can produce this. It used to be dropped on the floor,
+      // which stalled whoever sent that request for the full 30s timeout and
+      // then blamed it on a timeout. It cannot be attributed the way an
+      // error frame can (resolving some caller with data that may not be
+      // theirs is worse than failing), so surface it on the same channel
+      // the unattributable-error path uses.
+      this.emit(
+        "unattributed-error",
+        new NdjsonError("helper sent a success response with no request id", undefined),
+      );
       return;
     }
     const entry = this.pending.get(message.id);
@@ -133,6 +159,18 @@ export class NdjsonClient extends EventEmitter {
     } else {
       entry.reject(new NdjsonError(message.error ?? "helper error", message.code));
     }
+  }
+
+  /**
+   * Settles one pending request with an error, if it is still pending.
+   * Idempotent: onExit() may already have rejected and removed it.
+   */
+  private fail(id: number, error: Error): void {
+    const entry = this.pending.get(id);
+    if (!entry) return;
+    this.pending.delete(id);
+    clearTimeout(entry.timer);
+    entry.reject(error);
   }
 
   private onExit(child: ChildProcess, code: number | null): void {
@@ -192,7 +230,13 @@ export class NdjsonClient extends EventEmitter {
       // correlation (see python/helpers/state.py:100,106, which reads
       // fields like "username"/"streamers" flat off the same object, so
       // params must stay a flat spread rather than nested).
-      child.stdin!.write(`${JSON.stringify({ ...params, id, op })}\n`);
+      child.stdin!.write(`${JSON.stringify({ ...params, id, op })}\n`, (err) => {
+        // Reached when the pipe is already gone (EPIPE) or the stream was
+        // destroyed: the helper died and "exit" has not been delivered yet,
+        // so onExit() has not rejected anything and never will for this id.
+        // Fail this one request instead of letting it hang to the timeout.
+        if (err) this.fail(id, new Error(`helper request "${op}" failed: ${err.message}`));
+      });
     });
   }
 
