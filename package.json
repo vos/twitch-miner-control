@@ -4,10 +4,16 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9+sha512.68046141893c66fad01c079231128e9afb89ef87e2691d69e4d40eee228988295fd4682181bae55b58418c3a253bde65a505ec7c5f9403ece5cc3cd37dcf2531",
   "scripts": {
+    "predev": "tsc -p apps/backend/tsconfig.json",
+    "dev": "concurrently --kill-others --names tsc,server,web --prefix-colors blue,green,magenta \"pnpm run dev:backend\" \"pnpm run dev:server\" \"pnpm run dev:frontend\"",
+    "dev:backend": "tsc -p apps/backend/tsconfig.json --watch --preserveWatchOutput",
+    "dev:server": "node --watch --env-file=.env apps/backend/dist/index.js",
+    "dev:frontend": "pnpm --filter @app/frontend dev",
     "test": "pnpm -r test",
     "build": "pnpm -r build"
   },
   "devDependencies": {
+    "concurrently": "^10.0.5",
     "typescript": "^5.9.0"
   }
 }

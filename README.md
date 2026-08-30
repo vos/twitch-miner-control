@@ -13,6 +13,28 @@ Open http://localhost:8080, unlock with your password, then go to
 **Twitch account** and sign in with the device code. Add streamers on the
 **Streamers** screen and press **Apply & Restart**.
 
+## Development
+
+Runs the backend and frontend on the host, without Docker. Requires
+Node, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
+
+    git submodule update --init      # vendor/miner
+    pnpm install
+    uv sync                          # creates .venv the helpers run from
+    cp .env.example .env             # then set APP_PASSWORD
+    pnpm dev
+
+Open the Vite URL it prints (http://localhost:5173), **not** port 8080 --
+Vite serves the UI with hot reload and proxies `/api` to the backend.
+
+`pnpm dev` runs three watchers: `tsc` recompiles the backend, `node
+--watch` restarts it, and Vite serves the frontend. Editing backend
+TypeScript restarts the server automatically. Ctrl-C stops all three.
+
+Dev mode reads its configuration from `.env` (see `.env.example` for
+what each variable does) and keeps its data in `./.devdata`, so it never
+touches the `./data` volume Docker mounts.
+
 ## Design
 
 - `docs/superpowers/specs/2026-08-29-twitch-miner-web-ui-design.md`
