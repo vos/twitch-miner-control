@@ -53,12 +53,78 @@ test("surfaces a login error", async () => {
 });
 
 test("starting login posts to the API", async () => {
-  const fetchMock = vi.fn(async (_url: string) => ({
-    ok: true, status: 200, json: async () => ({ login: null }),
+  // A username is a precondition for login now: the helper reads it from
+  // the stored config when it spawns, so the button stays inert without one.
+  const fetchMock = vi.fn(async (url: string) => ({
+    ok: true, status: 200,
+    json: async () => (url.startsWith("/api/config")
+      ? { version: 1, username: "alex", followers: false, followersOrder: "ASC",
+          defaults: {}, streamers: [] }
+      : { login: null }),
   }));
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
   view();
+  await screen.findByDisplayValue("alex");
   await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
   expect(fetchMock.mock.calls.some(([url]) => url === "/api/twitch/login")).toBe(true);
+});
+
+/** Routes by URL so the component can read /api/config and write it back. */
+function stubRoutes(status: unknown, config: Record<string, unknown>) {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    const body = url.startsWith("/api/config") ? config : status;
+    return { ok: true, status: 200, json: async () => body };
+  }));
+  vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+  return calls;
+}
+
+const CONFIG = {
+  version: 1, username: "", followers: false, followersOrder: "ASC",
+  defaults: {}, streamers: [],
+};
+
+test("offers a username field when no Twitch account is set", async () => {
+  stubRoutes({ login: null }, CONFIG);
+  view();
+  expect(await screen.findByLabelText(/twitch username/i)).toBeInTheDocument();
+});
+
+test("shows the already-configured username", async () => {
+  stubRoutes({ login: null }, { ...CONFIG, username: "alex" });
+  view();
+  expect(await screen.findByLabelText(/twitch username/i)).toHaveValue("alex");
+});
+
+test("saves the username to the config before starting login", async () => {
+  const calls = stubRoutes({ login: null }, CONFIG);
+  view();
+  await userEvent.type(await screen.findByLabelText(/twitch username/i), "alex");
+  await userEvent.click(screen.getByRole("button", { name: /sign in to twitch/i }));
+  const put = calls.find((c) => c.url === "/api/config" && c.init?.method === "PUT");
+  expect(put).toBeDefined();
+  expect(JSON.parse(String(put?.init?.body)).username).toBe("alex");
+  // The username has to reach the helper's environment before it spawns.
+  const putIndex = calls.indexOf(put!);
+  const loginIndex = calls.findIndex((c) => c.url === "/api/twitch/login");
+  expect(putIndex).toBeLessThan(loginIndex);
+});
+
+test("rejects a malformed username without calling the API", async () => {
+  const calls = stubRoutes({ login: null }, CONFIG);
+  view();
+  await userEvent.type(await screen.findByLabelText(/twitch username/i), "no");
+  await userEvent.click(screen.getByRole("button", { name: /sign in to twitch/i }));
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(calls.some((c) => c.url === "/api/twitch/login")).toBe(false);
+});
+
+test("does not start login with an empty username", async () => {
+  const calls = stubRoutes({ login: null }, CONFIG);
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
+  expect(calls.some((c) => c.url === "/api/twitch/login")).toBe(false);
 });
