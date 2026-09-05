@@ -126,6 +126,42 @@ def test_followers_returns_logins():
     assert h.handle({"id": 1, "op": "followers"})["data"] == {"followers": ["a", "b"]}
 
 
+def test_followers_loads_cookies_before_calling_gql():
+    """build_session() leaves the session tokenless until reload_cookies()
+    runs, and `followers` is the only op that reaches GQL without first
+    going through is_logged_in(). Without an explicit reload it sent
+    `Authorization: OAuth None` and Twitch answered 401 three times over.
+    """
+    calls = []
+
+    class NeedsCookies:
+        """Mirrors TwitchLogin: no token until the pickle is loaded."""
+
+        def __init__(self):
+            self.loaded = False
+
+        def channel_follows(self, limit=100, order=None):
+            calls.append("channel_follows")
+            if not self.loaded:
+                raise AssertionError("channel_follows called before reload_cookies")
+            return ["a", "b"]
+
+    gql = NeedsCookies()
+
+    def reload():
+        calls.append("reload_cookies")
+        gql.loaded = True
+        return True
+
+    session = SimpleNamespace(gql=gql, reload_cookies=reload,
+                              is_logged_in=lambda: True)
+    out = Handler(session).handle({"id": 1, "op": "followers"})
+
+    assert out["ok"] is True
+    assert out["data"] == {"followers": ["a", "b"]}
+    assert calls == ["reload_cookies", "channel_follows"]
+
+
 def test_unknown_op_is_a_bad_request():
     out = handler().handle({"id": 7, "op": "nonsense"})
     assert out == {"id": 7, "ok": False, "error": "unknown op: nonsense",

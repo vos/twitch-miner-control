@@ -17,6 +17,7 @@ import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
+import { resolveRoster } from "./state/roster.js";
 import { StateService } from "./state/service.js";
 
 const dataDir = resolve(process.env.DATA_DIR ?? "./data");
@@ -97,11 +98,27 @@ const supervisor = new Supervisor({
 });
 const db = openDb(join(dataDir, "history.db"));
 const history = new History(db);
+/**
+ * Wires the roster resolver to this process's config and helper. The union,
+ * dedupe and failure handling live in state/roster.ts, where they are
+ * unit-tested; see that module for why the backend refetches the follow
+ * list rather than sharing the miner's copy.
+ */
+function resolveStreamers(): Promise<string[]> {
+  return resolveRoster({
+    configured: () =>
+      loadConfig(configPath).streamers.filter((s) => s.enabled).map((s) => s.username),
+    followersEnabled: () => loadConfig(configPath).followers,
+    fetchFollowers: async () =>
+      (await helper.request<{ followers: string[] }>("followers")).followers,
+    onError: (cause) => console.warn("could not load followed channels:", cause),
+  });
+}
+
 const stateService = new StateService({
   client: helper,
   history,
-  getStreamers: () =>
-    loadConfig(configPath).streamers.filter((s) => s.enabled).map((s) => s.username),
+  getStreamers: resolveStreamers,
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");

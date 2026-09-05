@@ -133,6 +133,16 @@ class Handler:
             if op == "lookup":
                 return {"id": req_id, "ok": True, "data": self._lookup(req["username"])}
             if op == "followers":
+                # Load the cookie pickle first. build_session() leaves the
+                # session tokenless (cookies == [], token is None), so a
+                # `followers` request arriving before anything else has
+                # called reload_cookies() -- which is the normal case, since
+                # this is the only op that touches GQL without first going
+                # through is_logged_in() -- would send
+                # `Authorization: OAuth None` and take a 401 through all
+                # three retries. Every other GQL op is reached via a path
+                # that has already reloaded.
+                self.session.reload_cookies()
                 return {"id": req_id, "ok": True,
                         "data": {"followers": self.session.gql.channel_follows()}}
             if op == "state":

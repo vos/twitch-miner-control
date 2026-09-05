@@ -38,6 +38,15 @@ const alpha = (points: number, isOnline = true) => ({
 /** A manually-controlled promise, used to hold a request open so a test
  * can deterministically arrange "another refresh arrives while the first
  * is still in flight" without relying on microtask-timing luck. */
+/**
+ * Flushes pending microtasks. StateService resolves its streamer roster
+ * with `await` before issuing a request, so a round trip is in flight one
+ * microtask after refresh() returns, not synchronously.
+ */
+function tick(): Promise<void> {
+  return Promise.resolve();
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -231,10 +240,17 @@ test("a refresh arriving during an in-flight refresh triggers exactly one follow
   });
 
   const p1 = service.refresh();
+  // getStreamers is awaited (it may fetch the follow list), so the round
+  // trip is dispatched a microtask after refresh() returns rather than
+  // synchronously within it. Let that settle before counting requests --
+  // the coalescing this test is about is unaffected, since `inFlight` is
+  // still assigned synchronously inside refresh().
+  await tick();
   expect(request).toHaveBeenCalledTimes(1);
 
   // A second arrival while the first request is still outstanding.
   service.refresh();
+  await tick();
   expect(request).toHaveBeenCalledTimes(1); // coalesced, no new request yet
 
   d1.resolve(alpha(100));
@@ -264,6 +280,7 @@ test("several arrivals during one in-flight window produce exactly one follow-up
   service.refresh();
   service.refresh();
   service.refresh();
+  await tick(); // see the note on dispatch timing above
   expect(request).toHaveBeenCalledTimes(1);
 
   d1.resolve(alpha(100));

@@ -36,7 +36,7 @@ export interface StateSnapshot {
 export interface StateServiceDeps {
   client: { request<T>(op: string, params?: object): Promise<T> };
   history: History;
-  getStreamers: () => string[];
+  getStreamers: () => string[] | Promise<string[]>;
   intervalMs?: number;
   debounceMs?: number;
   staleAfterMs?: number;
@@ -119,7 +119,7 @@ export class StateService extends EventEmitter {
   }
 
   private async doRefresh(): Promise<void> {
-    const usernames = this.deps.getStreamers();
+    const usernames = await this.deps.getStreamers();
     if (usernames.length === 0) {
       // An empty streamer list is fully up to date -- there is nothing
       // outstanding to fetch, so this is a *successful* refresh, not a
