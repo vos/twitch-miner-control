@@ -2,6 +2,7 @@ interface SparklineProps {
   values: number[];
   width?: number;
   height?: number;
+  fill?: boolean;
 }
 
 /**
@@ -12,7 +13,7 @@ interface SparklineProps {
  * assistive tech because it carries no information the adjacent gain
  * figures do not already state precisely.
  */
-export function Sparkline({ values, width = 88, height = 24 }: SparklineProps) {
+export function Sparkline({ values, width = 88, height = 24, fill = false }: SparklineProps) {
   if (values.length < 2) return null;
 
   const min = Math.min(...values);
@@ -30,12 +31,19 @@ export function Sparkline({ values, width = 88, height = 24 }: SparklineProps) {
     })
     .join(" ");
 
+  // Closing the path down to the baseline gives the card a soft area
+  // fill; the line alone reads thin across a full-width card.
+  const area = `0,${height} ${points} ${width},${height}`;
+
   return (
     <svg width={width} height={height} aria-hidden="true" focusable="false">
+      {fill && (
+        <polygon points={area} fill="var(--tw-success)" fillOpacity="0.12" />
+      )}
       <polyline
         points={points}
         fill="none"
-        stroke="var(--mantine-color-teal-5)"
+        stroke="var(--tw-success)"
         strokeWidth={1.5}
         strokeLinejoin="round"
         strokeLinecap="round"

@@ -30,3 +30,13 @@ test("is hidden from assistive tech, since the numbers beside it carry the meani
   const { container } = render(<Sparkline values={[1, 2, 3]} />);
   expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
 });
+
+test("draws an area fill under the line when asked", () => {
+  const { container } = render(<Sparkline values={[1, 5, 3]} fill />);
+  expect(container.querySelector("polygon")).toBeInTheDocument();
+});
+
+test("draws no fill by default", () => {
+  const { container } = render(<Sparkline values={[1, 5, 3]} />);
+  expect(container.querySelector("polygon")).not.toBeInTheDocument();
+});

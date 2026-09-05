@@ -1,0 +1,52 @@
+.card {
+  position: relative;
+  padding: 14px 16px;
+  border: 1px solid var(--tw-border);
+  border-radius: 8px;
+  background: var(--tw-surface);
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.card:hover {
+  border-color: var(--tw-purple);
+  transform: translateY(-2px);
+}
+
+/* A live channel must be readable before a single word is. */
+.live::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--tw-live);
+  border-radius: 8px 8px 0 0;
+}
+
+.offline { opacity: 0.6; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--tw-live);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: tw-pulse 2s ease-in-out infinite;
+}
+
+.balance {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 22px;
+  font-weight: 700;
+}

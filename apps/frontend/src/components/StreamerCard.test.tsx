@@ -58,3 +58,13 @@ test("shows a placeholder when the balance is unknown", () => {
   view({ points: null });
   expect(screen.getByTestId("balance")).toHaveTextContent("—");
 });
+
+test("marks a live channel with a live pill", () => {
+  view({ isOnline: true });
+  expect(screen.getByTestId("live-pill")).toBeInTheDocument();
+});
+
+test("shows no live pill for an offline channel", () => {
+  view({ isOnline: false });
+  expect(screen.queryByTestId("live-pill")).not.toBeInTheDocument();
+});
