@@ -1,0 +1,15 @@
+.line {
+  padding: 1px 0;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error { color: #FF6B6B; }
+.warn { color: var(--tw-warn); }
+.gain { color: var(--tw-success); }
+.info { color: var(--tw-text); }
+/* Debug is the bulk of a real log; it recedes rather than competing. */
+.debug { color: var(--tw-text-dim); opacity: 0.65; }
