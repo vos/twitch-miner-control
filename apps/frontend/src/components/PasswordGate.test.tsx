@@ -54,3 +54,9 @@ test("shows an error on a wrong password and stays locked", async () => {
   await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
   expect(screen.queryByText("secret content")).not.toBeInTheDocument();
 });
+
+test("shows the brand mark above the unlock form", async () => {
+  stubSequence(401);
+  render(ui);
+  expect(await screen.findByRole("img", { name: /miner control/i })).toBeInTheDocument();
+});
