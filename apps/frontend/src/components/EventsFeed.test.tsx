@@ -33,3 +33,15 @@ test("stays silent when the feed cannot be loaded", async () => {
   await new Promise((r) => setTimeout(r, 0));
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
+
+test("stays silent when a 200 carries the wrong shape", async () => {
+  // The dashboard stubs one fetch for every URL, so this panel can be
+  // handed a payload with no `events` key. That must not crash the page.
+  stub({ streamers: [], lastUpdated: 1 });
+  view();
+  await new Promise((r) => setTimeout(r, 0));
+  // MantineProvider injects <style> tags, so assert on the feed's own
+  // content rather than an empty container.
+  expect(screen.queryByText(/recent activity/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no activity yet/i)).not.toBeInTheDocument();
+});

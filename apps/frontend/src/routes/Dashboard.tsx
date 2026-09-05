@@ -1,9 +1,10 @@
 import { Alert, Card, Group, SimpleGrid, Stack, Text, Title } from "@mantine/core";
 import { useLiveState } from "../api/useLiveState.js";
+import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
+import { StreamerCard } from "../components/StreamerCard.js";
 
 const nf = new Intl.NumberFormat("en-US");
-const fmt = (points: number | null) => (points === null ? "—" : nf.format(points));
 
 export function Dashboard() {
   const { snapshot, loadError } = useLiveState();
@@ -46,30 +47,17 @@ export function Dashboard() {
         </Text>
       </Card>
 
-      <Title order={4}>Live now ({live.length})</Title>
+      <Title order={4} data-testid="live-heading">Live now ({live.length})</Title>
       <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }}>
-        {live.map((s) => (
-          <Card withBorder key={s.username} data-testid={`live-${s.username}`}>
-            <Text fw={600}>{s.displayName ?? s.username}</Text>
-            <Text size="lg">{fmt(s.points)}</Text>
-          </Card>
-        ))}
+        {live.map((s) => <StreamerCard key={s.username} streamer={s} />)}
       </SimpleGrid>
 
       <Title order={4}>Offline</Title>
       <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }}>
-        {others.map((s) => (
-          <Card withBorder key={s.username}>
-            <Group justify="space-between">
-              <Text fw={500}>{s.displayName ?? s.username}</Text>
-              <Text c={s.isOnline ? "green" : "dimmed"} size="sm">
-                {s.isOnline === null ? "unknown" : s.isOnline ? "live" : "offline"}
-              </Text>
-            </Group>
-            <Text size="lg">{fmt(s.points)}</Text>
-          </Card>
-        ))}
+        {others.map((s) => <StreamerCard key={s.username} streamer={s} />)}
       </SimpleGrid>
+
+      <EventsFeed />
     </Stack>
   );
 }

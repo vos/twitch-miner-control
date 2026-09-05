@@ -28,8 +28,14 @@ export function EventsFeed() {
 
   useEffect(() => {
     let alive = true;
-    api.get<{ events: MinerEvent[] }>("/api/events")
-      .then((payload) => { if (alive) setEvents(payload.events); })
+    api.get<{ events?: MinerEvent[] }>("/api/events")
+      // A 200 carrying the wrong shape is as much a failure as a rejected
+      // request, and must not throw its way up into the dashboard: this
+      // panel sits beside numbers that loaded fine. Mirrors the malformed
+      // -frame guard in useLiveState.
+      .then((payload) => {
+        if (alive) setEvents(Array.isArray(payload?.events) ? payload.events : null);
+      })
       // Ancillary panel: a failure here must not raise an alert next to
       // numbers that loaded fine. Stay unrendered instead.
       .catch(() => { if (alive) setEvents(null); });

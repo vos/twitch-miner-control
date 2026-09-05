@@ -10,9 +10,11 @@ const snapshot = {
   error: null,
   streamers: [
     { username: "alpha", displayName: "Alpha", points: 123456, isOnline: true,
-      channelId: "1", pointsEnabled: true },
+      channelId: "1", pointsEnabled: true,
+      gained24h: 500, gainedStream: 120, spark: [122000, 123000, 123456] },
     { username: "beta", displayName: "Beta", points: 20, isOnline: false,
-      channelId: "2", pointsEnabled: true },
+      channelId: "2", pointsEnabled: true,
+      gained24h: 0, gainedStream: null, spark: [20, 20, 20] },
   ],
 };
 
@@ -34,8 +36,14 @@ const view = () => render(<MantineProvider><Dashboard /></MantineProvider>);
 
 test("shows who is live", async () => {
   view();
-  expect(await screen.findByTestId("live-alpha")).toBeInTheDocument();
-  expect(screen.queryByTestId("live-beta")).not.toBeInTheDocument();
+  expect(await screen.findByTestId("streamer-alpha")).toBeInTheDocument();
+  expect(screen.getByTestId("live-heading")).toHaveTextContent("Live now (1)");
+});
+
+test("shows gains on the card so the balance has a reference point", async () => {
+  view();
+  expect(await screen.findByTestId("streamer-alpha")).toHaveTextContent("+120");
+  expect(screen.getByTestId("streamer-alpha")).toHaveTextContent("+500");
 });
 
 test("shows exact point totals, not abbreviated ones", async () => {
@@ -75,7 +83,8 @@ test("shows a placeholder total, not a fabricated zero, before any refresh has c
 test("renders a streamer whose points could not be read as unknown, not zero", async () => {
   stub({ ...snapshot, streamers: [
     { username: "ghost", displayName: null, points: null, isOnline: null,
-      channelId: null, pointsEnabled: null },
+      channelId: null, pointsEnabled: null,
+      gained24h: null, gainedStream: null, spark: [] },
   ] });
   view();
   expect(await screen.findByText("—")).toBeInTheDocument();
