@@ -1,9 +1,11 @@
-import { Alert, AppShell, Button, Group, NavLink, Text, Title } from "@mantine/core";
+import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
-import { MinerDock } from "./components/MinerDock.js";
+import { useLiveState } from "./api/useLiveState.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
+import { Sidebar } from "./components/Sidebar.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
@@ -18,19 +20,23 @@ const SCREENS = {
   account: { label: "Twitch account", element: <TwitchLogin /> },
 } as const;
 
+export type ScreenKey = keyof typeof SCREENS;
+
 export function App() {
-  const [screen, setScreen] = useState<keyof typeof SCREENS>("dashboard");
+  const [screen, setScreen] = useState<ScreenKey>("dashboard");
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
   // render a STOPPED badge next to a still-ticking uptime.
   const [miner, setMiner] = useState<MinerStatus>({ state: "…", startedAt: null });
-  // I3: this used to be read nowhere in the frontend. `/api/status` already
-  // reports it correctly (LoginStatus, not the login runner's own transient
-  // progress -- see apps/backend/src/helpers/loginStatus.ts), so an expired
-  // token showed up as a stale dashboard with a bare GQL error string and no
-  // call to action. true until the first poll answers, matching the server's
-  // own default-to-required stance.
+  // true until the first poll answers, matching the server's own
+  // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);
+  const [opened, { toggle, close }] = useDisclosure(false);
+  // Drives the live-count badge in the nav and the header's connection
+  // dot. `connected` is computed by the hook from EventSource's own
+  // lifecycle and, before this, was read nowhere -- so a dropped stream
+  // looked exactly like a healthy one.
+  const { snapshot, connected } = useLiveState();
 
   useEffect(() => {
     const load = () =>
@@ -47,43 +53,54 @@ export function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const liveCount = snapshot?.streamers.filter((s) => s.isOnline).length ?? 0;
+
+  const navigate = (key: ScreenKey) => {
+    setScreen(key);
+    // On mobile the sidebar is a slide-over; leaving it open over the
+    // screen the user just chose hides the thing they navigated to.
+    close();
+  };
+
   return (
     <PasswordGate>
-      <AppShell header={{ height: 56 }} navbar={{ width: 220, breakpoint: "sm" }} padding="md">
-        <AppShell.Header>
-          <Group h="100%" px="md" justify="space-between">
-            <Title order={4}>Miner Control</Title>
-            {/* setMiner as onChange: an action's response is the freshest
-                answer there is, so the header reflects it immediately rather
-                than keeping the old state until the next 5s poll. */}
-            <MinerStatusBadge state={miner.state} startedAt={miner.startedAt} />
+      <AppShell
+        header={{ height: 56 }}
+        navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }}
+        padding="lg"
+      >
+        <AppShell.Header bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
+          <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+            <Group gap="sm" wrap="nowrap">
+              <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+              <Text fw={600}>{SCREENS[screen].label}</Text>
+            </Group>
+            <Group gap="sm" wrap="nowrap">
+              <Tooltip label={connected ? "Live updates connected" : "Live updates disconnected"}>
+                <span
+                  data-testid="stream-connected"
+                  aria-label={connected ? "Live updates connected" : "Live updates disconnected"}
+                  style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: connected ? "var(--tw-success)" : "var(--tw-text-dim)",
+                  }}
+                />
+              </Tooltip>
+              <MinerStatusBadge state={miner.state} startedAt={miner.startedAt} />
+            </Group>
           </Group>
         </AppShell.Header>
-        <AppShell.Navbar p="xs">
-          {Object.entries(SCREENS).map(([key, { label }]) => (
-            <NavLink
-              key={key} label={label} active={screen === key}
-              onClick={() => setScreen(key as keyof typeof SCREENS)}
-            />
-          ))}
-          <MinerDock state={miner.state} onChange={setMiner} />
+        <AppShell.Navbar bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
+          <Sidebar
+            screen={screen}
+            onNavigate={navigate}
+            liveCount={liveCount}
+            loginRequired={loginRequired}
+            miner={miner}
+            onMinerChange={setMiner}
+          />
         </AppShell.Navbar>
-        <AppShell.Main>
-          {loginRequired && screen !== "account" && (
-            <Alert
-              role="alert" color="yellow" mb="md" data-testid="login-required-banner"
-              title="Twitch sign-in needed"
-            >
-              <Group justify="space-between" wrap="nowrap">
-                <Text size="sm">
-                  The miner cannot run without a signed-in Twitch account.
-                </Text>
-                <Button size="xs" onClick={() => setScreen("account")}>Sign in</Button>
-              </Group>
-            </Alert>
-          )}
-          {SCREENS[screen].element}
-        </AppShell.Main>
+        <AppShell.Main>{SCREENS[screen].element}</AppShell.Main>
       </AppShell>
     </PasswordGate>
   );

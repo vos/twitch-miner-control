@@ -1,8 +1,8 @@
-import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./app.js";
+import { renderApp } from "./test-utils.js";
 
 // I3: `/api/status` already reports `loginRequired` correctly (see
 // apps/backend/src/http/server.ts and helpers/loginStatus.ts), but nothing
@@ -36,36 +36,49 @@ function stub(loginRequired: boolean) {
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const view = () => render(<MantineProvider><App /></MantineProvider>);
+const view = () => renderApp(<App />);
 
-test("shows a sign-in prompt when the Twitch session needs attention", async () => {
+test("flags the account nav row when the Twitch session needs attention", async () => {
+  // Replaces the old banner above every screen: the nav says it
+  // permanently, without eating dashboard height.
   stub(true);
   view();
-  expect(await screen.findByTestId("login-required-banner")).toBeInTheDocument();
+  expect(await screen.findByTestId("nav-login-required")).toBeInTheDocument();
 });
 
-test("hides the sign-in prompt once a Twitch session is established", async () => {
+test("leaves the account row unflagged once a Twitch session is established", async () => {
   stub(false);
   view();
-  // Let the app settle (the dashboard renders regardless of login state)
-  // before asserting the banner's absence, so this isn't trivially true of
-  // an unrendered tree.
-  await screen.findByText("Dashboard");
-  expect(screen.queryByTestId("login-required-banner")).not.toBeInTheDocument();
+  // Let the app settle before asserting absence, so this isn't trivially
+  // true of an unrendered tree.
+  await screen.findByRole("button", { name: /dashboard/i });
+  expect(screen.queryByTestId("nav-login-required")).not.toBeInTheDocument();
 });
 
-test("clicking Sign in from the banner switches to the Twitch account screen", async () => {
+test("the account nav row switches to the Twitch account screen", async () => {
   stub(true);
   view();
-  await userEvent.click(await screen.findByRole("button", { name: /sign in/i }));
-  expect(await screen.findByRole("heading", { name: /twitch account/i })).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: /twitch account/i }));
+  expect(await screen.findByLabelText("Twitch username")).toBeInTheDocument();
 });
 
-test("the header carries miner controls, not just a state badge", async () => {
+test("shows the live-updates connection state in the header", async () => {
+  // useLiveState has always computed `connected` from EventSource's own
+  // lifecycle, and nothing read it -- so a dropped stream looked exactly
+  // like a healthy one. The stub never fires "open", which is the
+  // disconnected case.
+  stub(false);
+  view();
+  expect(await screen.findByLabelText(/live updates disconnected/i)).toBeInTheDocument();
+});
+
+test("the miner actions live in the sidebar dock, beside the header's badge", async () => {
+  // The split from Task 4: the header states status, the dock acts on it.
   stub(false);
   view();
   expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
+  expect(screen.getByTestId("miner-state")).toHaveTextContent("RUNNING");
 });
 
 test("the header shows how long the miner has been up", async () => {
