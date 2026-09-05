@@ -35,7 +35,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * must still complete in bounded time and never leak a process holding
  * Twitch cookies.
  */
-const STOP_GRACE_MS = 20_000;
+export const STOP_GRACE_MS = 20_000;
 
 /**
  * Width of the sliding crash-rate window used to decide whether the

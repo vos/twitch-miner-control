@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolvePythonBin } from "./config/pythonBin.js";
+import { resolveStopGraceMs } from "./config/stopGrace.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
@@ -92,6 +93,7 @@ const supervisor = new Supervisor({
     DOORBELL_TOKEN: doorbellToken,
     DOORBELL_URL: `http://127.0.0.1:${port}/internal/doorbell`,
   },
+  graceMs: resolveStopGraceMs(process.env.MINER_STOP_GRACE_MS),
 });
 const db = openDb(join(dataDir, "history.db"));
 const history = new History(db);
