@@ -50,3 +50,15 @@
   font-size: 22px;
   font-weight: 700;
 }
+
+/* Inherit the card's text colour rather than the browser's link blue --
+   the name is a heading that happens to be clickable. */
+.name {
+  color: inherit;
+  text-decoration: none;
+}
+
+.name:hover {
+  color: var(--tw-purple);
+  text-decoration: underline;
+}

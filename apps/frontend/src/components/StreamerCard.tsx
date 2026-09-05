@@ -1,5 +1,6 @@
 import { Badge, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
+import { StreamerAvatar } from "./StreamerAvatar.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -48,7 +49,30 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
     >
       <Stack gap="xs">
         <Group justify="space-between" wrap="nowrap">
-          <Text fw={600} truncate>{s.displayName ?? s.username}</Text>
+          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+            <StreamerAvatar
+              login={s.username}
+              displayName={s.displayName}
+              avatarUrl={s.avatarUrl}
+              size={40}
+              live={live}
+            />
+            {/* Its own link rather than one anchor around both: the name
+                truncates and the avatar must not, so they cannot share a
+                box, and a separate link keeps each one's accessible name
+                honest. */}
+            <Text
+              component="a"
+              href={`https://twitch.tv/${s.username}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              fw={600}
+              truncate
+              className={classes.name}
+            >
+              {s.displayName ?? s.username}
+            </Text>
+          </Group>
           <Group gap={6} wrap="nowrap">
             {live && (
               <span className={classes.pill} data-testid="live-pill">

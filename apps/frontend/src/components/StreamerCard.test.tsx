@@ -8,6 +8,7 @@ const base: StreamerState = {
   username: "alpha", displayName: "Alpha", channelId: "1",
   points: 1000, isOnline: true, pointsEnabled: true,
   gained24h: 250, gainedSince: null, gainedStream: 40, spark: [900, 950, 1000],
+  avatarUrl: null,
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -89,4 +90,25 @@ test("marks a live channel with a live pill", () => {
 test("shows no live pill for an offline channel", () => {
   view({ isOnline: false });
   expect(screen.queryByTestId("live-pill")).not.toBeInTheDocument();
+});
+
+test("shows a linked avatar for the streamer", () => {
+  const { container } = view({ avatarUrl: "https://cdn/a.png" });
+  const link = screen.getByRole("link", { name: /on Twitch/i });
+  expect(link).toHaveAttribute("href", "https://twitch.tv/alpha");
+  // alt="" is deliberate, so the image is presentational rather than an
+  // img role -- the name beside it carries the identity.
+  expect(container.querySelector("img")).toHaveAttribute("src", "https://cdn/a.png");
+});
+
+test("shows a monogram when the avatar is not known yet", () => {
+  const { container } = view({ avatarUrl: null });
+  expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("link", { name: /on Twitch/i })).toBeInTheDocument();
+});
+
+test("the streamer's name links to their channel", () => {
+  view({ avatarUrl: null });
+  const nameLink = screen.getByRole("link", { name: "Alpha" });
+  expect(nameLink).toHaveAttribute("href", "https://twitch.tv/alpha");
 });
