@@ -1,8 +1,9 @@
-import { MantineProvider } from "@mantine/core";
-import { act, render, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CLIENT_STALE_AFTER_MS } from "../components/StalenessBadge.js";
 import { Dashboard } from "./Dashboard.js";
+import { renderApp } from "../test-utils.js";
 
 const snapshot = {
   lastUpdated: Date.now(),
@@ -19,11 +20,13 @@ const snapshot = {
 };
 
 function stub(body: unknown) {
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => body })));
+  const fetchMock = vi.fn(async (_url: string) => ({ ok: true, status: 200, json: async () => body }));
+  vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("EventSource", class {
     addEventListener() {}
     close() {}
   });
+  return fetchMock;
 }
 
 beforeEach(() => stub(snapshot));
@@ -32,12 +35,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const view = () => render(<MantineProvider><Dashboard /></MantineProvider>);
+const view = () => renderApp(<Dashboard />);
 
 test("shows who is live", async () => {
   view();
   expect(await screen.findByTestId("streamer-alpha")).toBeInTheDocument();
-  expect(screen.getByTestId("live-heading")).toHaveTextContent("Live now (1)");
+  expect(screen.getByTestId("live-heading")).toHaveTextContent("LIVE NOW · 1");
 });
 
 test("shows gains on the card so the balance has a reference point", async () => {
@@ -87,7 +90,9 @@ test("renders a streamer whose points could not be read as unknown, not zero", a
       gained24h: null, gainedStream: null, spark: [] },
   ] });
   view();
-  expect(await screen.findByText("—")).toBeInTheDocument();
+  // Scoped to the card's own balance: the 24h-gain tile legitimately
+  // shows the same placeholder, so a bare text query is ambiguous.
+  expect(await screen.findByTestId("balance")).toHaveTextContent("—");
 });
 
 // Correction 3: a failed initial load must not leave a blank dashboard
@@ -114,7 +119,7 @@ test("goes stale locally when no further frames arrive, even though the server s
   const now = Date.now();
   stub({ ...snapshot, stale: false, lastUpdated: now });
 
-  render(<MantineProvider><Dashboard /></MantineProvider>);
+  renderApp(<Dashboard />);
 
   // Let the initial REST fetch resolve and the first paint happen.
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -128,4 +133,22 @@ test("goes stale locally when no further frames arrive, even though the server s
   });
 
   expect(screen.getByTestId("staleness")).toHaveTextContent(/stale/i);
+});
+
+test("switching the activity feed off stops its polling", async () => {
+  // The dashboard owns the toggle; EventsFeed owns the effect. This
+  // asserts the wiring between them actually reaches the network.
+  const fetchMock = stub(snapshot);
+  view();
+
+  await userEvent.click(await screen.findByRole("switch", { name: /activity feed/i }));
+
+  fetchMock.mockClear();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(fetchMock.mock.calls.some(([url]) => url === "/api/events")).toBe(false);
+});
+
+test("shows the tracked-streamer count as a stat", async () => {
+  view();
+  expect(await screen.findByTestId("stat-tracked")).toHaveTextContent("2");
 });
