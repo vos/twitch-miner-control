@@ -20,10 +20,15 @@ const ui = (
   </MantineProvider>
 );
 
+// The label queries below match "Password" exactly, not /password/i.
+// Mantine 9's PasswordInput renders a visibility toggle labelled "Toggle
+// password visibility", so the loose regex matches two elements and
+// throws. Keep these exact.
+
 test("shows the password form when there is no session", async () => {
   stubSequence(401);
   render(ui);
-  expect(await screen.findByLabelText(/password/i)).toBeInTheDocument();
+  expect(await screen.findByLabelText("Password")).toBeInTheDocument();
   expect(screen.queryByText("secret content")).not.toBeInTheDocument();
 });
 
@@ -36,7 +41,7 @@ test("renders children when a session already exists", async () => {
 test("unlocks after a successful login", async () => {
   stubSequence(401, 200, 200);
   render(ui);
-  await userEvent.type(await screen.findByLabelText(/password/i), "hunter2");
+  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
   await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
   expect(await screen.findByText("secret content")).toBeInTheDocument();
 });
@@ -44,7 +49,7 @@ test("unlocks after a successful login", async () => {
 test("shows an error on a wrong password and stays locked", async () => {
   stubSequence(401, 401);
   render(ui);
-  await userEvent.type(await screen.findByLabelText(/password/i), "wrong");
+  await userEvent.type(await screen.findByLabelText("Password"), "wrong");
   await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
   await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
   expect(screen.queryByText("secret content")).not.toBeInTheDocument();
