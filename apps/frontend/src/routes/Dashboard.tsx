@@ -1,4 +1,4 @@
-import { Alert, Grid, Group, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
+import { Alert, Group, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
@@ -8,9 +8,16 @@ import { useLocalToggle } from "../lib/useLocalToggle.js";
 
 const nf = new Intl.NumberFormat("en-US");
 
+/**
+ * A section rule.
+ *
+ * `mb` is deliberately larger than the Stack's own gap: a heading sitting
+ * the same distance from its cards as from the section above reads as
+ * crowded and does not group with what it labels.
+ */
 function SectionHeading({ children, testId }: { children: string; testId?: string }) {
   return (
-    <Group gap="sm" wrap="nowrap" mt="md">
+    <Group gap="sm" wrap="nowrap" mt="xl" mb="xs">
       <Text
         size="xs" fw={700} c="dimmed" data-testid={testId}
         style={{ letterSpacing: "0.1em", whiteSpace: "nowrap" }}
@@ -97,19 +104,12 @@ export function Dashboard() {
         />
       </SimpleGrid>
 
-      {/* The feed is a side column on wide screens and falls below the
-          cards when there is not room for one. Grid, not a media query,
-          so the reflow is a single source of truth. */}
-      {feedOn ? (
-        <Grid gap="md">
-          <Grid.Col span={{ base: 12, lg: 8 }}>{cards}</Grid.Col>
-          <Grid.Col span={{ base: 12, lg: 4 }}>
-            <EventsFeed enabled={feedOn} />
-          </Grid.Col>
-        </Grid>
-      ) : (
-        cards
-      )}
+      {cards}
+
+      {/* Full width beneath the cards rather than a side column: the
+          miner's own log lines are long, and a narrow column truncated
+          almost every one of them. */}
+      <EventsFeed enabled={feedOn} />
     </Stack>
   );
 }

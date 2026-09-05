@@ -57,7 +57,9 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
           {s.points === null ? "—" : nf.format(s.points)}
         </Text>
 
-        <Sparkline values={s.spark} width={260} height={32} fill />
+        {/* Fluid: the card's own width decides, so nothing is painted
+            past its edge on a narrow column. */}
+        <Sparkline values={s.spark} height={34} fill />
 
         <Group gap="sm">
           {live && s.gainedStream !== null && (

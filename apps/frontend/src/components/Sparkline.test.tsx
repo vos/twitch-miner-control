@@ -40,3 +40,24 @@ test("draws no fill by default", () => {
   const { container } = render(<Sparkline values={[1, 5, 3]} />);
   expect(container.querySelector("polygon")).not.toBeInTheDocument();
 });
+
+test("scales to its container instead of overflowing a narrow card", () => {
+  // A fixed pixel width painted past the card edge on any card narrower
+  // than the value passed in. The svg must be fluid.
+  const { container } = render(<Sparkline values={[1, 5, 3]} fill />);
+  const svg = container.querySelector("svg")!;
+  expect(svg.getAttribute("width")).toBe("100%");
+  expect(svg.getAttribute("viewBox")).toBeTruthy();
+});
+
+test("keeps the stroke inside the box so it is not clipped at the edges", () => {
+  // Points plotted at exactly x=0 or y=height put half the stroke width
+  // outside the svg, which reads as the chart drawing over the card.
+  const { container } = render(<Sparkline values={[1, 5, 3]} />);
+  const points = container.querySelector("polyline")!.getAttribute("points")!;
+  const coords = points.split(" ").map((p) => p.split(",").map(Number));
+  for (const [x, y] of coords) {
+    expect(x).toBeGreaterThanOrEqual(1);
+    expect(y).toBeGreaterThanOrEqual(1);
+  }
+});
