@@ -1,4 +1,5 @@
 import { Button, Group, TextInput } from "@mantine/core";
+import { IconSearch } from "@tabler/icons-react";
 import { useState } from "react";
 
 export function AddStreamer({ onAdd }: { onAdd: (username: string) => Promise<void> }) {
@@ -17,14 +18,17 @@ export function AddStreamer({ onAdd }: { onAdd: (username: string) => Promise<vo
   };
 
   return (
-    <Group>
+    <Group gap="xs" align="flex-end">
       <TextInput
+        flex={1}
         label="Add streamer"
+        placeholder="twitch username"
+        leftSection={<IconSearch size={16} stroke={1.7} />}
         value={value}
         onChange={(e) => setValue(e.currentTarget.value)}
         onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
       />
-      <Button mt="lg" loading={busy} onClick={() => void submit()}>Add</Button>
+      <Button loading={busy} onClick={() => void submit()}>Add</Button>
     </Group>
   );
 }

@@ -1,8 +1,8 @@
-import { MantineProvider } from "@mantine/core";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Streamers } from "./Streamers.js";
+import { renderApp } from "../test-utils.js";
 
 const config = {
   version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const view = () => render(<MantineProvider><Streamers /></MantineProvider>);
+const view = () => renderApp(<Streamers />);
 
 test("lists configured streamers in priority order", async () => {
   view();
@@ -154,4 +154,24 @@ test("shows an error when the initial config fails to load, instead of a blank s
   expect(await screen.findByRole("alert")).toHaveTextContent(/disk on fire/i);
   expect(screen.queryByTestId("streamer-row")).not.toBeInTheDocument();
   expect(container.textContent).not.toBe("");
+});
+
+test("marks the top two rows as the ones actually being watched", async () => {
+  // The miner watches the top two. That was a sentence the user had to
+  // remember; it should be visible on the rows it applies to.
+  // Its own stub rather than mutating the shared `config`, which would
+  // leak into whichever test ran next.
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      ...config,
+      streamers: [
+        { username: "aaa", enabled: true, settings: {} },
+        { username: "bbb", enabled: true, settings: {} },
+        { username: "ccc", enabled: true, settings: {} },
+      ],
+    }),
+  })));
+  view();
+  expect(await screen.findAllByTestId("watching-tag")).toHaveLength(2);
 });

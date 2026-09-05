@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Alert, Card, Group, Stack, Switch, Text, Title,
+  ActionIcon, Alert, Badge, Card, Group, Stack, Switch, Text, Title,
 } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
@@ -80,6 +80,14 @@ export function Streamers() {
     setDraft({ ...draft, streamers });
   };
 
+  const moveTo = (from: number, to: number) => {
+    if (from === to) return;
+    const streamers = [...draft.streamers];
+    const [moved] = streamers.splice(from, 1);
+    streamers.splice(to, 0, moved);
+    setDraft({ ...draft, streamers });
+  };
+
   const apply = async () => {
     setBusy(true);
     try {
@@ -99,26 +107,51 @@ export function Streamers() {
       <Text size="sm" c="dimmed">Order is priority — the miner watches the top two.</Text>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       <AddStreamer onAdd={add} />
-      {draft.streamers.map((streamer, index) => (
-        <Card withBorder key={streamer.username} data-testid="streamer-row">
-          <Group justify="space-between">
-            <Group>
-              <ActionIcon
-                variant="subtle" aria-label="Move up"
-                onClick={() => moveUp(index)} disabled={index === 0}
-              >
-                ↑
-              </ActionIcon>
-              <Text fw={500}>{streamer.username}</Text>
+      <Stack gap={6}>
+        {draft.streamers.map((streamer, index) => (
+          <Card
+            withBorder
+            key={streamer.username}
+            data-testid="streamer-row"
+            padding="sm"
+            draggable
+            onDragStart={(e) => e.dataTransfer.setData("text/plain", String(index))}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              moveTo(Number(e.dataTransfer.getData("text/plain")), index);
+            }}
+            style={index < 2
+              ? { background: "rgba(145,71,255,0.08)", borderColor: "var(--tw-purple)" }
+              : undefined}
+          >
+            <Group justify="space-between" wrap="nowrap">
+              <Group gap="sm" wrap="nowrap">
+                {/* The arrow stays: drag is mouse-only, and this is the
+                    keyboard-accessible path. */}
+                <ActionIcon
+                  variant="subtle" aria-label="Move up"
+                  onClick={() => moveUp(index)} disabled={index === 0}
+                >
+                  ↑
+                </ActionIcon>
+                <Text size="sm" c="dimmed" ff="monospace" w={20}>{index + 1}</Text>
+                <Text fw={500}>{streamer.username}</Text>
+                {index < 2 && (
+                  <Badge size="xs" variant="light" color="twitch" data-testid="watching-tag">
+                    watching
+                  </Badge>
+                )}
+              </Group>
+              <Switch
+                checked={streamer.enabled}
+                onChange={() => toggle(index)}
+                aria-label={`Enable ${streamer.username}`}
+              />
             </Group>
-            <Switch
-              checked={streamer.enabled}
-              onChange={() => toggle(index)}
-              aria-label={`Enable ${streamer.username}`}
-            />
-          </Group>
-        </Card>
-      ))}
+          </Card>
+        ))}
+      </Stack>
       <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );
