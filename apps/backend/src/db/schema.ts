@@ -25,6 +25,15 @@ export function openDb(path: string): Db {
       message TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
+
+    CREATE TABLE IF NOT EXISTS streamer_profiles (
+      login      TEXT PRIMARY KEY,
+      -- NULL means "asked Twitch, no avatar". A missing row means
+      -- "never asked" -- collapsing the two would re-fetch an
+      -- avatarless channel on every single poll, forever.
+      avatar_url TEXT,
+      fetched_at INTEGER NOT NULL
+    );
   `);
   addEventMessageColumn(db);
   return db;
