@@ -1,0 +1,54 @@
+:root {
+  --tw-bg: #0E0E10;
+  --tw-surface: #18181B;
+  --tw-surface-alt: #1F1F23;
+  --tw-border: #2F2F35;
+  --tw-purple: #9147FF;
+  --tw-purple-hover: #772CE8;
+  --tw-live: #EB0400;
+  --tw-success: #00F593;
+  --tw-warn: #FFB300;
+  --tw-text: #EFEFF1;
+  --tw-text-dim: #ADADB8;
+
+  /* Mantine paints the page from its own variables; point them at ours
+     so a component we have not restyled still lands on the palette. */
+  --mantine-color-body: var(--tw-bg);
+  --mantine-color-text: var(--tw-text);
+  --mantine-color-dimmed: var(--tw-text-dim);
+}
+
+body {
+  background: var(--tw-bg);
+  color: var(--tw-text);
+  /* Numbers are monospace everywhere; enabling tabular figures globally
+     keeps a ticking uptime from reflowing on every digit change. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The default scrollbar is a light-theme artifact on a near-black page. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--tw-border) transparent;
+}
+
+@keyframes tw-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes tw-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+/* Respect a user's reduced-motion preference: the pulse and shake are
+   decorative, and a vestibular trigger is not worth a live dot. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
