@@ -27,9 +27,10 @@ Node, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
 Open the Vite URL it prints (http://localhost:5173), **not** port 8080 --
 Vite serves the UI with hot reload and proxies `/api` to the backend.
 
-`pnpm dev` runs three watchers: `tsc` recompiles the backend, `node
---watch` restarts it, and Vite serves the frontend. Editing backend
-TypeScript restarts the server automatically. Ctrl-C stops all three.
+`pnpm dev` runs three watchers, named after the tool each one runs:
+`dev:tsc` recompiles the backend, `dev:node` restarts it, and `dev:web`
+serves the frontend through Vite. Editing backend TypeScript restarts the
+server automatically. Ctrl-C stops all three.
 
 Dev mode reads its configuration from `.env` (see `.env.example` for
 what each variable does) and keeps its data in `./.devdata`, so it never
