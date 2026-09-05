@@ -34,6 +34,10 @@ beforeEach(() => stub(snapshot));
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  // The dashboard's toggles persist to localStorage, which jsdom shares
+  // across tests in this file. Without this, collapsing a section in one
+  // test silently changes what the next one renders.
+  localStorage.clear();
 });
 
 const view = () => renderApp(<Dashboard />);
@@ -172,4 +176,30 @@ test("switching the activity feed off stops its polling", async () => {
 test("shows the tracked-streamer count as a stat", async () => {
   view();
   expect(await screen.findByTestId("stat-tracked")).toHaveTextContent("2");
+});
+
+// A roster of mostly-offline streamers pushes the live cards -- the only
+// ones with anything happening -- off the top of the screen. Collapsing
+// the offline section must leave its count behind, so "hidden" never
+// reads as "none tracked".
+test("collapses the offline streamers to just a count", async () => {
+  view();
+  expect(await screen.findByTestId("streamer-beta")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByTestId("offline-heading"));
+
+  expect(screen.queryByTestId("streamer-beta")).not.toBeInTheDocument();
+  expect(screen.getByTestId("offline-heading")).toHaveTextContent("OFFLINE · 1");
+  // Live cards are unaffected -- this hides one section, not the roster.
+  expect(screen.getByTestId("streamer-alpha")).toBeInTheDocument();
+});
+
+test("remembers the offline section stays collapsed across a remount", async () => {
+  const first = view();
+  await userEvent.click(await screen.findByTestId("offline-heading"));
+  first.unmount();
+
+  view();
+  expect(await screen.findByTestId("streamer-alpha")).toBeInTheDocument();
+  expect(screen.queryByTestId("streamer-beta")).not.toBeInTheDocument();
 });

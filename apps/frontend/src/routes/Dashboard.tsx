@@ -1,4 +1,4 @@
-import { Alert, Group, SimpleGrid, Stack, Switch, Text } from "@mantine/core";
+import { Alert, Group, SimpleGrid, Stack, Switch, Text, UnstyledButton } from "@mantine/core";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
@@ -14,24 +14,71 @@ const nf = new Intl.NumberFormat("en-US");
  * `mb` is deliberately larger than the Stack's own gap: a heading sitting
  * the same distance from its cards as from the section above reads as
  * crowded and does not group with what it labels.
+ *
+ * Passing `collapsed` turns the whole rule into the section's disclosure
+ * control. The heading already carries the count, so a collapsed section
+ * still reports how many streamers it holds -- no separate "12 hidden"
+ * label, and no risk of an empty section reading as an empty roster.
  */
-function SectionHeading({ children, testId }: { children: string; testId?: string }) {
-  return (
-    <Group gap="sm" wrap="nowrap" mt="xl" mb="xs">
+function SectionHeading({ children, testId, collapsed, onToggle }: {
+  children: string;
+  testId?: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
+  const label = (
+    <>
       <Text
-        size="xs" fw={700} c="dimmed" data-testid={testId}
+        size="xs" fw={700} c="dimmed"
         style={{ letterSpacing: "0.1em", whiteSpace: "nowrap" }}
       >
         {children}
       </Text>
       <div style={{ flex: 1, height: 1, background: "var(--tw-border)" }} />
-    </Group>
+    </>
+  );
+
+  if (!onToggle) {
+    return (
+      <Group gap="sm" wrap="nowrap" mt="xl" mb="xs" data-testid={testId}>
+        {label}
+      </Group>
+    );
+  }
+
+  return (
+    <UnstyledButton
+      onClick={onToggle}
+      data-testid={testId}
+      aria-expanded={!collapsed}
+      mt="xl" mb="xs"
+      style={{ display: "block", width: "100%" }}
+    >
+      <Group gap="sm" wrap="nowrap">
+        {/* A caret rather than a chevron icon: the app pulls in no icon
+            set, and a rotated glyph costs nothing to ship. */}
+        <Text
+          size="xs" c="dimmed" aria-hidden
+          style={{
+            display: "inline-block",
+            transition: "transform 150ms ease",
+            transform: collapsed ? "rotate(-90deg)" : "none",
+          }}
+        >
+          ▾
+        </Text>
+        {label}
+      </Group>
+    </UnstyledButton>
   );
 }
 
 export function Dashboard() {
   const { snapshot, loadError } = useLiveState();
   const [feedOn, toggleFeed] = useLocalToggle("dashboard.feed", true);
+  // Offline streamers are the bulk of a big roster and the least
+  // interesting part of it, so they start shown but collapse away.
+  const [offlineOn, toggleOffline] = useLocalToggle("dashboard.offline", true);
 
   if (!snapshot) {
     if (loadError) {
@@ -81,10 +128,18 @@ export function Dashboard() {
         {live.map((s) => <StreamerCard key={s.username} streamer={s} />)}
       </SimpleGrid>
 
-      <SectionHeading>{`OFFLINE · ${others.length}`}</SectionHeading>
-      <SimpleGrid cols={{ base: 1, sm: 2, xl: 3 }} spacing="md">
-        {others.map((s) => <StreamerCard key={s.username} streamer={s} />)}
-      </SimpleGrid>
+      <SectionHeading
+        testId="offline-heading"
+        collapsed={!offlineOn}
+        onToggle={toggleOffline}
+      >
+        {`OFFLINE · ${others.length}`}
+      </SectionHeading>
+      {offlineOn && (
+        <SimpleGrid cols={{ base: 1, sm: 2, xl: 3 }} spacing="md">
+          {others.map((s) => <StreamerCard key={s.username} streamer={s} />)}
+        </SimpleGrid>
+      )}
     </>
   );
 
