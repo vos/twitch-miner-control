@@ -10,8 +10,20 @@ export interface StreamerState {
   isOnline: boolean | null;
   pointsEnabled: boolean | null;
   error?: string;
-  /** Points gained over the last 24h; null when no prior balance is known. */
+  /**
+   * Points gained over the last 24h -- or over however much history exists,
+   * when the streamer has been tracked for less than a day. Null only when
+   * there is no *earlier* balance at all to compare against.
+   */
   gained24h: number | null;
+  /**
+   * Start of the window `gained24h` covers when that window is *shorter*
+   * than 24h, so the UI can label it honestly instead of calling three
+   * hours "24h". Null when the window is full (the label is just "24h")
+   * and whenever `gained24h` is null -- a full window must not report the
+   * moving cutoff, which would make every tick a fresh SSE frame.
+   */
+  gainedSince: number | null;
   /** Points gained since this streamer came online; null when offline. */
   gainedStream: number | null;
   /** Downsampled 24h balances for the card sparkline. */
@@ -21,7 +33,7 @@ export interface StreamerState {
 /** What the Python helper reports, before this service derives the rest. */
 export type RawStreamerState = Omit<
   StreamerState,
-  "gained24h" | "gainedStream" | "spark"
+  "gained24h" | "gainedSince" | "gainedStream" | "spark"
 >;
 
 const DAY_MS = 86_400_000;
@@ -119,6 +131,37 @@ export class StateService extends EventEmitter {
     return this.inFlight;
   }
 
+  /**
+   * The baseline a gain is measured from, plus the moment it describes.
+   *
+   * Prefers the balance in force at `from` -- a full window. When the
+   * streamer has been tracked for less than that, falls back to its
+   * earliest snapshot: a partial window is a real number over a real span,
+   * and withholding it left a new streamer showing nothing for a day
+   * despite the history to compute it sitting in the table.
+   *
+   * Returns null only when the sole snapshot is the one this very tick
+   * just wrote. There is no *elapsed* time then, so any figure would be a
+   * confident "+0" about a window that has not happened yet -- the one
+   * case the em dash is actually telling the truth about.
+   */
+  private gainWindow(
+    username: string,
+    from: number,
+  ): { ts: number | null; balance: number } | null {
+    const earliest = this.deps.history.earliestSample(username);
+    if (earliest === null || earliest.ts >= this.now()) return null;
+    if (earliest.ts <= from) {
+      const past = this.deps.history.balanceAt(username, from);
+      // A full window needs no span: the label is simply "24h". Reporting
+      // the cutoff here would encode "now" into a derived field, so every
+      // tick would differ from the last and wake every SSE client with a
+      // payload nothing actually changed in.
+      if (past !== null) return { ts: null, balance: past };
+    }
+    return earliest;
+  }
+
   private async doRefresh(): Promise<void> {
     const usernames = await this.deps.getStreamers();
     if (usernames.length === 0) {
@@ -163,13 +206,16 @@ export class StateService extends EventEmitter {
           this.streamAnchor.delete(s.username);
         }
 
-        const past = this.deps.history.balanceAt(s.username, dayAgo);
         const anchor = this.streamAnchor.get(s.username);
+        const window = this.gainWindow(s.username, dayAgo);
 
         return {
           ...s,
           gained24h:
-            past === null || typeof s.points !== "number" ? null : s.points - past,
+            window === null || typeof s.points !== "number"
+              ? null
+              : s.points - window.balance,
+          gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
           gainedStream:
             anchor === undefined || typeof s.points !== "number"
               ? null

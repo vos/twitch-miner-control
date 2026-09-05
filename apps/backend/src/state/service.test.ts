@@ -368,6 +368,33 @@ test("reports null 24h gain when there is no prior balance to compare", async ()
   const { service } = make([alpha(1500)]);
   await service.refresh();
   expect(service.snapshot().streamers[0].gained24h).toBe(null);
+  expect(service.snapshot().streamers[0].gainedSince).toBe(null);
+});
+
+test("falls back to the earliest balance when history is younger than 24h", async () => {
+  // Three hours of history is a real number over a real window. Hiding it
+  // until the 24h mark withheld a gain the backend already knew.
+  clock = 90_000_000;
+  history.recordPoints("alpha", 1000, clock - 3 * 3_600_000);
+  const { service } = make([alpha(1200)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  expect(s.gained24h).toBe(200);
+  // The window actually covered, so the UI can label it "3h" not "24h".
+  expect(s.gainedSince).toBe(clock - 3 * 3_600_000);
+});
+
+test("reports the full window when history reaches back past 24h", async () => {
+  clock = 90_000_000;
+  history.recordPoints("alpha", 800, clock - 40 * 3_600_000);
+  history.recordPoints("alpha", 1000, clock - 86_400_000);
+  const { service } = make([alpha(1500)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  expect(s.gained24h).toBe(500);
+  // A full window reports no span: the label is simply "24h". Reporting
+  // the cutoff would encode "now" and make every tick a fresh SSE frame.
+  expect(s.gainedSince).toBe(null);
 });
 
 test("anchors stream gain to the moment a streamer came online", async () => {
@@ -403,7 +430,15 @@ test("attaches a sparkline series", async () => {
 test("does not emit a change frame when only wall-clock time has passed", async () => {
   // Derived fields must not encode "now", or every refresh would wake
   // every SSE client with an identical payload.
-  const { service } = make([alpha(100), alpha(100)]);
+  //
+  // Subscribed from the *second* refresh on: the first tick is the only
+  // sample there is, so gained24h is null; the second gives it an earlier
+  // balance to measure against and it becomes 0. That single transition is
+  // a real change in what we know, and is what the partial-window
+  // fallback exists to report. From there the payload must go quiet.
+  const { service } = make([alpha(100), alpha(100), alpha(100)]);
+  await service.refresh();
+  clock += 60_000;
   await service.refresh();
   const changes = vi.fn();
   service.on("change", changes);

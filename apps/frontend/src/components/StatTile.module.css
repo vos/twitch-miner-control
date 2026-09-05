@@ -36,3 +36,15 @@
   font-weight: 700;
   line-height: 1.1;
 }
+
+/* Sits under the figure rather than beside it: the value is monospace and
+   large, and an inline caveat would fight it for the same baseline. */
+.hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--tw-text-dim);
+  font-family: var(--mantine-font-family);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}

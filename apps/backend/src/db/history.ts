@@ -41,6 +41,19 @@ export class History {
     return row ? row.balance : null;
   }
 
+  /**
+   * The oldest snapshot on record, used as a fallback window start when a
+   * streamer has been tracked for less than the requested window.
+   */
+  earliestSample(username: string): PointSample | null {
+    const row = this.db
+      .prepare(
+        "SELECT ts, balance FROM point_snapshots WHERE streamer = ? ORDER BY ts ASC, id ASC LIMIT 1",
+      )
+      .get(username) as PointSample | undefined;
+    return row ?? null;
+  }
+
   seriesSince(username: string, fromTs: number): PointSample[] {
     return this.db
       .prepare(

@@ -7,7 +7,7 @@ import type { StreamerState } from "../api/useLiveState.js";
 const base: StreamerState = {
   username: "alpha", displayName: "Alpha", channelId: "1",
   points: 1000, isOnline: true, pointsEnabled: true,
-  gained24h: 250, gainedStream: 40, spark: [900, 950, 1000],
+  gained24h: 250, gainedSince: null, gainedStream: 40, spark: [900, 950, 1000],
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -37,6 +37,28 @@ test("distinguishes an unknown gain from a genuine zero", () => {
   expect(screen.getByTestId("gain-24h")).toHaveTextContent("—");
   view({ gained24h: 0 });
   expect(screen.getAllByTestId("gain-24h").at(-1)).toHaveTextContent("0");
+});
+
+test("labels a partial window with the span it actually covers", () => {
+  // Three hours of history is a real gain over a real window -- it just
+  // must not claim to be a full day.
+  const now = Date.now();
+  view({ gained24h: 120, gainedSince: now - 3 * 3_600_000 });
+  const gain = screen.getByTestId("gain-24h");
+  expect(gain).toHaveTextContent("+120");
+  expect(gain).toHaveTextContent("3h");
+  expect(gain).not.toHaveTextContent("24h");
+});
+
+test("labels a sub-hour window in minutes rather than rounding to 0h", () => {
+  const now = Date.now();
+  view({ gained24h: 15, gainedSince: now - 12 * 60_000 });
+  expect(screen.getByTestId("gain-24h")).toHaveTextContent("12m");
+});
+
+test("labels a full window plainly as 24h", () => {
+  view({ gained24h: 250, gainedSince: null });
+  expect(screen.getByTestId("gain-24h")).toHaveTextContent("24h");
 });
 
 test("signs a negative gain rather than showing a bare number", () => {

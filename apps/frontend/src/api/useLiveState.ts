@@ -10,6 +10,8 @@ export interface StreamerState {
   pointsEnabled: boolean | null;
   error?: string;
   gained24h: number | null;
+  /** Window start when it is shorter than 24h; null when the window is full. */
+  gainedSince: number | null;
   gainedStream: number | null;
   spark: number[];
 }

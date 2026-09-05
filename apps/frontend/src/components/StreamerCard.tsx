@@ -1,5 +1,6 @@
 import { Badge, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
+import { formatSpan } from "../lib/formatSpan.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -8,20 +9,32 @@ const nf = new Intl.NumberFormat("en-US");
 /**
  * Renders a gain.
  *
- * `null` means "we have no earlier balance to compare against" -- a fresh
- * install, or a streamer added minutes ago -- and must not render as "+0",
- * which is a confident claim that nothing was earned.
+ * `null` means "we have no earlier balance to compare against" -- only
+ * true on the very first poll of a newly added streamer -- and must not
+ * render as "+0", which is a confident claim that nothing was earned.
+ *
+ * `since` carries the start of a window shorter than the nominal one, and
+ * replaces the label with the span actually covered. A streamer tracked
+ * for three hours has a real gain over a real window; it just is not a
+ * day's worth, and saying "3h" reports that without withholding the
+ * number until the 24h mark.
  */
-function Gain({ value, label, testId }: { value: number | null; label: string; testId: string }) {
+function Gain({ value, label, since, testId }: {
+  value: number | null;
+  label: string;
+  since?: number | null;
+  testId: string;
+}) {
   if (value === null) {
     return (
       <Text size="xs" c="dimmed" data-testid={testId}>— {label}</Text>
     );
   }
   const sign = value > 0 ? "+" : "";
+  const window = since == null ? label : formatSpan(Date.now() - since);
   return (
     <Text size="xs" c={value > 0 ? "teal" : value < 0 ? "red" : "dimmed"} data-testid={testId}>
-      {sign}{nf.format(value)} {label}
+      {sign}{nf.format(value)} {window}
     </Text>
   );
 }
@@ -65,7 +78,7 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
           {live && s.gainedStream !== null && (
             <Gain value={s.gainedStream} label="stream" testId="gain-stream" />
           )}
-          <Gain value={s.gained24h} label="24h" testId="gain-24h" />
+          <Gain value={s.gained24h} label="24h" since={s.gainedSince} testId="gain-24h" />
         </Group>
 
         {s.error && (

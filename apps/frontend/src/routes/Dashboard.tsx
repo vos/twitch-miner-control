@@ -58,6 +58,13 @@ export function Dashboard() {
     return (sum ?? 0) + s.gained24h;
   }, null);
 
+  // A streamer tracked for two hours contributes a two-hour gain to a
+  // figure labelled "24h". That is worth showing -- it is real earning --
+  // but the tile must say so, or the sum quietly overstates its window.
+  const partial = snapshot.streamers.some(
+    (s) => s.gained24h !== null && s.gainedSince !== null,
+  );
+
   // A real 0 (every tracked streamer genuinely has none) and "we have not
   // looked yet" must never render the same way -- the latter used to show
   // a confident "0" for a full refresh interval after every restart,
@@ -97,7 +104,13 @@ export function Dashboard() {
 
       <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
         <StatTile label="Total points" value={totalText} testId="total-points" />
-        <StatTile label="24h gain" value={gainedText} accent="success" testId="stat-24h" />
+        <StatTile
+          label="24h gain"
+          value={gainedText}
+          hint={partial && gained !== null ? "partial · some tracked <24h" : undefined}
+          accent="success"
+          testId="stat-24h"
+        />
         <StatTile label="Live now" value={String(live.length)} accent="live" testId="stat-live" />
         <StatTile
           label="Tracked" value={String(snapshot.streamers.length)} testId="stat-tracked"

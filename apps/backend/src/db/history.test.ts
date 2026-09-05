@@ -153,3 +153,19 @@ test("seriesSince returns ascending samples from the cutoff", () => {
     { ts: 3000, balance: 3 },
   ]);
 });
+
+test("earliestSample returns the first known snapshot with its timestamp", () => {
+  history.recordPoints("alpha", 100, 1000);
+  history.recordPoints("alpha", 500, 5000);
+  expect(history.earliestSample("alpha")).toEqual({ ts: 1000, balance: 100 });
+});
+
+test("earliestSample returns null for a streamer with no history", () => {
+  expect(history.earliestSample("ghost")).toBe(null);
+});
+
+test("earliestSample is per streamer", () => {
+  history.recordPoints("alpha", 100, 1000);
+  history.recordPoints("beta", 700, 2000);
+  expect(history.earliestSample("beta")).toEqual({ ts: 2000, balance: 700 });
+});

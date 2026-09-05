@@ -12,10 +12,11 @@ const snapshot = {
   streamers: [
     { username: "alpha", displayName: "Alpha", points: 123456, isOnline: true,
       channelId: "1", pointsEnabled: true,
-      gained24h: 500, gainedStream: 120, spark: [122000, 123000, 123456] },
+      gained24h: 500, gainedSince: null, gainedStream: 120,
+      spark: [122000, 123000, 123456] },
     { username: "beta", displayName: "Beta", points: 20, isOnline: false,
       channelId: "2", pointsEnabled: true,
-      gained24h: 0, gainedStream: null, spark: [20, 20, 20] },
+      gained24h: 0, gainedSince: null, gainedStream: null, spark: [20, 20, 20] },
   ],
 };
 
@@ -87,12 +88,32 @@ test("renders a streamer whose points could not be read as unknown, not zero", a
   stub({ ...snapshot, streamers: [
     { username: "ghost", displayName: null, points: null, isOnline: null,
       channelId: null, pointsEnabled: null,
-      gained24h: null, gainedStream: null, spark: [] },
+      gained24h: null, gainedSince: null, gainedStream: null, spark: [] },
   ] });
   view();
   // Scoped to the card's own balance: the 24h-gain tile legitimately
   // shows the same placeholder, so a bare text query is ambiguous.
   expect(await screen.findByTestId("balance")).toHaveTextContent("—");
+});
+
+test("flags the 24h tile as partial when a streamer has less than a day of history", async () => {
+  stub({ ...snapshot, streamers: [
+    { ...snapshot.streamers[0], gained24h: 500, gainedSince: null },
+    { ...snapshot.streamers[1], gained24h: 60, gainedSince: Date.now() - 2 * 3_600_000 },
+  ] });
+  view();
+  const tile = await screen.findByTestId("stat-24h");
+  // The gain is still summed and shown -- the caveat qualifies it, it does
+  // not replace it with a dash.
+  expect(tile).toHaveTextContent("+560");
+  expect(tile).toHaveTextContent(/partial/i);
+});
+
+test("does not flag the 24h tile when every streamer has a full window", async () => {
+  view();
+  const tile = await screen.findByTestId("stat-24h");
+  expect(tile).toHaveTextContent("+500");
+  expect(tile).not.toHaveTextContent(/partial/i);
 });
 
 // Correction 3: a failed initial load must not leave a blank dashboard
