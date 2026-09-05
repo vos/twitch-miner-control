@@ -9,6 +9,9 @@ export interface StreamerState {
   isOnline: boolean | null;
   pointsEnabled: boolean | null;
   error?: string;
+  gained24h: number | null;
+  gainedStream: number | null;
+  spark: number[];
 }
 
 export interface StateSnapshot {
