@@ -246,3 +246,64 @@ test("a healthy miner that recovers between crashes is never punished", async ()
   expect(s.state).not.toBe("CRASHED");
   expect(s.restartCount).toBeLessThanOrEqual(1);
 });
+
+test("runningSince is null before anything has ever been started", () => {
+  const s = make("normal");
+  expect(s.runningSince).toBeNull();
+});
+
+test("runningSince reports when the live miner started", async () => {
+  const before = Date.now();
+  const s = make("normal");
+  await s.start();
+  expect(s.runningSince).not.toBeNull();
+  expect(s.runningSince as number).toBeGreaterThanOrEqual(before);
+  expect(s.runningSince as number).toBeLessThanOrEqual(Date.now());
+});
+
+test("runningSince clears on stop, so a stopped miner cannot show a ticking timer", async () => {
+  const s = make("normal");
+  await s.start();
+  await s.stop();
+  expect(s.runningSince).toBeNull();
+});
+
+test("runningSince clears when the miner crashes out for good", async () => {
+  const s = make("instant");
+  await s.start();
+  await settle(400);
+  expect(s.state).toBe("CRASHED");
+  expect(s.runningSince).toBeNull();
+});
+
+test("runningSince is null during a restart backoff, so no timer ticks for a miner that does not exist", async () => {
+  // Crashes after fastExitMs, so onExit schedules a backoff restart rather
+  // than parking in CRASHED -- the window where a stale startedAt would
+  // otherwise still be reported.
+  const s = make("delayed_crash", {
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "300" },
+    fastExitMs: 50, backoffBaseMs: 600,
+  });
+  await s.start();
+  await settle(300);
+  expect(s.state).toBe("RESTARTING");
+  expect(s.runningSince).toBeNull();
+});
+
+test("no state emitted alongside a start time reports one for a process that is not running", async () => {
+  // Caught by driving the real app: restart() announced RESTARTING while the
+  // outgoing child was still alive, so the frame carried the dying run's
+  // startedAt and a dashboard kept ticking uptime for a process being killed.
+  // Only RUNNING may carry a start time.
+  const s = make("normal");
+  const frames: Array<{ state: string; startedAt: number | null }> = [];
+  s.on("state", (state: string) => frames.push({ state, startedAt: s.runningSince }));
+  await s.start();
+  await s.restart();
+  await s.stop();
+  expect(frames.length).toBeGreaterThan(3);
+  for (const frame of frames) {
+    if (frame.state === "RUNNING") expect(frame.startedAt).not.toBeNull();
+    else expect(frame.startedAt).toBeNull();
+  }
+});

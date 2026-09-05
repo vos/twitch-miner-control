@@ -139,6 +139,29 @@ export class Supervisor extends EventEmitter {
 
   logs(): string[] { return this.buffer.lines(); }
 
+  /**
+   * When the live miner process started, or null if none is running.
+   *
+   * `startedAt` alone cannot answer this: it is set on spawn and never
+   * cleared, so a stopped or crashed miner still holds the timestamp of
+   * the run that ended. The dashboard renders a ticking uptime from this
+   * value, and a timer that keeps counting for a process that exited half
+   * an hour ago is worse than no timer at all -- it is the exact signal an
+   * operator would use to conclude the miner is healthy. Gated on a live
+   * child AND on the state being RUNNING, because either test alone is
+   * wrong at some point in the lifecycle: through STARTING a child exists
+   * but is not yet confirmed, and restart() announces RESTARTING while the
+   * outgoing child is still alive, so a live-child test alone hands the
+   * RESTARTING frame the dying run's timestamp and a dashboard ticks uptime
+   * for a process being killed. Requiring both means the answer always
+   * agrees with the state it is reported beside.
+   */
+  get runningSince(): number | null {
+    if (this.state !== "RUNNING") return null;
+    if (!this.child || this.child.exitCode !== null) return null;
+    return this.startedAt === 0 ? null : this.startedAt;
+  }
+
   livePids(): number[] {
     return this.child && this.child.exitCode === null && this.child.pid
       ? [this.child.pid]

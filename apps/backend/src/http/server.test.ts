@@ -35,6 +35,9 @@ async function make() {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
     logs: () => ["line one", "line two"], on: vi.fn(),
+    // The dashboard's uptime timer ticks from this, so the API has to
+    // carry it; a fixed value keeps the assertions exact.
+    runningSince: 1_700_000_000_000 as number | null,
   };
   const client = {
     request: vi.fn(async () => ({ streamers: [] })),
@@ -691,4 +694,28 @@ test("a malformed percent-escape in the path never reaches our handler as a cras
   // exception or a 500.
   const res = await ctx.app.inject({ method: "GET", url: "/%", cookies: auth() });
   expect(res.statusCode).toBe(400);
+});
+
+test("GET /api/status reports when the running miner started", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(res.json().startedAt).toBe(1_700_000_000_000);
+});
+
+test("GET /api/status reports a null start time when no miner is running", async () => {
+  ctx.supervisor.runningSince = null;
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(res.json().startedAt).toBeNull();
+});
+
+test("POST /api/miner/start answers with the state and start time", async () => {
+  const res = await ctx.app.inject({ method: "POST", url: "/api/miner/start", cookies: auth() });
+  expect(ctx.supervisor.start).toHaveBeenCalled();
+  expect(res.json()).toEqual({ state: "RUNNING", startedAt: 1_700_000_000_000 });
+});
+
+test("POST /api/miner/stop answers with the state and start time", async () => {
+  ctx.supervisor.runningSince = null;
+  const res = await ctx.app.inject({ method: "POST", url: "/api/miner/stop", cookies: auth() });
+  expect(ctx.supervisor.stop).toHaveBeenCalled();
+  expect(res.json()).toEqual({ state: "RUNNING", startedAt: null });
 });

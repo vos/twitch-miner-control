@@ -224,6 +224,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         loadConfig(deps.configPath).username === "" || deps.loginStatus.required;
       return {
         miner: deps.supervisor.state,
+        // Null unless a live miner process exists -- see Supervisor#runningSince.
+        // The dashboard ticks its uptime readout from this rather than from a
+        // server-computed elapsed figure, so the timer stays smooth between
+        // polls instead of jumping once every poll interval.
+        startedAt: deps.supervisor.runningSince,
         loginRequired,
         login: deps.loginRunner.current,
         lastUpdated: snapshot.lastUpdated,
@@ -271,7 +276,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     for (const action of ["start", "stop", "restart"] as const) {
       instance.post(`/api/miner/${action}`, async () => {
         await deps.supervisor[action]();
-        return { state: deps.supervisor.state };
+        // Both values are read after the action settles, so the caller can
+        // render the outcome from this response alone and does not have to
+        // wait for the next poll or SSE frame to stop showing the old state.
+        return { state: deps.supervisor.state, startedAt: deps.supervisor.runningSince };
       });
     }
 
@@ -327,7 +335,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   deps.stateService.on("change", (snapshot) => hub.broadcast("state", snapshot));
-  deps.supervisor.on("state", (state) => hub.broadcast("miner", { state }));
+  // Read at emit time rather than captured, so the frame carries the start
+  // time that belongs to the state being announced: a RUNNING frame gets the
+  // new process's timestamp, and a STOPPED/CRASHED frame gets null.
+  deps.supervisor.on("state", (state) =>
+    hub.broadcast("miner", { state, startedAt: deps.supervisor.runningSince }),
+  );
   deps.loginRunner.on("progress", (p: LoginProgress) => {
     hub.broadcast("login", p);
     if (p.stage !== "ok") return;

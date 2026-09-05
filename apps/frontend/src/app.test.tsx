@@ -14,7 +14,10 @@ function stub(loginRequired: boolean) {
     if (url === "/api/status") {
       return {
         ok: true, status: 200,
-        json: async () => ({ miner: "RUNNING", loginRequired, login: null }),
+        json: async () => ({
+          miner: "RUNNING", loginRequired, login: null,
+          startedAt: Date.now() - 90_000,
+        }),
       };
     }
     // PasswordGate's own unlock check, and whatever the active screen
@@ -56,4 +59,17 @@ test("clicking Sign in from the banner switches to the Twitch account screen", a
   view();
   await userEvent.click(await screen.findByRole("button", { name: /sign in/i }));
   expect(await screen.findByRole("heading", { name: /twitch account/i })).toBeInTheDocument();
+});
+
+test("the header carries miner controls, not just a state badge", async () => {
+  stub(false);
+  view();
+  expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
+});
+
+test("the header shows how long the miner has been up", async () => {
+  stub(false);
+  view();
+  expect(await screen.findByTestId("miner-uptime")).toHaveTextContent("1m 30s");
 });

@@ -1,6 +1,7 @@
-import { Alert, AppShell, Badge, Button, Group, NavLink, Text, Title } from "@mantine/core";
+import { Alert, AppShell, Button, Group, NavLink, Text, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
+import { MinerControls, type MinerStatus } from "./components/MinerControls.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { TwitchLogin } from "./routes/Login.js";
@@ -18,7 +19,10 @@ const SCREENS = {
 
 export function App() {
   const [screen, setScreen] = useState<keyof typeof SCREENS>("dashboard");
-  const [minerState, setMinerState] = useState("…");
+  // One value rather than two pieces of state, so a status update can never
+  // land a new state beside the previous run's start time -- which would
+  // render a STOPPED badge next to a still-ticking uptime.
+  const [miner, setMiner] = useState<MinerStatus>({ state: "…", startedAt: null });
   // I3: this used to be read nowhere in the frontend. `/api/status` already
   // reports it correctly (LoginStatus, not the login runner's own transient
   // progress -- see apps/backend/src/helpers/loginStatus.ts), so an expired
@@ -29,8 +33,13 @@ export function App() {
 
   useEffect(() => {
     const load = () =>
-      api.get<{ miner: string; loginRequired: boolean }>("/api/status")
-        .then((s) => { setMinerState(s.miner); setLoginRequired(s.loginRequired); })
+      api.get<{ miner: string; loginRequired: boolean; startedAt: number | null }>(
+        "/api/status",
+      )
+        .then((s) => {
+          setMiner({ state: s.miner, startedAt: s.startedAt });
+          setLoginRequired(s.loginRequired);
+        })
         .catch(() => undefined);
     void load();
     const timer = setInterval(load, 5000);
@@ -43,7 +52,12 @@ export function App() {
         <AppShell.Header>
           <Group h="100%" px="md" justify="space-between">
             <Title order={4}>Miner Control</Title>
-            <Badge color={minerState === "RUNNING" ? "green" : "orange"}>{minerState}</Badge>
+            {/* setMiner as onChange: an action's response is the freshest
+                answer there is, so the header reflects it immediately rather
+                than keeping the old state until the next 5s poll. */}
+            <MinerControls
+              state={miner.state} startedAt={miner.startedAt} onChange={setMiner}
+            />
           </Group>
         </AppShell.Header>
         <AppShell.Navbar p="xs">
