@@ -5,19 +5,29 @@ docs/superpowers/specs/2026-08-29-twitch-miner-web-ui-design.md
 section "Key findings from upstream source" before changing anything.
 """
 import inspect
+import os
+import pathlib
+import subprocess
+import sys
 
+from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
+from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
 from TwitchChannelPointsMiner.classes.EventHook import EventHook
-from TwitchChannelPointsMiner.classes.Settings import Events
+from TwitchChannelPointsMiner.classes.Settings import Events, Settings
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError, RetryError
+from TwitchChannelPointsMiner.classes.gql import Integration
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
+from TwitchChannelPointsMiner.classes.gql.data.Parser import Parser
 from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, USER_AGENTS
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def params(fn):
@@ -93,3 +103,91 @@ def test_gql_error_surface_used_by_auth_detection():
     depends on beyond the four named GQL methods."""
     assert issubclass(RetryError, GQLError)
     assert "errors" in params(RetryError.__init__)
+
+
+def test_settings_logger_is_not_populated_by_merely_importing_the_miner():
+    """Pins the trap that produced "Internal Server Error" on every lookup.
+
+    `Settings` is a __slots__ class used as a bare namespace. Upstream's only
+    writer of `Settings.logger` is TwitchChannelPointsMiner.__init__, which
+    the read-only helpers never run -- and an unset slot read off the class
+    silently yields a member_descriptor instead of raising, so the failure
+    surfaces far away as `'member_descriptor' object has no attribute
+    'anonymiser'`. helpers/_session.py must therefore set it explicitly.
+
+    If this ever starts failing, upstream began populating Settings.logger on
+    import and `_configure_settings` may be reconsidered.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "from TwitchChannelPointsMiner.classes.Settings import Settings;"
+         "print(type(Settings.__dict__['logger']).__name__)"],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "vendor" / "miner")},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "member_descriptor"
+    assert "logger" in Settings.__slots__
+
+
+def test_gql_redaction_depends_on_settings_logger():
+    """The specific upstream coupling the fix exists to satisfy: the GQL
+    request path reads `Settings.logger.anonymiser`. Pinned as source text
+    because it happens inside a private method that cannot be called without
+    a live session."""
+    source = inspect.getsource(Integration)
+    assert "Settings.logger.anonymiser" in source
+
+
+def test_get_id_from_login_cannot_report_a_missing_user_as_an_empty_id():
+    """`GQL.get_id_from_login`'s docstring promises "an empty string if the
+    user doesn't exist", but its parser runs expect_dict over `data.user`,
+    and Twitch answers `data.user: null` for an unknown login -- so a missing
+    user always arrives as a raised error, never an empty id. helpers/state.py
+    translates that into `exists: False`.
+
+    If this fails, upstream fixed the parser to honour its docstring and
+    `_is_missing_user_error` can be revisited.
+    """
+    source = inspect.getsource(Parser.parse_get_id_from_login_response)
+    assert 'parse_expected_value(data, "user", expect_dict)' in source
+
+
+def test_miner_constructor_still_rejects_a_missing_password():
+    """Pins why run.py passes a placeholder `password`.
+
+    TwitchChannelPointsMiner.__init__ rejects a falsy password with
+    sys.exit(0) before Twitch.login() -- and therefore before the cookie
+    branch this app relies on -- is ever reached. run.py works around that
+    with COOKIE_AUTH_PLACEHOLDER.
+
+    Pinned as source text because triggering the check for real would
+    sys.exit the test process. If this fails, upstream reworked the
+    credential validation and the placeholder may no longer be needed.
+    """
+    source = inspect.getsource(TwitchChannelPointsMiner.__init__)
+    assert 'startup_error = "No password"' in source
+    assert "sys.exit(0)" in source
+
+
+def test_password_is_not_used_for_authentication():
+    """The placeholder in run.py is safe only because `password` never
+    authenticates anything: it reaches TwitchLogin.password, whose sole
+    consumer is the Selenium `login_flow_backup`, and upstream's only call
+    site passes no password at all.
+
+    If this fails, `password` gained a real consumer and run.py's
+    placeholder must be re-examined rather than left in place.
+    """
+    source = inspect.getsource(TwitchLogin)
+    assert "self.login_flow_backup()" in source
+    assert params(TwitchLogin.login_flow) == ["self"]
+
+
+def test_login_prefers_saved_cookies_over_any_login_flow():
+    """The branch that makes cookie-based auth work: when
+    `<cwd>/cookies/<username>.pkl` exists, Twitch.login() loads it and never
+    runs a login flow. This is the path every signed-in install takes."""
+    source = inspect.getsource(Twitch.login)
+    assert "os.path.isfile(self.cookies_file)" in source
+    assert "load_cookies" in source

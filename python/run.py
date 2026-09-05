@@ -25,8 +25,27 @@ DOORBELL_TOKEN = os.environ["DOORBELL_TOKEN"]
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     cfg = json.load(fh)
 
+# The miner's constructor rejects a falsy `password` and calls sys.exit(0)
+# before Twitch.login() is ever reached -- so without this the miner died at
+# boot with "No password, exiting..." and the UI badge sat on "crashed", even
+# with a perfectly good cookie on disk.
+#
+# There is no password to supply: this app signs in by device code and the
+# saved cookie pickle, which is the branch Twitch.login() takes whenever
+# `<cwd>/cookies/<username>.pkl` exists (Twitch.py:117). The value is never
+# used for authentication -- `password` reaches only TwitchLogin.password,
+# whose sole consumer is the Selenium `login_flow_backup`, and that call site
+# both passes no password and is commented out upstream
+# (TwitchLogin.py:175-176). So this is a placeholder that satisfies a stale
+# validation check, not a credential.
+#
+# It must still be non-default: the constructor rejects the literal
+# "write-your-secure-psw" as an unedited example value.
+COOKIE_AUTH_PLACEHOLDER = "unused-cookie-auth"
+
 twitch_miner = TwitchChannelPointsMiner(
     username=cfg["username"],
+    password=COOKIE_AUTH_PLACEHOLDER,
     enable_analytics=False,
     use_hermes=True,
     logger_settings=LoggerSettings(
