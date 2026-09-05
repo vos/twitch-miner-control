@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "vendor", "miner"))
 
 import requests
 
+from TwitchChannelPointsMiner.JsonParser import InvalidJsonShapeError
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
 
 # Word-boundary match for a bare status code, e.g. "401 Client Error" or
@@ -97,6 +98,25 @@ def _is_auth_error(exc: Exception) -> bool:
     return _text_looks_like_auth(str(exc))
 
 
+def _is_missing_user_error(exc: Exception) -> bool:
+    """True for the GQL failure that means "this login has no Twitch user".
+
+    `GetIDFromLogin` parses `data.user` with expect_dict; Twitch returns
+    `data.user: null` for an unknown login, so the failure arrives as a
+    RetryError wrapping an InvalidJsonShapeError whose `path` is
+    ["user", "data"] (JsonParentContext appends parents innermost-first).
+    Checked on that structured path, not on str(exc), so an unrelated parse
+    failure elsewhere in the response is still reported as a real error.
+    """
+    for item in getattr(exc, "errors", None) or []:
+        inner = getattr(item, "exception", item)
+        if isinstance(inner, InvalidJsonShapeError) and list(inner.path)[:2] == [
+            "user", "data",
+        ]:
+            return True
+    return False
+
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -132,7 +152,26 @@ class Handler:
             return {"id": req_id, "ok": False, "error": str(exc), "code": "GQL"}
 
     def _lookup(self, username: str) -> dict:
-        response = self.session.gql.get_id_from_login(username)
+        try:
+            response = self.session.gql.get_id_from_login(username)
+        except GQLError as exc:
+            # "No such user" is a normal answer here, not a failure, but
+            # upstream cannot express it: get_id_from_login's docstring
+            # promises "an empty string if the user doesn't exist", while the
+            # parser it delegates to runs expect_dict over `data.user`. Twitch
+            # answers `data.user: null` for an unknown login, so the parse
+            # raises InvalidJsonShapeError and post_gql_request_single rethrows
+            # it as RetryError. Reporting that as an error puts "Internal
+            # Server Error" in front of anyone who fumbles a username.
+            #
+            # Matched structurally on the parse path rather than on message
+            # text so a real outage still surfaces as an error: only a
+            # null/absent `data.user` means the user does not exist. Anything
+            # else (network reset, 5xx, an auth failure) propagates to
+            # handle(), which keeps its AUTH/GQL classification.
+            if not _is_missing_user_error(exc):
+                raise
+            return {"username": username, "channelId": "", "exists": False}
         channel_id = getattr(response, "id", "") or ""
         return {"username": username, "channelId": channel_id,
                 "exists": bool(channel_id)}

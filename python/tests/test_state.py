@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+from TwitchChannelPointsMiner.JsonParser import InvalidJsonShapeError
 from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
 
 from helpers.state import Handler, serve
@@ -394,3 +395,52 @@ def test_state_py_script_imports_the_vendored_miner(tmp_path):
     assert "ModuleNotFoundError" not in proc.stderr
     assert "TwitchChannelPointsMiner" not in proc.stderr
     assert proc.returncode == 0, f"stderr:\n{proc.stderr}"
+
+
+# --- Regression: a nonexistent username is a normal answer, not an error ---
+
+
+def test_lookup_reports_a_nonexistent_user_when_gql_raises_retry_error():
+    """Regression guard for "Internal Server Error" when adding a streamer
+    whose name is not a real Twitch user.
+
+    `FakeGQL.get_id_from_login` returns `id=""` for an unknown user, which
+    matches `GQL.get_id_from_login`'s docstring ("The id or an empty string
+    if the user doesn't exist") but NOT its behaviour: the real parser runs
+    `parse_expected_value(data, "user", expect_dict)`, and Twitch answers
+    `data.user = null` for an unknown login, so the parse raises
+    InvalidJsonShapeError -> RetryError. That must read as
+    `exists: False`, not a 500.
+    """
+    class MissingUser(FakeGQL):
+        def get_id_from_login(self, username):
+            raise _retry_error_wrapping(
+                # Exact shape observed against real Twitch: JsonParentContext
+                # appends parents innermost-first, so path is ["user", "data"].
+                InvalidJsonShapeError(["user", "data"], "dict expected, got None")
+            )
+
+    session = SimpleNamespace(
+        gql=MissingUser(), reload_cookies=lambda: True, is_logged_in=lambda: True
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "nope"})
+    assert out["ok"] is True
+    assert out["data"] == {"username": "nope", "channelId": "", "exists": False}
+
+
+def test_lookup_still_reports_a_real_gql_failure_as_an_error():
+    """Guards the other side of the fix above: swallowing every RetryError
+    into `exists: False` would tell the user "No such Twitch user" when the
+    truth is that the network or Twitch is down. Only a missing-user shaped
+    parse failure may become `exists: False`.
+    """
+    session = SimpleNamespace(
+        gql=_fails_with(
+            lambda: _retry_error_wrapping(RuntimeError("connection reset by peer"))
+        ),
+        reload_cookies=lambda: True,
+        is_logged_in=lambda: True,
+    )
+    out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
