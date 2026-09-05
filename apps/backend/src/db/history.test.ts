@@ -84,3 +84,32 @@ test("reopening the same database keeps the data", () => {
     rmSync(tempDir, { recursive: true });
   }
 });
+
+test("balanceAt returns the balance in force at a moment, not the nearest one", () => {
+  history.recordPoints("alpha", 100, 1000);
+  history.recordPoints("alpha", 500, 5000);
+  // 4900 is nearer to 5000, but at that instant the balance was still 100.
+  expect(history.balanceAt("alpha", 4900)).toBe(100);
+  expect(history.balanceAt("alpha", 5000)).toBe(500);
+});
+
+test("balanceAt returns null before the first snapshot", () => {
+  history.recordPoints("alpha", 100, 1000);
+  expect(history.balanceAt("alpha", 999)).toBe(null);
+});
+
+test("balanceAt is per streamer", () => {
+  history.recordPoints("alpha", 100, 1000);
+  history.recordPoints("beta", 700, 1000);
+  expect(history.balanceAt("beta", 2000)).toBe(700);
+});
+
+test("seriesSince returns ascending samples from the cutoff", () => {
+  history.recordPoints("alpha", 1, 1000);
+  history.recordPoints("alpha", 2, 2000);
+  history.recordPoints("alpha", 3, 3000);
+  expect(history.seriesSince("alpha", 2000)).toEqual([
+    { ts: 2000, balance: 2 },
+    { ts: 3000, balance: 3 },
+  ]);
+});

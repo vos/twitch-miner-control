@@ -24,6 +24,31 @@ export class History {
     return row ? row.balance : null;
   }
 
+  /**
+   * The balance in force at `ts`: the most recent snapshot at or before it.
+   *
+   * Not the *nearest* snapshot -- writes are change-only, so a balance
+   * written at 1000 is still the truth at 4999 even when the next write
+   * lands at 5000. Anchoring a gain to the nearer row would report a
+   * delta that spans a change the window does not contain.
+   */
+  balanceAt(username: string, ts: number): number | null {
+    const row = this.db
+      .prepare(
+        "SELECT balance FROM point_snapshots WHERE streamer = ? AND ts <= ? ORDER BY ts DESC, id DESC LIMIT 1",
+      )
+      .get(username, ts) as { balance: number } | undefined;
+    return row ? row.balance : null;
+  }
+
+  seriesSince(username: string, fromTs: number): PointSample[] {
+    return this.db
+      .prepare(
+        "SELECT ts, balance FROM point_snapshots WHERE streamer = ? AND ts >= ? ORDER BY ts ASC",
+      )
+      .all(username, fromTs) as PointSample[];
+  }
+
   pointsSeries(username: string, fromTs: number, toTs: number): PointSample[] {
     return this.db
       .prepare(
