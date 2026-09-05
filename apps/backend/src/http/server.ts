@@ -240,6 +240,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     instance.get("/api/streamers", async () => deps.stateService.snapshot());
 
+    // Type and time only -- the miner's event log records carry no
+    // streamer identity to forward (see history.ts's recordEvent), so
+    // rows cannot name a channel.
+    instance.get("/api/events", async () => ({
+      events: deps.history.recentEvents(20),
+    }));
+
     instance.get("/api/followers", async () => deps.helper.request("followers"));
 
     instance.get("/api/streamers/lookup", async (request, reply) => {

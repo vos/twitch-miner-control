@@ -320,6 +320,7 @@ test("every protected route is inside the auth scope", async () => {
     ["POST", "/api/config/apply"],
     ["GET", "/api/status"],
     ["GET", "/api/streamers"],
+    ["GET", "/api/events"],
     ["GET", "/api/followers"],
     ["GET", "/api/streamers/lookup?q=alpha"],
     ["GET", "/api/history?streamer=alpha&from=0&to=1"],
@@ -718,4 +719,17 @@ test("POST /api/miner/stop answers with the state and start time", async () => {
   const res = await ctx.app.inject({ method: "POST", url: "/api/miner/stop", cookies: auth() });
   expect(ctx.supervisor.stop).toHaveBeenCalled();
   expect(res.json()).toEqual({ state: "RUNNING", startedAt: null });
+});
+
+test("GET /api/events returns recent events newest first", async () => {
+  ctx.history.recordEvent("STREAMER_ONLINE", 1000);
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000);
+  const response = await ctx.app.inject({
+    method: "GET", url: "/api/events", cookies: auth(),
+  });
+  expect(response.statusCode).toBe(200);
+  expect(response.json().events).toEqual([
+    { ts: 2000, type: "GAIN_FOR_CLAIM" },
+    { ts: 1000, type: "STREAMER_ONLINE" },
+  ]);
 });
