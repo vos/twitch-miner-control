@@ -337,3 +337,60 @@ test("stop() during an in-flight refresh clears a pending dirty flag so no follo
   // resurrect a refresh once the in-flight request settles.
   expect(request).toHaveBeenCalledTimes(1);
 });
+
+test("reports 24h gain against the balance in force a day ago", async () => {
+  clock = 90_000_000;
+  history.recordPoints("alpha", 1000, clock - 86_400_000);
+  const { service } = make([alpha(1500)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gained24h).toBe(500);
+});
+
+test("reports null 24h gain when there is no prior balance to compare", async () => {
+  // A fresh install must not claim a confident "+0" it cannot know.
+  const { service } = make([alpha(1500)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gained24h).toBe(null);
+});
+
+test("anchors stream gain to the moment a streamer came online", async () => {
+  const { service } = make([alpha(100, false), alpha(100, true), alpha(340, true)]);
+  await service.refresh();                       // offline, no anchor
+  await service.refresh();                       // false -> true: anchor at 100
+  await service.refresh();                       // still live, now 340
+  expect(service.snapshot().streamers[0].gainedStream).toBe(240);
+});
+
+test("reports null stream gain for an offline streamer", async () => {
+  const { service } = make([alpha(100, false)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gainedStream).toBe(null);
+});
+
+test("drops the stream anchor when a streamer goes offline", async () => {
+  const { service } = make([alpha(100, false), alpha(100, true), alpha(500, false)]);
+  await service.refresh();
+  await service.refresh();
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gainedStream).toBe(null);
+});
+
+test("attaches a sparkline series", async () => {
+  clock = 90_000_000;
+  history.recordPoints("alpha", 900, clock - 3_600_000);
+  const { service } = make([alpha(1000)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].spark.length).toBeGreaterThan(0);
+});
+
+test("does not emit a change frame when only wall-clock time has passed", async () => {
+  // Derived fields must not encode "now", or every refresh would wake
+  // every SSE client with an identical payload.
+  const { service } = make([alpha(100), alpha(100)]);
+  await service.refresh();
+  const changes = vi.fn();
+  service.on("change", changes);
+  clock += 60_000;
+  await service.refresh();
+  expect(changes).not.toHaveBeenCalled();
+});

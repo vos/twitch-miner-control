@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
+import { downsample } from "./gains.js";
 
 export interface StreamerState {
   username: string;
@@ -9,7 +10,21 @@ export interface StreamerState {
   isOnline: boolean | null;
   pointsEnabled: boolean | null;
   error?: string;
+  /** Points gained over the last 24h; null when no prior balance is known. */
+  gained24h: number | null;
+  /** Points gained since this streamer came online; null when offline. */
+  gainedStream: number | null;
+  /** Downsampled 24h balances for the card sparkline. */
+  spark: number[];
 }
+
+/** What the Python helper reports, before this service derives the rest. */
+export type RawStreamerState = Omit<
+  StreamerState,
+  "gained24h" | "gainedStream" | "spark"
+>;
+
+const DAY_MS = 86_400_000;
 
 export interface StateSnapshot {
   streamers: StreamerState[];
@@ -36,6 +51,18 @@ export class StateService extends EventEmitter {
   private ticker: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private dirty = false;
+  /**
+   * Balance observed when each streamer was last seen going online.
+   *
+   * The anchor is the `isOnline` false->true transition this poller
+   * observes, not an `events` row: the miner's event log records carry no
+   * streamer identity (only `emoji` and `event`), so an online event
+   * cannot be attributed to a channel without parsing log message text --
+   * which the doorbell exists to avoid. The cost is that the anchor is
+   * accurate to one refresh interval rather than to the second, which
+   * rounds to nothing in a points-gained figure.
+   */
+  private streamAnchor = new Map<string, number>();
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
@@ -112,18 +139,44 @@ export class StateService extends EventEmitter {
       return;
     }
     try {
-      const data = await this.deps.client.request<{ streamers: StreamerState[] }>(
+      const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
       );
       const before = JSON.stringify(this.streamers);
-      this.streamers = data.streamers;
-      this.lastUpdated = this.now();
+      const previous = new Map(this.streamers.map((s) => [s.username, s]));
+      const at = this.now();
+      this.lastUpdated = at;
       this.lastError = null;
-      for (const s of data.streamers) {
+      const dayAgo = at - DAY_MS;
+
+      this.streamers = data.streamers.map((s) => {
         if (typeof s.points === "number") {
-          this.deps.history.recordPoints(s.username, s.points, this.lastUpdated);
+          this.deps.history.recordPoints(s.username, s.points, at);
         }
-      }
+
+        const wasOnline = previous.get(s.username)?.isOnline ?? null;
+        if (s.isOnline && wasOnline === false && typeof s.points === "number") {
+          this.streamAnchor.set(s.username, s.points);
+        }
+        if (!s.isOnline) {
+          this.streamAnchor.delete(s.username);
+        }
+
+        const past = this.deps.history.balanceAt(s.username, dayAgo);
+        const anchor = this.streamAnchor.get(s.username);
+
+        return {
+          ...s,
+          gained24h:
+            past === null || typeof s.points !== "number" ? null : s.points - past,
+          gainedStream:
+            anchor === undefined || typeof s.points !== "number"
+              ? null
+              : s.points - anchor,
+          spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
+        };
+      });
+
       if (before !== JSON.stringify(this.streamers)) {
         this.emit("change", this.snapshot());
       }
