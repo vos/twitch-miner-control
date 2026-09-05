@@ -14,6 +14,7 @@ export interface StreamerState {
   gainedSince: number | null;
   gainedStream: number | null;
   spark: number[];
+  avatarUrl: string | null;
 }
 
 export interface StateSnapshot {
