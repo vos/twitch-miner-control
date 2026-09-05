@@ -396,6 +396,66 @@ test("doorbell rejects an event name that is not upper snake case", async () => 
   expect(ctx.history.recentEvents(1)).toEqual([]);
 });
 
+// --- Doorbell message ---------------------------------------------------
+// Free text, unlike the event name, so it is sanitised rather than
+// pattern-matched, and never costs us the event it arrived with.
+
+test("doorbell stores the miner's message alongside the event", async () => {
+  const res = await ctx.app.inject({
+    method: "POST", url: "/internal/doorbell",
+    headers: { "x-doorbell-token": "doorbell-token" },
+    payload: { event: "GAIN_FOR_CLAIM", ts: 1, message: "+50 -> forsen" },
+  });
+  expect(res.statusCode).toBe(204);
+  expect(ctx.history.recentEvents(1)[0].message).toBe("+50 -> forsen");
+});
+
+test("doorbell stores null when no message is sent", async () => {
+  const res = await ctx.app.inject({
+    method: "POST", url: "/internal/doorbell",
+    headers: { "x-doorbell-token": "doorbell-token" },
+    payload: { event: "BONUS_CLAIM", ts: 1 },
+  });
+  expect(res.statusCode).toBe(204);
+  expect(ctx.history.recentEvents(1)[0].message).toBe(null);
+});
+
+test("doorbell strips control characters from the message", async () => {
+  await ctx.app.inject({
+    method: "POST", url: "/internal/doorbell",
+    headers: { "x-doorbell-token": "doorbell-token" },
+    payload: {
+      event: "BET_WIN", ts: 1,
+      message: "\u001b[32m+50 forsen\u001b[0m\nrecap line",
+    },
+  });
+  expect(ctx.history.recentEvents(1)[0].message).toBe("+50 forsen recap line");
+});
+
+test("doorbell truncates an over-long message", async () => {
+  await ctx.app.inject({
+    method: "POST", url: "/internal/doorbell",
+    headers: { "x-doorbell-token": "doorbell-token" },
+    payload: { event: "BET_WIN", ts: 1, message: "x".repeat(5000) },
+  });
+  expect(ctx.history.recentEvents(1)[0].message).toHaveLength(500);
+});
+
+test("doorbell keeps the event when the message is unusable", async () => {
+  // The type is what drives the refresh, so a bad message degrades to null
+  // rather than dropping the event on the floor with a 400.
+  for (const message of [{ evil: true }, 42, "   "]) {
+    const res = await ctx.app.inject({
+      method: "POST", url: "/internal/doorbell",
+      headers: { "x-doorbell-token": "doorbell-token" },
+      payload: { event: "STREAMER_ONLINE", ts: 1, message },
+    });
+    expect(res.statusCode).toBe(204);
+    const [latest] = ctx.history.recentEvents(1);
+    expect([latest.type, latest.message]).toEqual(["STREAMER_ONLINE", null]);
+  }
+});
+
 test("doorbell rejects a non-string event", async () => {
   const res = await ctx.app.inject({
     method: "POST", url: "/internal/doorbell",
@@ -722,14 +782,14 @@ test("POST /api/miner/stop answers with the state and start time", async () => {
 });
 
 test("GET /api/events returns recent events newest first", async () => {
-  ctx.history.recordEvent("STREAMER_ONLINE", 1000);
-  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000);
+  ctx.history.recordEvent("STREAMER_ONLINE", 1000, "forsen is now streaming");
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen");
   const response = await ctx.app.inject({
     method: "GET", url: "/api/events", cookies: auth(),
   });
   expect(response.statusCode).toBe(200);
   expect(response.json().events).toEqual([
-    { ts: 2000, type: "GAIN_FOR_CLAIM" },
-    { ts: 1000, type: "STREAMER_ONLINE" },
+    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
+    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming" },
   ]);
 });

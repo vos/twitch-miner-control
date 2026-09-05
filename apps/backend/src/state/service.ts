@@ -55,10 +55,11 @@ export class StateService extends EventEmitter {
    * Balance observed when each streamer was last seen going online.
    *
    * The anchor is the `isOnline` false->true transition this poller
-   * observes, not an `events` row: the miner's event log records carry no
-   * streamer identity (only `emoji` and `event`), so an online event
-   * cannot be attributed to a channel without parsing log message text --
-   * which the doorbell exists to avoid. The cost is that the anchor is
+   * observes, not an `events` row. An event row now carries the miner's
+   * formatted message, so it does name a channel -- but only as display
+   * text whose balances are millified and lossy, so attributing an anchor
+   * would mean parsing numbers back out of prose. The poller's balances
+   * are exact, so they stay the source. The cost is that the anchor is
    * accurate to one refresh interval rather than to the second, which
    * rounds to nothing in a points-gained figure.
    */
@@ -198,8 +199,8 @@ export class StateService extends EventEmitter {
   }
 
   /** Doorbell: something happened, refresh soon. Bursts coalesce. */
-  ring(eventType: string): void {
-    this.deps.history.recordEvent(eventType, this.now());
+  ring(eventType: string, message: string | null = null): void {
+    this.deps.history.recordEvent(eventType, this.now(), message);
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;

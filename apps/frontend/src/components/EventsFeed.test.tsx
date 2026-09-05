@@ -13,8 +13,21 @@ afterEach(() => vi.unstubAllGlobals());
 
 const view = () => render(<MantineProvider><EventsFeed /></MantineProvider>);
 
-test("renders events as readable labels rather than raw enum names", async () => {
-  stub({ events: [{ ts: Date.now(), type: "STREAMER_ONLINE" }] });
+test("renders the miner's own line, which names the streamer", async () => {
+  // The whole point of the panel: "streamer online" alone said nothing
+  // about which channel, because the event name has no identity in it.
+  stub({
+    events: [
+      { ts: Date.now(), type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
+    ],
+  });
+  view();
+  expect(await screen.findByText("+50 -> forsen")).toBeInTheDocument();
+});
+
+test("falls back to the event name for a row stored without a message", async () => {
+  // Rows written before the doorbell forwarded a message.
+  stub({ events: [{ ts: Date.now(), type: "STREAMER_ONLINE", message: null }] });
   view();
   expect(await screen.findByText(/streamer online/i)).toBeInTheDocument();
 });

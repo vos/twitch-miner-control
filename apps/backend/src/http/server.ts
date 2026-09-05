@@ -25,6 +25,35 @@ import { SseHub } from "./sse.js";
 const DOORBELL_EVENT = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 /**
+ * Longest doorbell message kept, matching MAX_MESSAGE in
+ * `python/helpers/doorbell.py`. Enforced again here because the sender is
+ * bounded by convention while this endpoint is reachable by anyone holding
+ * the token, and the value lands in the events table and then the UI.
+ */
+const DOORBELL_MESSAGE_MAX = 500;
+
+/**
+ * Reduces a doorbell message to the bounded single line the feed renders.
+ *
+ * Unlike the event name this is free text, so it is sanitised rather than
+ * pattern-matched: control characters (ANSI colour escapes, the newlines
+ * in a bet recap) collapse to spaces so a row cannot break the feed's
+ * layout, and anything absent or malformed degrades to null -- a row with
+ * no message still renders from its type.
+ */
+function doorbellMessage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f]+/g, " ")
+    .trim()
+    .slice(0, DOORBELL_MESSAGE_MAX);
+  return text === "" ? null : text;
+}
+
+/**
  * Parses a required numeric query parameter.
  *
  * Returns null for anything that is not a finite number, including a
@@ -240,9 +269,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     instance.get("/api/streamers", async () => deps.stateService.snapshot());
 
-    // Type and time only -- the miner's event log records carry no
-    // streamer identity to forward (see history.ts's recordEvent), so
-    // rows cannot name a channel.
+    // Type, time, and the miner's own formatted line -- which is what
+    // names the channel (see history.ts's recordEvent). Rows written
+    // before the doorbell carried a message have a null one.
     instance.get("/api/events", async () => ({
       events: deps.history.recentEvents(20),
     }));
@@ -332,12 +361,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (request.headers["x-doorbell-token"] !== deps.doorbellToken) {
       return reply.code(403).send({ error: "forbidden" });
     }
-    const body = request.body as { event?: unknown } | undefined;
+    const body = request.body as { event?: unknown; message?: unknown } | undefined;
     const event = body?.event;
     if (typeof event !== "string" || !DOORBELL_EVENT.test(event)) {
       return reply.code(400).send({ error: "event must be an upper snake case name" });
     }
-    deps.stateService.ring(event);
+    // A bad message must not cost us the event: the type is what drives the
+    // refresh, so an unusable message degrades to null rather than a 400.
+    deps.stateService.ring(event, doorbellMessage(body?.message));
     return reply.code(204).send();
   });
 

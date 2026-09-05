@@ -1,7 +1,7 @@
 import type { Db } from "./schema.js";
 
 export interface PointSample { ts: number; balance: number }
-export interface EventSample { ts: number; type: string }
+export interface EventSample { ts: number; type: string; message: string | null }
 
 export class History {
   constructor(private readonly db: Db) {}
@@ -57,14 +57,24 @@ export class History {
       .all(username, fromTs, toTs) as PointSample[];
   }
 
-  /** Event type only. Message text is lossy and must never be stored. */
-  recordEvent(type: string, ts = Date.now()): void {
-    this.db.prepare("INSERT INTO events (ts, type) VALUES (?, ?)").run(ts, type);
+  /**
+   * The type plus the miner's own formatted line, which is the only place
+   * the streamer's name survives -- the `Events` name alone is just
+   * `GAIN_FOR_CLAIM`, which is what made the activity feed nameless.
+   *
+   * The message is display text and nothing else: balances inside it are
+   * millified ("12.3k") and must never be parsed back into numbers. Point
+   * history is recorded by recordPoints() from the state pipeline.
+   */
+  recordEvent(type: string, ts = Date.now(), message: string | null = null): void {
+    this.db
+      .prepare("INSERT INTO events (ts, type, message) VALUES (?, ?, ?)")
+      .run(ts, type, message);
   }
 
   recentEvents(limit: number): EventSample[] {
     return this.db
-      .prepare("SELECT ts, type FROM events ORDER BY ts DESC, id DESC LIMIT ?")
+      .prepare("SELECT ts, type, message FROM events ORDER BY ts DESC, id DESC LIMIT ?")
       .all(limit) as EventSample[];
   }
 }

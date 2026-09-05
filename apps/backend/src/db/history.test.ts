@@ -1,4 +1,5 @@
 import { beforeEach, expect, test, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import { openDb } from "./schema.js";
 import { History } from "./history.js";
 import { mkdtempSync, rmSync } from "fs";
@@ -47,13 +48,50 @@ test("latest returns null for an unknown streamer", () => {
   expect(history.latest("ghost")).toBe(null);
 });
 
-test("stores event types only, never message text", () => {
-  history.recordEvent("STREAMER_ONLINE", 1000);
-  history.recordEvent("GAIN_FOR_CLAIM", 2000);
+test("stores the event type alongside the miner's own message", () => {
+  history.recordEvent("STREAMER_ONLINE", 1000, "forsen is now streaming");
+  history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen");
   expect(history.recentEvents(10)).toEqual([
-    { ts: 2000, type: "GAIN_FOR_CLAIM" },
-    { ts: 1000, type: "STREAMER_ONLINE" },
+    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
+    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming" },
   ]);
+});
+
+test("an event recorded without a message stores null", () => {
+  history.recordEvent("BONUS_CLAIM", 1000);
+  expect(history.recentEvents(10)).toEqual([
+    { ts: 1000, type: "BONUS_CLAIM", message: null },
+  ]);
+});
+
+test("adds the message column to a database created without it", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "history-migrate-"));
+  const dbPath = join(tempDir, "test.db");
+  try {
+    // The pre-message shape, as an existing deployment has it on disk.
+    const legacy = new Database(dbPath);
+    legacy.exec(
+      "CREATE TABLE events (" +
+        "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+        "ts INTEGER NOT NULL," +
+        "type TEXT NOT NULL)",
+    );
+    legacy.prepare("INSERT INTO events (ts, type) VALUES (?, ?)").run(500, "OLD_EVENT");
+    legacy.close();
+
+    // The old row survives the migration and reads back with no message,
+    // and a new row writes against the widened table.
+    const db = openDb(dbPath);
+    const migrated = new History(db);
+    migrated.recordEvent("NEW_EVENT", 1500, "forsen is now streaming");
+    expect(migrated.recentEvents(10)).toEqual([
+      { ts: 1500, type: "NEW_EVENT", message: "forsen is now streaming" },
+      { ts: 500, type: "OLD_EVENT", message: null },
+    ]);
+    db.close();
+  } finally {
+    rmSync(tempDir, { recursive: true });
+  }
 });
 
 test("recentEvents respects the limit and returns newest first", () => {
@@ -78,7 +116,9 @@ test("reopening the same database keeps the data", () => {
     const second = new History(db2);
     expect(second.latest("alpha")).toBe(42);
     expect(second.pointsSeries("alpha", 0, 9999)).toEqual([{ ts: 1000, balance: 42 }]);
-    expect(second.recentEvents(10)).toEqual([{ ts: 500, type: "TEST_EVENT" }]);
+    expect(second.recentEvents(10)).toEqual([
+      { ts: 500, type: "TEST_EVENT", message: null },
+    ]);
     db2.close();
   } finally {
     rmSync(tempDir, { recursive: true });
