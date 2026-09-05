@@ -31,10 +31,17 @@ def points_response(balance, channel_id="42", enabled=True):
 
 
 class FakeGQL:
-    def __init__(self, balances=None, live=None, follows=None):
+    def __init__(self, balances=None, live=None, follows=None, avatars=None):
         self.balances = balances or {}
         self.live = live or {}
         self.follows = follows or []
+        self.avatars = avatars or {}
+
+    def video_player_stream_info_overlay_channel(self, username):
+        value = self.avatars.get(username)
+        if isinstance(value, Exception):
+            raise value
+        return SimpleNamespace(user=SimpleNamespace(profile_image_url=value))
 
     def get_channel_points_context(self, username):
         if username not in self.balances:
@@ -480,3 +487,50 @@ def test_lookup_still_reports_a_real_gql_failure_as_an_error():
     out = Handler(session).handle({"id": 1, "op": "lookup", "username": "alpha"})
     assert out["ok"] is False
     assert out["code"] == "GQL"
+
+
+def test_avatars_returns_a_login_to_url_mapping():
+    h = handler(avatars={"alpha": "https://cdn/a.png", "beta": "https://cdn/b.png"})
+    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha", "beta"]})
+    assert out["ok"] is True
+    assert out["data"]["avatars"] == {
+        "alpha": "https://cdn/a.png",
+        "beta": "https://cdn/b.png",
+    }
+
+
+def test_avatars_reports_none_for_a_channel_without_one():
+    h = handler(avatars={"alpha": None})
+    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha"]})
+    assert out["data"]["avatars"] == {"alpha": None}
+
+
+def test_one_failing_name_does_not_lose_the_rest_of_the_batch():
+    h = handler(avatars={
+        "alpha": RuntimeError("channel is gone"),
+        "beta": "https://cdn/b.png",
+    })
+    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha", "beta"]})
+    assert out["ok"] is True
+    assert out["data"]["avatars"] == {"alpha": None, "beta": "https://cdn/b.png"}
+
+
+def test_auth_failure_propagates_rather_than_degrading_to_null():
+    # A dead session must be reported, not quietly rendered as a roster of
+    # monograms -- the user needs the sign-in prompt.
+    response = requests.Response()
+    response.status_code = 401
+    h = handler(avatars={
+        "alpha": requests.exceptions.HTTPError(response=response),
+    })
+    h.session.is_logged_in = lambda: False
+    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha"]})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"
+
+
+def test_avatars_requires_the_streamers_field():
+    h = handler()
+    out = h.handle({"id": 1, "op": "avatars"})
+    assert out["ok"] is False
+    assert out["code"] == "BAD_REQUEST"

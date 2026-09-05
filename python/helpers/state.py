@@ -148,6 +148,9 @@ class Handler:
             if op == "state":
                 return {"id": req_id, "ok": True,
                         "data": {"streamers": self._state(req["streamers"])}}
+            if op == "avatars":
+                return {"id": req_id, "ok": True,
+                        "data": {"avatars": self._avatars(req["streamers"])}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -198,6 +201,33 @@ class Handler:
                     break
                 out.append({"username": username, "points": None, "isOnline": None,
                             "error": str(exc)})
+        if auth_error is not None:
+            raise auth_error
+        return out
+
+    def _avatars(self, usernames: list[str]) -> dict:
+        """Profile picture URL per login, or None where there is none.
+
+        Shaped like _state's loop for the same reason: one unreachable
+        channel must not cost the whole batch, but an auth failure is
+        about the session rather than the channel and has to reach
+        handle() so it can be reported as AUTH. Degrading that to a null
+        avatar would leave a signed-out user staring at monograms with no
+        prompt to sign in again.
+        """
+        out = {}
+        auth_error = None
+        for username in usernames:
+            try:
+                response = self.session.gql.video_player_stream_info_overlay_channel(
+                    username
+                )
+                out[username] = getattr(response.user, "profile_image_url", None) or None
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    auth_error = exc
+                    break
+                out[username] = None
         if auth_error is not None:
             raise auth_error
         return out
