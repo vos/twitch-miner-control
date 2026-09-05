@@ -1,7 +1,8 @@
 import { Alert, AppShell, Button, Group, NavLink, Text, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
-import { MinerControls, type MinerStatus } from "./components/MinerControls.js";
+import { MinerDock } from "./components/MinerDock.js";
+import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { TwitchLogin } from "./routes/Login.js";
@@ -55,9 +56,7 @@ export function App() {
             {/* setMiner as onChange: an action's response is the freshest
                 answer there is, so the header reflects it immediately rather
                 than keeping the old state until the next 5s poll. */}
-            <MinerControls
-              state={miner.state} startedAt={miner.startedAt} onChange={setMiner}
-            />
+            <MinerStatusBadge state={miner.state} startedAt={miner.startedAt} />
           </Group>
         </AppShell.Header>
         <AppShell.Navbar p="xs">
@@ -67,6 +66,7 @@ export function App() {
               onClick={() => setScreen(key as keyof typeof SCREENS)}
             />
           ))}
+          <MinerDock state={miner.state} onChange={setMiner} />
         </AppShell.Navbar>
         <AppShell.Main>
           {loginRequired && screen !== "account" && (
