@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { AddStreamer } from "../components/AddStreamer.js";
 import { PendingBar } from "../components/PendingBar.js";
+import { StreamerAvatar } from "../components/StreamerAvatar.js";
 
 interface StreamerEntry {
   username: string;
@@ -22,6 +23,23 @@ export function Streamers() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [avatars, setAvatars] = useState<Map<string, string | null>>(new Map());
+
+  useEffect(() => {
+    // Pictures only. A failure here must not touch `loadError` -- the
+    // config screen has to work with the miner stopped, which is exactly
+    // when someone is most likely to be on it.
+    api.get<{ streamers: { username: string; avatarUrl: string | null }[] }>(
+      "/api/streamers",
+    )
+      .then((snapshot) => {
+        setAvatars(new Map(
+          snapshot.streamers.map((s) => [s.username.toLowerCase(), s.avatarUrl]),
+        ));
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api.get<Config>("/api/config")
@@ -136,7 +154,21 @@ export function Streamers() {
                   ↑
                 </ActionIcon>
                 <Text size="sm" c="dimmed" ff="monospace" w={20}>{index + 1}</Text>
-                <Text fw={500}>{streamer.username}</Text>
+                <StreamerAvatar
+                  login={streamer.username}
+                  avatarUrl={avatars.get(streamer.username.toLowerCase()) ?? null}
+                  size={28}
+                />
+                <Text
+                  component="a"
+                  href={`https://twitch.tv/${streamer.username}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  fw={500}
+                  style={{ color: "inherit", textDecoration: "none" }}
+                >
+                  {streamer.username}
+                </Text>
                 {index < 2 && (
                   <Badge size="xs" variant="light" color="twitch" data-testid="watching-tag">
                     watching

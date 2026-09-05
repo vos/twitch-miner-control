@@ -27,6 +27,13 @@ beforeEach(() => {
     if (url === "/api/config" && (!init || init.method === "GET")) {
       return { ok: true, status: 200, json: async () => config };
     }
+    // After the lookup branch above, which matches with startsWith --
+    // an exact-match branch placed first would swallow lookup calls.
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({
+        streamers: [{ username: "alpha", avatarUrl: "https://cdn/a.png" }],
+      }) };
+    }
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   }));
 });
@@ -174,4 +181,27 @@ test("marks the top two rows as the ones actually being watched", async () => {
   })));
   view();
   expect(await screen.findAllByTestId("watching-tag")).toHaveLength(2);
+});
+
+test("shows an avatar and a channel link per configured streamer", async () => {
+  const { container } = view();
+  const link = await screen.findByRole("link", { name: /alpha on Twitch/i });
+  expect(link).toHaveAttribute("href", "https://twitch.tv/alpha");
+  await waitFor(() => {
+    expect(container.querySelector("img")).toHaveAttribute("src", "https://cdn/a.png");
+  });
+});
+
+test("stays usable when the live state cannot be loaded", async () => {
+  // The miner being stopped must cost the config screen its pictures and
+  // nothing else -- this is the screen you use to fix a broken setup.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/config") {
+      return { ok: true, status: 200, json: async () => config };
+    }
+    throw new Error("miner is stopped");
+  }));
+  view();
+  expect(await screen.findByText("alpha")).toBeInTheDocument();
+  expect(screen.getAllByTestId("streamer-row").length).toBe(2);
 });
