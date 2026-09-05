@@ -49,7 +49,7 @@
 - Consumes: existing `History` class, `Db` from `./schema.js`.
 - Produces: `History.balanceAt(username: string, ts: number): number | null` — the balance as of a moment, i.e. the most recent snapshot at or before `ts`, or `null` if the streamer had no snapshot yet. `History.seriesSince(username: string, fromTs: number): PointSample[]` — ascending samples with `ts >= fromTs`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `apps/backend/src/db/history.test.ts`:
 
@@ -84,12 +84,12 @@ test("seriesSince returns ascending samples from the cutoff", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/backend test -- history`
 Expected: FAIL — `history.balanceAt is not a function`.
 
-- [ ] **Step 3: Implement the queries**
+- [x] **Step 3: Implement the queries**
 
 Add to the `History` class in `apps/backend/src/db/history.ts`:
 
@@ -120,12 +120,12 @@ Add to the `History` class in `apps/backend/src/db/history.ts`:
   }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/backend test -- history`
 Expected: PASS (all history tests, old and new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/backend/src/db/history.ts apps/backend/src/db/history.test.ts
@@ -144,7 +144,7 @@ git commit -m "feat: add point-in-time balance and since-cutoff series queries"
 - Consumes: `PointSample` from `../db/history.js`.
 - Produces: `downsample(samples: PointSample[], fromTs: number, toTs: number, buckets = 24): number[]` — bucket count is a fixed-length array of balances for the sparkline to draw. Returns `[]` for empty input.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/backend/src/state/gains.test.ts`:
 
@@ -185,12 +185,12 @@ test("always returns exactly the requested bucket count", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/backend test -- gains`
 Expected: FAIL — cannot resolve `./gains.js`.
 
-- [ ] **Step 3: Implement the helper**
+- [x] **Step 3: Implement the helper**
 
 Create `apps/backend/src/state/gains.ts`:
 
@@ -239,12 +239,12 @@ export function downsample(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/backend test -- gains`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/backend/src/state/gains.ts apps/backend/src/state/gains.test.ts
@@ -263,7 +263,7 @@ git commit -m "feat: add time-bucketed sparkline downsampling"
 - Consumes: `History.balanceAt`, `History.seriesSince` (Task 1); `downsample` (Task 2).
 - Produces: `StreamerState` gains three fields — `gained24h: number | null`, `gainedStream: number | null`, `spark: number[]`. All three are computed in `doRefresh` before the change comparison.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `apps/backend/src/state/service.test.ts`:
 
@@ -326,12 +326,12 @@ test("does not emit a change frame when only wall-clock time has passed", async 
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/backend test -- service`
 Expected: FAIL — `gained24h` is `undefined`.
 
-- [ ] **Step 3: Implement the derivation**
+- [x] **Step 3: Implement the derivation**
 
 In `apps/backend/src/state/service.ts`, extend the interface:
 
@@ -422,7 +422,7 @@ In `doRefresh`, replace the existing assignment and points-recording block (curr
       }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/backend test`
 Expected: PASS — all backend tests, including the pre-existing service and server suites.
@@ -431,7 +431,7 @@ Expected: PASS — all backend tests, including the pre-existing service and ser
 > `StreamerState` literals without the new fields, add
 > `gained24h: null, gainedStream: null, spark: []` to those fixtures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/backend/src/state/service.ts apps/backend/src/state/service.test.ts apps/backend/src/http/server.test.ts
@@ -452,7 +452,7 @@ git commit -m "feat: derive point gains and sparkline series per streamer"
 
 Rationale: the dashboard needs events without naming a streamer, and `/api/history` requires a `streamer` plus a range. A separate route keeps the feed independent of the charting route rather than overloading it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `apps/backend/src/http/server.test.ts`:
 
@@ -473,12 +473,12 @@ test("GET /api/events returns recent events newest first", async () => {
 
 Also add `["GET", "/api/events"]` to the authentication table at `apps/backend/src/http/server.test.ts:325` so the route is covered by the existing "requires auth" sweep.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pnpm --filter @app/backend test -- server`
 Expected: FAIL — 404, `events` is undefined.
 
-- [ ] **Step 3: Add the route**
+- [x] **Step 3: Add the route**
 
 In `apps/backend/src/http/server.ts`, directly after the `/api/streamers` route:
 
@@ -488,12 +488,12 @@ In `apps/backend/src/http/server.ts`, directly after the `/api/streamers` route:
     }));
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/backend test`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/backend/src/http/server.ts apps/backend/src/http/server.test.ts
@@ -511,7 +511,7 @@ git commit -m "feat: expose recent miner events over HTTP"
 **Interfaces:**
 - Produces: `<Sparkline values={number[]} width?={number} height?={number} />`. Renders `null` for fewer than 2 values.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/frontend/src/components/Sparkline.test.tsx`:
 
@@ -550,12 +550,12 @@ test("is hidden from assistive tech, since the numbers beside it carry the meani
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/frontend test -- Sparkline`
 Expected: FAIL — cannot resolve `./Sparkline.js`.
 
-- [ ] **Step 3: Implement the component**
+- [x] **Step 3: Implement the component**
 
 Create `apps/frontend/src/components/Sparkline.tsx`:
 
@@ -607,12 +607,12 @@ export function Sparkline({ values, width = 88, height = 24 }: SparklineProps) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/frontend test -- Sparkline`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/frontend/src/components/Sparkline.tsx apps/frontend/src/components/Sparkline.test.tsx
@@ -632,7 +632,7 @@ git commit -m "feat: add sparkline component for point trends"
 - Consumes: `StreamerState` from `../api/useLiveState.js`; `Sparkline` (Task 5).
 - Produces: `<StreamerCard streamer={StreamerState} />`.
 
-- [ ] **Step 1: Mirror the backend type**
+- [x] **Step 1: Mirror the backend type**
 
 In `apps/frontend/src/api/useLiveState.ts`, add to the `StreamerState` interface:
 
@@ -642,7 +642,7 @@ In `apps/frontend/src/api/useLiveState.ts`, add to the `StreamerState` interface
   spark: number[];
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `apps/frontend/src/components/StreamerCard.test.tsx`:
 
@@ -709,12 +709,12 @@ test("shows a placeholder when the balance is unknown", () => {
 });
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/frontend test -- StreamerCard`
 Expected: FAIL — cannot resolve `./StreamerCard.js`.
 
-- [ ] **Step 4: Implement the component**
+- [x] **Step 4: Implement the component**
 
 Create `apps/frontend/src/components/StreamerCard.tsx`:
 
@@ -784,12 +784,12 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/frontend test -- StreamerCard`
 Expected: PASS (8 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/frontend/src/components/StreamerCard.tsx apps/frontend/src/components/StreamerCard.test.tsx apps/frontend/src/api/useLiveState.ts
@@ -808,7 +808,7 @@ git commit -m "feat: add streamer card with gains, sparkline and health badges"
 - Consumes: `GET /api/events` (Task 4) via `api.get`.
 - Produces: `<EventsFeed />` — self-fetching, renders nothing on failure.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `apps/frontend/src/components/EventsFeed.test.tsx`:
 
@@ -850,12 +850,12 @@ test("stays silent when the feed cannot be loaded", async () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/frontend test -- EventsFeed`
 Expected: FAIL — cannot resolve `./EventsFeed.js`.
 
-- [ ] **Step 3: Implement the component**
+- [x] **Step 3: Implement the component**
 
 Create `apps/frontend/src/components/EventsFeed.tsx`:
 
@@ -923,12 +923,12 @@ export function EventsFeed() {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pnpm --filter @app/frontend test -- EventsFeed`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/frontend/src/components/EventsFeed.tsx apps/frontend/src/components/EventsFeed.test.tsx
@@ -946,7 +946,7 @@ git commit -m "feat: add recent activity feed"
 **Interfaces:**
 - Consumes: `StreamerCard` (Task 6), `EventsFeed` (Task 7).
 
-- [ ] **Step 1: Update the fixture and add tests**
+- [x] **Step 1: Update the fixture and add tests**
 
 In `apps/frontend/src/routes/Dashboard.test.tsx`, extend both fixture streamers with the new fields:
 
@@ -975,12 +975,12 @@ test("shows gains on the card so the balance has a reference point", async () =>
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pnpm --filter @app/frontend test -- Dashboard`
 Expected: FAIL — no `streamer-alpha` test id.
 
-- [ ] **Step 3: Rewrite the grids**
+- [x] **Step 3: Rewrite the grids**
 
 In `apps/frontend/src/routes/Dashboard.tsx`, replace both `SimpleGrid` blocks and their card bodies with `StreamerCard`, and mount the feed. Remove the now-unused `fmt` helper and the `Card`/`Group`/`Text` imports that are no longer referenced:
 
@@ -1005,17 +1005,17 @@ import { EventsFeed } from "../components/EventsFeed.js";
 import { StreamerCard } from "../components/StreamerCard.js";
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `pnpm --filter @app/frontend test && pnpm --filter @app/backend test`
 Expected: PASS on both.
 
-- [ ] **Step 5: Typecheck both apps**
+- [x] **Step 5: Typecheck both apps**
 
 Run: `pnpm --filter @app/frontend build && pnpm --filter @app/backend build`
 Expected: no TypeScript errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/frontend/src/routes/Dashboard.tsx apps/frontend/src/routes/Dashboard.test.tsx
@@ -1028,7 +1028,7 @@ git commit -m "feat: show gains, sparklines and recent activity on the dashboard
 
 **Files:** none — this is a manual verification gate.
 
-- [ ] **Step 1: Keep the existing database**
+- [x] **Step 1: Keep the existing database**
 
 Do **not** delete `.devdata/history.db`. This plan changes no schema, and the
 file holds ~19 real snapshots across two streamers plus 132 events -- genuine
@@ -1048,11 +1048,11 @@ console.log(db.prepare('SELECT streamer, COUNT(*) n, MAX(balance) hi FROM point_
 "
 ```
 
-- [ ] **Step 2: Run the app**
+- [x] **Step 2: Run the app**
 
 Use the `run` skill, or the project's dev script. Sign in and open the dashboard.
 
-- [ ] **Step 3: Confirm each behaviour**
+- [x] **Step 3: Confirm each behaviour**
 
 - Cards render name, balance, and a `— 24h` gain on a fresh database (**not** `+0`).
 - After two refresh cycles with a live streamer earning, `+N stream` appears.
@@ -1060,7 +1060,7 @@ Use the `run` skill, or the project's dev script. Sign in and open the dashboard
 - The recent activity list populates as doorbell events arrive.
 - Leave it running ~2 minutes: the sparkline stays flat and the card does not flicker, confirming no spurious `change` frames.
 
-- [ ] **Step 4: Commit any fixes**
+- [x] **Step 4: Commit any fixes**
 
 If verification turns up defects, fix them with a test that reproduces the defect first.
 
@@ -1075,3 +1075,32 @@ If verification turns up defects, fix them with a test that reproduces the defec
 **Type consistency.** `gained24h`, `gainedStream`, `spark` are declared in Task 3 and consumed under those exact names in Tasks 6 and 8. `balanceAt`/`seriesSince` (Task 1) are called with matching signatures in Task 3. `downsample(samples, fromTs, toTs, buckets?)` (Task 2) matches its Task 3 call site. `Sparkline` takes `values` in both Task 5 and Task 6.
 
 **Known follow-ups, deliberately out of scope.** The events feed does not live-update (it fetches once on mount); wiring it to SSE is a separate change. The sparkline has no hover detail — that belongs to the chart page you have deferred.
+
+---
+
+## Execution record — 2026-09-05
+
+All 9 tasks executed inline, TDD, committed to `main` (2371e43..3a0bf4a).
+
+**Verification:** backend 203 tests, frontend 95 tests, both apps typecheck
+and build clean. Task 9 was carried out against the real `.devdata/history.db`
+(19 snapshots, 132 events) rather than the running UI:
+
+- Live data: `gained24h` correctly `null` for both streamers (oldest snapshot
+  is 1.44h old, so no 24h baseline exists) and sparklines render 24 points,
+  back-filled flat then rising — 300→540 and 300→480.
+- Real kdrkitten series replayed stretched over 30h: `gained24h` +220 → +380;
+  stream anchor `null` offline → `0` on going live → `+160` after earning →
+  `null` again on going offline.
+- Ten idle refreshes at the 60s cadence emitted 0 `change` frames, confirming
+  no derived field encodes wall-clock time.
+
+**Deviation from plan:** Task 3 added a `RawStreamerState` type
+(`Omit<StreamerState, "gained24h" | "gainedStream" | "spark">`) for the Python
+helper's payload, which the plan did not anticipate. Without it the helper
+response was typed as carrying fields it does not send, and every
+`server.test.ts` fixture would have needed padding with placeholder values.
+
+**Defect found and fixed during Task 8:** `EventsFeed` crashed the whole
+dashboard when handed a 200 whose body has no `events` key — the `.catch`
+guarded only rejected requests. Now shape-checked, with a regression test.
