@@ -1,4 +1,4 @@
-import { Alert, Radio, Stack, Switch, Title } from "@mantine/core";
+import { Alert, Card, Radio, Stack, Switch } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { PendingBar } from "../components/PendingBar.js";
@@ -40,24 +40,28 @@ export function Settings() {
 
   return (
     <Stack pb={80}>
-      <Title order={2}>Settings</Title>
       {error && <Alert role="alert" color="red">{error}</Alert>}
-      <Switch
-        label="Mine my followed channels"
-        description="Adds every channel you follow on Twitch to the mining list."
-        checked={draft.followers}
-        onChange={(e) => setDraft({ ...draft, followers: e.currentTarget.checked })}
-      />
-      <Radio.Group
-        label="Follower order"
-        value={draft.followersOrder}
-        onChange={(value) => setDraft({ ...draft, followersOrder: value })}
-      >
-        <Stack gap="xs" mt="xs">
-          <Radio value="ASC" label="Oldest first" />
-          <Radio value="DESC" label="Newest first" />
-        </Stack>
-      </Radio.Group>
+      <Card withBorder padding="md">
+        <Switch
+          label="Mine my followed channels"
+          description="Adds every channel you follow on Twitch to the mining list."
+          checked={draft.followers}
+          onChange={(e) => setDraft({ ...draft, followers: e.currentTarget.checked })}
+        />
+      </Card>
+      <Card withBorder padding="md">
+        <Radio.Group
+          label="Follower order"
+          description="Which followed channels the miner reaches first."
+          value={draft.followersOrder}
+          onChange={(value) => setDraft({ ...draft, followersOrder: value })}
+        >
+          <Stack gap="xs" mt="sm">
+            <Radio value="ASC" label="Oldest first" />
+            <Radio value="DESC" label="Newest first" />
+          </Stack>
+        </Radio.Group>
+      </Card>
       <PendingBar count={changed ? 1 : 0} onApply={() => void apply()} busy={busy} />
     </Stack>
   );

@@ -1,5 +1,5 @@
 import {
-  Alert, Anchor, Button, Card, Code, Stack, Text, TextInput, Title,
+  Alert, Anchor, Button, Card, Group, Stack, Text, TextInput,
 } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
@@ -85,7 +85,6 @@ export function TwitchLogin() {
 
   return (
     <Stack>
-      <Title order={2}>Twitch account</Title>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       {progress?.stage === "error" && (
         <Alert role="alert" color="red">{progress.error}</Alert>
@@ -93,18 +92,44 @@ export function TwitchLogin() {
       {progress?.stage === "ok" && (
         <Text>Signed in as {progress.username}</Text>
       )}
-      {progress?.stage === "pending" && <Text>Waiting for you to enter the code…</Text>}
+      {progress?.stage === "pending" && (
+        <Group gap="xs">
+          <span
+            style={{
+              width: 8, height: 8, borderRadius: "50%",
+              background: "var(--tw-purple)", animation: "tw-pulse 1.6s ease-in-out infinite",
+            }}
+          />
+          <Text size="sm" c="dimmed">Waiting for you to enter the code…</Text>
+        </Group>
+      )}
       {(progress?.stage === "code" || progress?.stage === "pending")
         && progress.userCode && progress.verificationUri && (
-        <Card withBorder>
-          <Stack>
-            <Text>Open{" "}
+        <Card
+          withBorder
+          padding="lg"
+          style={{ borderColor: "var(--tw-purple)", background: "rgba(145,71,255,0.06)" }}
+        >
+          <Stack align="center" gap="sm">
+            <Text size="sm">Open{" "}
               <Anchor href={progress.verificationUri} target="_blank" rel="noreferrer">
                 {progress.verificationUri.replace("https://www.", "")}
               </Anchor>{" "}
               and enter this code:
             </Text>
-            <Code fz="xl">{progress.userCode}</Code>
+            <Text
+              ff="monospace" fw={700}
+              style={{ fontSize: 34, letterSpacing: "0.18em" }}
+            >
+              {progress.userCode}
+            </Text>
+            <Button
+              size="xs" variant="light"
+              onClick={() => void navigator.clipboard?.writeText(progress.userCode!)}
+            >
+              Copy code
+            </Button>
+            {progress.expiresAt !== undefined && <Countdown expiresAt={progress.expiresAt} />}
           </Stack>
         </Card>
       )}
@@ -124,5 +149,22 @@ export function TwitchLogin() {
         </>
       )}
     </Stack>
+  );
+}
+
+/** Ticks so the operator can tell a fresh code from a dead one. */
+function Countdown({ expiresAt }: { expiresAt: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+  const mm = Math.floor(left / 60);
+  const ss = String(left % 60).padStart(2, "0");
+  return (
+    <Text size="xs" c={left < 60 ? "orange" : "dimmed"} data-testid="code-countdown">
+      {left === 0 ? "Code expired — start again" : `Expires in ${mm}:${ss}`}
+    </Text>
   );
 }

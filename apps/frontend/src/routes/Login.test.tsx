@@ -1,8 +1,8 @@
-import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { TwitchLogin } from "./Login.js";
+import { renderApp } from "../test-utils.js";
 
 function stub(status: unknown) {
   vi.stubGlobal("fetch", vi.fn(async () => ({
@@ -16,7 +16,7 @@ function stub(status: unknown) {
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const view = () => render(<MantineProvider><TwitchLogin /></MantineProvider>);
+const view = () => renderApp(<TwitchLogin />);
 
 test("offers to start login when there is no session", async () => {
   stub({ login: null, miner: "STOPPED" });
@@ -138,4 +138,32 @@ test("keeps the code on screen while polling is pending", async () => {
   expect(await screen.findByText("ABCD1234")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /twitch.tv\/activate/i })).toBeInTheDocument();
   expect(screen.getByText(/waiting/i)).toBeInTheDocument();
+});
+
+test("counts down how long the device code stays valid", async () => {
+  // expiresAt was fetched and never shown, so a dead code looked exactly
+  // like a fresh one.
+  stub({
+    login: {
+      stage: "code",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://www.twitch.tv/activate",
+      expiresAt: Date.now() + 300_000,
+    },
+  });
+  view();
+  expect(await screen.findByTestId("code-countdown")).toHaveTextContent(/4:5\d|5:00/);
+});
+
+test("says so plainly once the code has expired", async () => {
+  stub({
+    login: {
+      stage: "code",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://www.twitch.tv/activate",
+      expiresAt: 1,
+    },
+  });
+  view();
+  expect(await screen.findByTestId("code-countdown")).toHaveTextContent(/expired/i);
 });
