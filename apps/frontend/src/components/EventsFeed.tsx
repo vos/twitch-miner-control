@@ -24,10 +24,16 @@ function ago(ts: number, now: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-export function EventsFeed() {
+export function EventsFeed({ enabled }: { enabled: boolean }) {
   const [events, setEvents] = useState<MinerEvent[] | null>(null);
 
   useEffect(() => {
+    // Switching the feed off must stop the traffic, not just hide the
+    // panel: this effect owns the only /api/events caller in the app.
+    if (!enabled) {
+      setEvents(null);
+      return;
+    }
     let alive = true;
     const load = () =>
       api.get<{ events?: MinerEvent[] }>("/api/events")
@@ -48,8 +54,9 @@ export function EventsFeed() {
     // Logs route's interval.
     const timer = setInterval(load, 5000);
     return () => { alive = false; clearInterval(timer); };
-  }, []);
+  }, [enabled]);
 
+  if (!enabled) return null;
   if (events === null) return null;
 
   const now = Date.now();

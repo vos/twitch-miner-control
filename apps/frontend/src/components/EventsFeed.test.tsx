@@ -11,7 +11,7 @@ function stub(body: unknown, ok = true) {
 
 afterEach(() => vi.unstubAllGlobals());
 
-const view = () => render(<MantineProvider><EventsFeed /></MantineProvider>);
+const view = () => render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
 
 test("renders the miner's own line, which names the streamer", async () => {
   // The whole point of the panel: "streamer online" alone said nothing
@@ -57,4 +57,33 @@ test("stays silent when a 200 carries the wrong shape", async () => {
   // content rather than an empty container.
   expect(screen.queryByText(/recent activity/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/no activity yet/i)).not.toBeInTheDocument();
+});
+
+test("does not touch the network when the feed is switched off", async () => {
+  // The requirement is that polling stops, not that the panel is hidden.
+  // A component that renders nothing while still fetching every 5s would
+  // pass a DOM-absence assertion and fail the actual ask.
+  const fetchMock = vi.fn(async () => ({
+    ok: true, status: 200, json: async () => ({ events: [] }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MantineProvider><EventsFeed enabled={false} /></MantineProvider>);
+
+  // Give any mount effect a chance to fire before asserting silence.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(screen.queryByText(/recent activity/i)).not.toBeInTheDocument();
+});
+
+test("polls while the feed is switched on", async () => {
+  const fetchMock = vi.fn(async () => ({
+    ok: true, status: 200, json: async () => ({ events: [] }),
+  }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+
+  await screen.findByText(/no activity yet/i);
+  expect(fetchMock).toHaveBeenCalledWith("/api/events", expect.anything());
 });
