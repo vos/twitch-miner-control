@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
 import { downsample } from "./gains.js";
+import { normaliseUsername } from "./roster.js";
 
 export interface StreamerState {
   username: string;
@@ -28,12 +29,18 @@ export interface StreamerState {
   gainedStream: number | null;
   /** Downsampled 24h balances for the card sparkline. */
   spark: number[];
+  /**
+   * Twitch CDN profile picture URL, or null when the channel has none or
+   * we have not resolved it yet. A stable string, so it can join the
+   * change comparison without waking SSE clients every tick.
+   */
+  avatarUrl: string | null;
 }
 
 /** What the Python helper reports, before this service derives the rest. */
 export type RawStreamerState = Omit<
   StreamerState,
-  "gained24h" | "gainedSince" | "gainedStream" | "spark"
+  "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
 >;
 
 const DAY_MS = 86_400_000;
@@ -53,6 +60,11 @@ export interface StateServiceDeps {
   debounceMs?: number;
   staleAfterMs?: number;
   now?: () => number;
+  /**
+   * Optional so tests (and a boot before the cache exists) can run
+   * without one. Absent, every streamer simply reports a null avatar.
+   */
+  avatars?: { resolve(logins: string[]): Promise<Map<string, string | null>> };
 }
 
 export class StateService extends EventEmitter {
@@ -186,6 +198,16 @@ export class StateService extends EventEmitter {
       const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
       );
+      // Resolved after the state response is in hand, so an avatar lookup
+      // can never widen the balance poll it rides along with. Failures are
+      // swallowed here as well as inside AvatarCache: this must degrade to
+      // monograms, never to a stale or errored snapshot.
+      const avatars = this.deps.avatars
+        ? await this.deps.avatars
+            .resolve(data.streamers.map((s) => s.username))
+            .catch(() => new Map<string, string | null>())
+        : new Map<string, string | null>();
+
       const before = JSON.stringify(this.streamers);
       const previous = new Map(this.streamers.map((s) => [s.username, s]));
       const at = this.now();
@@ -221,6 +243,7 @@ export class StateService extends EventEmitter {
               ? null
               : s.points - anchor,
           spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
+          avatarUrl: avatars.get(normaliseUsername(s.username)) ?? null,
         };
       });
 

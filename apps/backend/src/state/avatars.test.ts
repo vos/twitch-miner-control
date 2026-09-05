@@ -12,7 +12,10 @@ beforeEach(() => {
 
 function make(responses: unknown[]) {
   const queue = [...responses];
-  const request = vi.fn(async () => {
+  // Params are declared even though the fake ignores them: mock.calls is
+  // typed from this signature, and a bare `async ()` makes it an empty
+  // tuple that tsc refuses to index in the batch-cap test below.
+  const request = vi.fn(async (_op: string, _params?: object) => {
     const next = queue.shift();
     if (next instanceof Error) throw next;
     return next;

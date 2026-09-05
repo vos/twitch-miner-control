@@ -446,3 +446,47 @@ test("does not emit a change frame when only wall-clock time has passed", async 
   await service.refresh();
   expect(changes).not.toHaveBeenCalled();
 });
+
+test("attaches the resolved avatar url to each streamer", async () => {
+  const { service } = make([alpha(100)]);
+  (service as never as { deps: { avatars: unknown } }).deps.avatars = {
+    resolve: async () => new Map([["alpha", "https://cdn/a.png"]]),
+  };
+  await service.refresh();
+  expect(service.snapshot().streamers[0].avatarUrl).toBe("https://cdn/a.png");
+});
+
+test("avatarUrl is null when no avatar cache is wired in", async () => {
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].avatarUrl).toBe(null);
+});
+
+test("a rejecting avatar cache leaves the balances intact and the state clean", async () => {
+  // The dashboard's actual job is the numbers. An avatar lookup that
+  // blows up must not mark the snapshot stale or blank the roster.
+  const { service } = make([alpha(100)]);
+  (service as never as { deps: { avatars: unknown } }).deps.avatars = {
+    resolve: async () => { throw new Error("cache exploded"); },
+  };
+  await service.refresh();
+  const snapshot = service.snapshot();
+  expect(snapshot.streamers[0].points).toBe(100);
+  expect(snapshot.streamers[0].avatarUrl).toBe(null);
+  expect(snapshot.error).toBe(null);
+  expect(snapshot.stale).toBe(false);
+});
+
+test("a stable avatar url does not emit a change frame on every tick", async () => {
+  // avatarUrl joins the JSON.stringify change comparison, so a value that
+  // varied per tick would wake every SSE client once a minute forever.
+  const { service } = make([alpha(100), alpha(100)]);
+  (service as never as { deps: { avatars: unknown } }).deps.avatars = {
+    resolve: async () => new Map([["alpha", "https://cdn/a.png"]]),
+  };
+  const changes = vi.fn();
+  await service.refresh();
+  service.on("change", changes);
+  await service.refresh();
+  expect(changes).not.toHaveBeenCalled();
+});

@@ -12,11 +12,13 @@ import { resolveStopGraceMs } from "./config/stopGrace.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
+import { Profiles } from "./db/profiles.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
 import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
+import { AvatarCache } from "./state/avatars.js";
 import { resolveRoster } from "./state/roster.js";
 import { StateService } from "./state/service.js";
 
@@ -115,10 +117,13 @@ function resolveStreamers(): Promise<string[]> {
   });
 }
 
+const avatars = new AvatarCache({ profiles: new Profiles(db), client: helper });
+
 const stateService = new StateService({
   client: helper,
   history,
   getStreamers: resolveStreamers,
+  avatars,
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
