@@ -169,3 +169,121 @@ test("earliestSample is per streamer", () => {
   history.recordPoints("beta", 700, 2000);
   expect(history.earliestSample("beta")).toEqual({ ts: 2000, balance: 700 });
 });
+
+test("opens one session per stream and ignores repeat sightings", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 500);
+  history.openStreamerSession("alpha", "S1", 1000, 900);
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: null }]);
+  // The anchor is the FIRST sighting's balance. A later tick must not
+  // move it, or the per-stream gain would reset to zero every poll.
+  expect(history.streamAnchor("alpha", "S1")).toBe(500);
+});
+
+test("records a stream joined late with its true start", () => {
+  // We first looked at 9000, but Twitch says the stream began at 1000.
+  history.openStreamerSession("alpha", "S1", 1000, 500);
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: null }]);
+});
+
+test("closes sessions other than the live one", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recordPoints("alpha", 10, 5000);
+  history.closeStreamerSessionsExcept("alpha", null, 5000);
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: 5000 }]);
+});
+
+test("leaves the live session open", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.closeStreamerSessionsExcept("alpha", "S1", 5000);
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: null }]);
+});
+
+test("closes a previous stream when a new one starts", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recordPoints("alpha", 10, 4000);
+  history.openStreamerSession("alpha", "S2", 6000, 20);
+  history.closeStreamerSessionsExcept("alpha", "S2", 6000);
+  expect(history.streamerSpans("alpha")).toEqual([
+    { start: 1000, end: 4000 },
+    { start: 6000, end: null },
+  ]);
+});
+
+test("reports when a streamer was last live", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recordPoints("alpha", 10, 5000);
+  history.closeStreamerSessionsExcept("alpha", null, 5000);
+  expect(history.lastLive("alpha")).toBe(5000);
+});
+
+test("reports no last-live while the streamer is live", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  expect(history.lastLive("alpha")).toBeNull();
+});
+
+test("reports no last-live for a streamer never seen live", () => {
+  expect(history.lastLive("nobody")).toBeNull();
+});
+
+test("reports no anchor for an unknown stream", () => {
+  expect(history.streamAnchor("alpha", "nope")).toBeNull();
+});
+
+test("tracks miner sessions with a heartbeat", () => {
+  history.openMinerSession(1000);
+  history.beatMinerSession(2000);
+  history.closeMinerSession(3000);
+  expect(history.minerSpans()).toEqual([{ start: 1000, end: 3000 }]);
+});
+
+test("closes a killed miner session at its heartbeat, not at boot", () => {
+  // The process died after the 2000 heartbeat; boot happens much later.
+  // Closing at boot would invent hours of mining that never happened.
+  history.openMinerSession(1000);
+  history.beatMinerSession(2000);
+  history.recoverOpenSessions();
+  expect(history.minerSpans()).toEqual([{ start: 1000, end: 2000 }]);
+});
+
+test("leaves streamer sessions open on recovery", () => {
+  // They are keyed on Twitch's stream id, so the first post-boot poll
+  // either matches the row or closes it. Nothing to guess at here.
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recoverOpenSessions();
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: null }]);
+});
+
+test("closes a stream that ended during downtime at our last evidence", () => {
+  // We recorded points up to 4000, then died. The stream is not live on
+  // the next boot, so it must close where our evidence stops -- not at
+  // the post-boot poll, which would bill the whole outage as online.
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recordPoints("alpha", 10, 4000);
+  history.closeStreamerSessionsExcept("alpha", null, 99_000);
+  expect(history.streamerSpans("alpha")).toEqual([{ start: 1000, end: 4000 }]);
+});
+
+test("closes a stream with no snapshots at its own start", () => {
+  // No evidence we ever watched it. The row closes at its start, so it
+  // survives as a zero-length span rather than staying open forever
+  // claiming the channel is live. clip() drops it from every total.
+  history.openStreamerSession("beta", "S9", 1000, 0);
+  history.closeStreamerSessionsExcept("beta", null, 99_000);
+  expect(history.streamerSpans("beta")).toEqual([{ start: 1000, end: 1000 }]);
+});
+
+test("never closes a session before it started", () => {
+  // Snapshots predating the stream must not produce a negative span.
+  history.recordPoints("gamma", 5, 500);
+  history.openStreamerSession("gamma", "S1", 1000, 0);
+  history.closeStreamerSessionsExcept("gamma", null, 99_000);
+  expect(history.streamerSpans("gamma")).toEqual([{ start: 1000, end: 1000 }]);
+});
+
+test("filters spans by window", () => {
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.recordPoints("alpha", 10, 2000);
+  history.closeStreamerSessionsExcept("alpha", null, 2000);
+  expect(history.streamerSpans("alpha", 5000)).toEqual([]);
+  expect(history.streamerSpans("alpha", 1500)).toHaveLength(1);
+});
