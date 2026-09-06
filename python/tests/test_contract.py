@@ -4,6 +4,7 @@ If this fails after bumping vendor/miner, read
 docs/superpowers/specs/2026-08-29-twitch-miner-web-ui-design.md
 section "Key findings from upstream source" before changing anything.
 """
+import datetime
 import inspect
 import os
 import pathlib
@@ -191,3 +192,20 @@ def test_login_prefers_saved_cookies_over_any_login_flow():
     source = inspect.getsource(Twitch.login)
     assert "os.path.isfile(self.cookies_file)" in source
     assert "load_cookies" in source
+
+
+def test_stream_response_exposes_id_and_created_at():
+    """helpers/state.py:_one() reads both off the live query's response.
+
+    If this fails after bumping vendor/miner, the response shape changed
+    and the streamer cards' uptime figures are affected. created_at must
+    stay a parsed datetime, not a raw string: state.py converts it with
+    .timestamp(), which a str does not have.
+    """
+    from TwitchChannelPointsMiner.classes.gql.data.response.WithIsStreamLiveQuery import (
+        Stream,
+    )
+
+    assert params(Stream.__init__) == ["self", "_id", "created_at"]
+    stream = Stream(_id="s1", created_at=datetime.datetime.now(datetime.timezone.utc))
+    assert isinstance(stream.created_at, datetime.datetime)

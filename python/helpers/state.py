@@ -237,16 +237,35 @@ class Handler:
         community = getattr(context, "community", None)
         if community is None:
             return {"username": username, "channelId": None, "displayName": None,
-                    "points": None, "isOnline": None, "pointsEnabled": None}
+                    "points": None, "isOnline": None, "pointsEnabled": None,
+                    "streamId": None, "streamStartedAt": None}
         channel = community.channel
         live = self.session.gql.with_is_stream_live_query(channel.id)
+        stream = live.user.stream
         return {
             "username": username,
             "channelId": channel.id,
             "displayName": community.display_name,
             "points": channel.edge.community_points.balance,
-            "isOnline": live.user.stream is not None,
+            "isOnline": stream is not None,
             "pointsEnabled": channel.community_points_settings.is_enabled,
+            # Twitch's own stream identity and start time. This query
+            # already returned both and we reduced the whole response to a
+            # boolean; the start time is authoritative in a way an
+            # observed transition is not, since it is right the first time
+            # we look at a stream already in progress.
+            #
+            # created_at arrives as a timezone-aware datetime (upstream
+            # parses the Z-suffixed UTC string with expect_iso_8601), so
+            # .timestamp() is unambiguous. It is converted here rather
+            # than passed through because datetime is not JSON
+            # serialisable and would raise in serve()'s json.dumps.
+            "streamId": stream.id if stream is not None else None,
+            "streamStartedAt": (
+                int(stream.created_at.timestamp() * 1000)
+                if stream is not None
+                else None
+            ),
         }
 
 

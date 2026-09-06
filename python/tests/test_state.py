@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 import os
@@ -31,11 +32,16 @@ def points_response(balance, channel_id="42", enabled=True):
 
 
 class FakeGQL:
-    def __init__(self, balances=None, live=None, follows=None, avatars=None):
+    def __init__(self, balances=None, live=None, follows=None, avatars=None,
+                 stream_id="s1", started_at=None):
         self.balances = balances or {}
         self.live = live or {}
         self.follows = follows or []
         self.avatars = avatars or {}
+        self.stream_id = stream_id
+        self.started_at = started_at or datetime.datetime(
+            2026, 9, 6, 8, 15, tzinfo=datetime.timezone.utc
+        )
 
     def video_player_stream_info_overlay_channel(self, username):
         value = self.avatars.get(username)
@@ -49,7 +55,14 @@ class FakeGQL:
         return points_response(self.balances[username])
 
     def with_is_stream_live_query(self, channel_id):
-        stream = SimpleNamespace(id="s1") if self.live.get(channel_id) else None
+        # created_at is what upstream's parser produces: a timezone-aware
+        # datetime, not a string. state.py must convert it, since datetime
+        # is not JSON serialisable.
+        stream = (
+            SimpleNamespace(id=self.stream_id, created_at=self.started_at)
+            if self.live.get(channel_id)
+            else None
+        )
         return SimpleNamespace(user=SimpleNamespace(id=channel_id, stream=stream))
 
     def get_id_from_login(self, username):
@@ -77,6 +90,8 @@ def test_state_returns_exact_integer_balance():
         "points": 123456,
         "isOnline": True,
         "pointsEnabled": True,
+        "streamId": "s1",
+        "streamStartedAt": 1788682500000,
     }
 
 
@@ -534,3 +549,43 @@ def test_avatars_requires_the_streamers_field():
     out = h.handle({"id": 1, "op": "avatars"})
     assert out["ok"] is False
     assert out["code"] == "BAD_REQUEST"
+
+
+def test_one_reports_stream_identity_and_start():
+    """The live query already carries the stream's id and createdAt.
+
+    Twitch's own start time beats deriving one from observed transitions:
+    it is correct the first time we look at a stream already running.
+    """
+    h = handler(
+        balances={"alpha": 10},
+        live={"42": True},
+        stream_id="STREAM-1",
+        started_at=datetime.datetime(2026, 9, 6, 8, 15, tzinfo=datetime.timezone.utc),
+    )
+    out = h._one("alpha")
+    assert out["streamId"] == "STREAM-1"
+    assert out["streamStartedAt"] == 1788682500000
+    assert out["isOnline"] is True
+
+
+def test_one_reports_nulls_when_offline():
+    h = handler(balances={"alpha": 10}, live={"42": False})
+    out = h._one("alpha")
+    assert out["streamId"] is None
+    assert out["streamStartedAt"] is None
+    assert out["isOnline"] is False
+
+
+def test_stream_start_is_json_serialisable():
+    """A datetime here would raise when serve() writes the response."""
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    json.dumps(h.handle({"id": 1, "op": "state", "streamers": ["alpha"]}))
+
+
+def test_unknown_channel_returns_the_same_keys():
+    """Every path through _one must agree on its shape."""
+    h = handler(balances={})
+    out = h._one("ghost")
+    assert out["streamId"] is None
+    assert out["streamStartedAt"] is None
