@@ -3,6 +3,13 @@ interface SparklineProps {
   width?: number;
   height?: number;
   fill?: boolean;
+  /**
+   * Marks the rendered SVG. Optional so callers that do not need to
+   * assert on the line -- most of them -- stay unchanged; the attribute
+   * lands on the svg itself rather than a wrapper, so its presence
+   * tracks whether a line was actually drawn.
+   */
+  "data-testid"?: string;
 }
 
 /** Half the stroke width, so a line on the boundary is not clipped. */
@@ -20,7 +27,9 @@ const INSET = 1;
  * space, while the element itself fills its container. A fixed pixel
  * width painted past the edge of any card narrower than that value.
  */
-export function Sparkline({ values, width = 88, height = 24, fill = false }: SparklineProps) {
+export function Sparkline(
+  { values, width = 88, height = 24, fill = false, ...rest }: SparklineProps,
+) {
   if (values.length < 2) return null;
 
   const min = Math.min(...values);
@@ -62,6 +71,7 @@ export function Sparkline({ values, width = 88, height = 24, fill = false }: Spa
       aria-hidden="true"
       focusable="false"
       style={{ display: "block" }}
+      {...rest}
     >
       {fill && (
         <polygon points={area} fill="var(--tw-success)" fillOpacity="0.12" />

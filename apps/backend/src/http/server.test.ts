@@ -38,6 +38,9 @@ async function make() {
     // The dashboard's uptime timer ticks from this, so the API has to
     // carry it; a fixed value keeps the assertions exact.
     runningSince: 1_700_000_000_000 as number | null,
+    // The header's process stats are read for this pid. It is the test
+    // runner's own pid so the route reads a real, live /proc entry.
+    livePids: () => [process.pid],
   };
   const client = {
     request: vi.fn(async () => ({ streamers: [] })),
@@ -183,6 +186,21 @@ test("POST /api/config/apply with nothing staged does not restart", async () => 
 test("GET /api/status reports supervisor state and staleness", async () => {
   const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
   expect(res.json()).toMatchObject({ miner: "RUNNING", stale: true });
+});
+
+test("GET /api/status carries process stats for the live miner", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  // Read from the test runner's own pid, so this asserts a real /proc
+  // read rather than a fixture: any live process has resident memory.
+  expect(res.json().stats.rssBytes).toBeGreaterThan(0);
+});
+
+test("GET /api/status reports no stats when no miner is running", async () => {
+  ctx.supervisor.livePids = () => [];
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  // The header hides the readout on null rather than rendering a zero,
+  // which would look like a live miner using no CPU.
+  expect(res.json().stats).toBeNull();
 });
 
 test("GET /api/status derives loginRequired when no Twitch account is set up", async () => {

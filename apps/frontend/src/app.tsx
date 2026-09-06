@@ -6,6 +6,7 @@ import { useLiveState } from "./api/useLiveState.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { Sidebar } from "./components/Sidebar.js";
+import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
@@ -31,6 +32,9 @@ export function App() {
   // true until the first poll answers, matching the server's own
   // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);
+  // The newest process-stats reading. The rolling window it feeds lives
+  // in a ref (see useRollingHistory), so only this one value is state.
+  const [stats, setStats] = useState<ProcSample | null>(null);
   const [opened, { toggle, close }] = useDisclosure(false);
   // Drives the live-count badge in the nav and the header's connection
   // dot. `connected` is computed by the hook from EventSource's own
@@ -40,18 +44,26 @@ export function App() {
 
   useEffect(() => {
     const load = () =>
-      api.get<{ miner: string; loginRequired: boolean; startedAt: number | null }>(
-        "/api/status",
-      )
+      api.get<{
+        miner: string;
+        loginRequired: boolean;
+        startedAt: number | null;
+        stats: { cpu: number | null; rssBytes: number } | null;
+      }>("/api/status")
         .then((s) => {
           setMiner({ state: s.miner, startedAt: s.startedAt });
           setLoginRequired(s.loginRequired);
+          // Stamped on arrival: the history uses this to tell a fresh
+          // reading from a re-render carrying the same one.
+          setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
         })
         .catch(() => undefined);
     void load();
     const timer = setInterval(load, 5000);
     return () => clearInterval(timer);
   }, []);
+
+  const statsHistory = useRollingHistory(stats);
 
   const liveCount = snapshot?.streamers.filter((s) => s.isOnline).length ?? 0;
 
@@ -86,7 +98,11 @@ export function App() {
                   }}
                 />
               </Tooltip>
-              <MinerStatusBadge state={miner.state} startedAt={miner.startedAt} />
+              <MinerStatusBadge
+                state={miner.state}
+                startedAt={miner.startedAt}
+                history={statsHistory}
+              />
             </Group>
           </Group>
         </AppShell.Header>

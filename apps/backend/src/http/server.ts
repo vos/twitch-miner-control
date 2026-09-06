@@ -7,6 +7,7 @@ import type { History } from "../db/history.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
 import type { LoginStatus } from "../helpers/loginStatus.js";
 import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
+import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { StateService } from "../state/service.js";
 import { registerAuth } from "./auth.js";
@@ -243,6 +244,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return { applied: true };
     });
 
+    // Held across requests, not built per call: CPU percent is a delta
+    // between two readings, so the previous sample has to survive from
+    // one status poll to the next (see ProcStats).
+    const procStats = new ProcStats();
+
     instance.get("/api/status", async () => {
       const snapshot = deps.stateService.snapshot();
       // Two independent reasons to send the user to the sign-in screen: no
@@ -251,6 +257,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       // *runner*'s progress cannot answer this.
       const loginRequired =
         loadConfig(deps.configPath).username === "" || deps.loginStatus.required;
+      const livePid = deps.supervisor.livePids()[0];
       return {
         miner: deps.supervisor.state,
         // Null unless a live miner process exists -- see Supervisor#runningSince.
@@ -258,6 +265,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         // server-computed elapsed figure, so the timer stays smooth between
         // polls instead of jumping once every poll interval.
         startedAt: deps.supervisor.runningSince,
+        // CPU and memory for the miner process, or null when nothing is
+        // running -- and equally when /proc cannot be read, which is how
+        // this degrades on a non-Linux dev machine instead of failing
+        // the whole status route over a decorative readout.
+        stats: livePid === undefined ? null : procStats.sample(livePid, Date.now()),
         loginRequired,
         login: deps.loginRunner.current,
         lastUpdated: snapshot.lastUpdated,
