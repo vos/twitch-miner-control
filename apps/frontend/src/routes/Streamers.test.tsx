@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Streamers } from "./Streamers.js";
-import { renderApp } from "../test-utils.js";
+import { renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const config = {
   version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -37,7 +37,7 @@ beforeEach(() => {
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
   }));
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); restoreRects(); });
 
 const view = () => renderApp(<Streamers />);
 
@@ -103,13 +103,98 @@ test("rejects adding a duplicate", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(/already/i);
 });
 
-test("moving a streamer up reorders priority and stages a change", async () => {
+/**
+ * Drives one pointer drag from `handle` by `dy` pixels.
+ *
+ * dnd-kit's PointerSensor only begins a drag once the pointer has travelled
+ * past its activation distance, so the move is sent in two steps: one to get
+ * over the threshold and one to land on the target row.
+ */
+async function dragBy(handle: HTMLElement, dy: number) {
+  const user = userEvent.setup();
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+    { target: handle, coords: { x: 10, y: 10 + Math.sign(dy) * 20 } },
+    { target: handle, coords: { x: 10, y: 10 + dy } },
+    { keys: "[/MouseLeft]", target: handle, coords: { x: 10, y: 10 + dy } },
+  ]);
+}
+
+test("dragging a streamer down reorders priority and stages a change", async () => {
+  stubRowRects();
   view();
   await screen.findAllByTestId("streamer-row");
-  await userEvent.click(screen.getAllByRole("button", { name: /move up/i })[1]);
+
+  // alpha is first; drag it one row (50px) down past beta's midpoint.
+  const handles = screen.getAllByRole("button", { name: /reorder/i });
+  await dragBy(handles[0], 60);
+
   const rows = screen.getAllByTestId("streamer-row");
   expect(rows[0].textContent).toContain("beta");
+  expect(rows[1].textContent).toContain("alpha");
   expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
+});
+
+test("the drag handle reorders from the keyboard alone", async () => {
+  stubRowRects();
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  // Space lifts, arrow moves, space drops -- the path a keyboard user takes
+  // now that the move-up arrow is gone.
+  screen.getAllByRole("button", { name: /reorder/i })[0].focus();
+  await userEvent.keyboard("{ }");
+  await userEvent.keyboard("{ArrowDown}");
+  await userEvent.keyboard("{ }");
+
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("beta");
+  expect(rows[1].textContent).toContain("alpha");
+});
+
+test("a drag cancelled mid-flight leaves the order alone", async () => {
+  stubRowRects();
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  screen.getAllByRole("button", { name: /reorder/i })[0].focus();
+  await userEvent.keyboard("{ }");
+  await userEvent.keyboard("{ArrowDown}");
+  await userEvent.keyboard("{Escape}");
+
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("alpha");
+  expect(rows[1].textContent).toContain("beta");
+  expect(screen.queryByTestId("pending-bar")).not.toBeInTheDocument();
+});
+
+test("the watching tags follow the rows to their new positions", async () => {
+  // The top two are what the miner actually watches, so the tag has to track
+  // the drag rather than the order the config arrived in.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/config") {
+      return { ok: true, status: 200, json: async () => ({
+        ...config,
+        streamers: [
+          { username: "aaa", enabled: true, settings: {} },
+          { username: "bbb", enabled: true, settings: {} },
+          { username: "ccc", enabled: true, settings: {} },
+        ],
+      }) };
+    }
+    throw new Error("no live state");
+  }));
+  stubRowRects();
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  // Drag ccc (last) to the top: two rows up, 100px.
+  await dragBy(screen.getAllByRole("button", { name: /reorder/i })[2], -100);
+
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("ccc");
+  expect(rows[0].textContent).toContain("watching");
+  expect(rows[2].textContent).not.toContain("watching");
 });
 
 test("adding by pasted channel link looks up and stores the bare username", async () => {

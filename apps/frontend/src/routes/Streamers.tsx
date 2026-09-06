@@ -1,11 +1,18 @@
+import { Alert, Stack, Text, Title } from "@mantine/core";
 import {
-  ActionIcon, Alert, Badge, Card, Group, Stack, Switch, Text, Title,
-} from "@mantine/core";
+  DndContext, KeyboardSensor, PointerSensor, closestCenter,
+  type DragEndEvent, useSensor, useSensors,
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { AddStreamer } from "../components/AddStreamer.js";
 import { PendingBar } from "../components/PendingBar.js";
-import { StreamerAvatar } from "../components/StreamerAvatar.js";
+import { StreamerRow } from "../components/StreamerRow.js";
 
 interface StreamerEntry {
   username: string;
@@ -25,6 +32,14 @@ export function Streamers() {
   const [busy, setBusy] = useState(false);
 
   const [avatars, setAvatars] = useState<Map<string, string | null>>(new Map());
+
+  // An activation distance keeps a click on the grip from being read as a
+  // drag; the keyboard sensor is the only reorder path for a keyboard user
+  // now that the move-up arrow is gone.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   useEffect(() => {
     // Pictures only. A failure here must not touch `loadError` -- the
@@ -91,19 +106,13 @@ export function Streamers() {
     setDraft({ ...draft, streamers });
   };
 
-  const moveUp = (index: number) => {
-    if (index === 0) return;
-    const streamers = [...draft.streamers];
-    [streamers[index - 1], streamers[index]] = [streamers[index], streamers[index - 1]];
-    setDraft({ ...draft, streamers });
-  };
-
-  const moveTo = (from: number, to: number) => {
-    if (from === to) return;
-    const streamers = [...draft.streamers];
-    const [moved] = streamers.splice(from, 1);
-    streamers.splice(to, 0, moved);
-    setDraft({ ...draft, streamers });
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    // No `over` means the drag was cancelled or released outside the list.
+    if (!over || active.id === over.id) return;
+    const from = draft.streamers.findIndex((s) => s.username === active.id);
+    const to = draft.streamers.findIndex((s) => s.username === over.id);
+    if (from === -1 || to === -1) return;
+    setDraft({ ...draft, streamers: arrayMove(draft.streamers, from, to) });
   };
 
   const apply = async () => {
@@ -125,65 +134,31 @@ export function Streamers() {
       <Text size="sm" c="dimmed">Order is priority — the miner watches the top two.</Text>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       <AddStreamer onAdd={add} />
-      <Stack gap={6}>
-        {draft.streamers.map((streamer, index) => (
-          <Card
-            withBorder
-            key={streamer.username}
-            data-testid="streamer-row"
-            padding="sm"
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData("text/plain", String(index))}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              moveTo(Number(e.dataTransfer.getData("text/plain")), index);
-            }}
-            style={index < 2
-              ? { background: "rgba(145,71,255,0.08)", borderColor: "var(--tw-purple)" }
-              : undefined}
-          >
-            <Group justify="space-between" wrap="nowrap">
-              <Group gap="sm" wrap="nowrap">
-                {/* The arrow stays: drag is mouse-only, and this is the
-                    keyboard-accessible path. */}
-                <ActionIcon
-                  variant="subtle" aria-label="Move up"
-                  onClick={() => moveUp(index)} disabled={index === 0}
-                >
-                  ↑
-                </ActionIcon>
-                <Text size="sm" c="dimmed" ff="monospace" w={20}>{index + 1}</Text>
-                <StreamerAvatar
-                  login={streamer.username}
-                  avatarUrl={avatars.get(streamer.username.toLowerCase()) ?? null}
-                  size={28}
-                />
-                <Text
-                  component="a"
-                  href={`https://twitch.tv/${streamer.username}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  fw={500}
-                  style={{ color: "inherit", textDecoration: "none" }}
-                >
-                  {streamer.username}
-                </Text>
-                {index < 2 && (
-                  <Badge size="xs" variant="light" color="twitch" data-testid="watching-tag">
-                    watching
-                  </Badge>
-                )}
-              </Group>
-              <Switch
-                checked={streamer.enabled}
-                onChange={() => toggle(index)}
-                aria-label={`Enable ${streamer.username}`}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={draft.streamers.map((s) => s.username)}
+          strategy={verticalListSortingStrategy}
+        >
+          <Stack gap={6}>
+            {draft.streamers.map((streamer, index) => (
+              <StreamerRow
+                key={streamer.username}
+                username={streamer.username}
+                enabled={streamer.enabled}
+                avatarUrl={avatars.get(streamer.username.toLowerCase()) ?? null}
+                index={index}
+                watching={index < 2}
+                onToggle={() => toggle(index)}
               />
-            </Group>
-          </Card>
-        ))}
-      </Stack>
+            ))}
+          </Stack>
+        </SortableContext>
+      </DndContext>
       <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );
