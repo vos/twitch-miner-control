@@ -307,3 +307,43 @@ test("no state emitted alongside a start time reports one for a process that is 
     else expect(frame.startedAt).toBeNull();
   }
 });
+
+test("records a miner session while running", async () => {
+  const open: number[] = [];
+  const close: number[] = [];
+  const s = make("normal", {
+    sessions: { open: (ts: number) => open.push(ts), close: (ts: number) => close.push(ts) },
+  });
+
+  await s.start();
+  expect(open).toHaveLength(1);
+  expect(close).toHaveLength(0);
+
+  await s.stop();
+  expect(close).toHaveLength(1);
+});
+
+test("closes the miner session when the miner crashes", async () => {
+  // The process is gone but the row must not stay open, or a crash would
+  // silently keep counting as mining time.
+  const close: number[] = [];
+  // The miner must live past fastExitMs so it actually reaches RUNNING --
+  // a faster exit is treated as an unstartable config and never opens a
+  // session in the first place.
+  const s = make("delayed_crash", {
+    sessions: { open: () => {}, close: (ts: number) => close.push(ts) },
+    fastExitMs: 100,
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "300" },
+  });
+  await s.start();
+  await settle(450);
+  expect(close.length).toBeGreaterThanOrEqual(1);
+});
+
+test("runs without a sessions port", async () => {
+  // The port is optional: the supervisor's own tests and any caller that
+  // does not care about uptime spans must still work.
+  const s = make("normal");
+  await s.start();
+  expect(s.state).toBe("RUNNING");
+});

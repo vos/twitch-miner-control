@@ -23,6 +23,13 @@ export interface SupervisorOptions {
    * and rationale).
    */
   crashWindowMs?: number;
+  /**
+   * Records miner uptime spans, so mining time can be told apart from a
+   * channel merely being live. A narrow port rather than the History
+   * itself: two methods is all this needs, and it keeps the supervisor's
+   * own tests free of a database.
+   */
+  sessions?: { open(ts: number): void; close(ts: number): void };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -126,7 +133,14 @@ export class Supervisor extends EventEmitter {
     // UI naively rendering "miner stopped" toast-per-event would spam
     // the operator.
     if (this.state === state) return;
+    const was = this.state;
     this.state = state;
+    // RUNNING is the only state in which the miner is actually mining, so
+    // the span opens on entry and closes on every exit -- including a
+    // crash, where the process is gone but the row must not stay open and
+    // keep counting. The guard above means each transition fires once.
+    if (state === "RUNNING") this.options.sessions?.open(Date.now());
+    else if (was === "RUNNING") this.options.sessions?.close(Date.now());
     this.emit("state", state);
   }
 

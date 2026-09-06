@@ -86,6 +86,13 @@ const loginRunner = new LoginRunner({
   cwd: dataDir,
   env: helperEnv(),
 });
+const db = openDb(join(dataDir, "history.db"));
+const history = new History(db);
+// Close spans left open by a killed process before anything reads one.
+// An open miner session claims the miner is still running, so a crash
+// would otherwise keep accruing mining time for the whole downtime.
+history.recoverOpenSessions();
+
 const supervisor = new Supervisor({
   command: python,
   args: [join(pythonDir, "run.py")],
@@ -97,9 +104,13 @@ const supervisor = new Supervisor({
     DOORBELL_URL: `http://127.0.0.1:${port}/internal/doorbell`,
   },
   graceMs: resolveStopGraceMs(process.env.MINER_STOP_GRACE_MS),
+  // Uptime spans, so "the channel was live" and "we were mining it" stay
+  // distinguishable on the cards.
+  sessions: {
+    open: (ts) => history.openMinerSession(ts),
+    close: (ts) => history.closeMinerSession(ts),
+  },
 });
-const db = openDb(join(dataDir, "history.db"));
-const history = new History(db);
 /**
  * Wires the roster resolver to this process's config and helper. The union,
  * dedupe and failure handling live in state/roster.ts, where they are
