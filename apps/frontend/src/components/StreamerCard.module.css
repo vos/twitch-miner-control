@@ -46,6 +46,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The offline counterpart of .pill: same shape and slot, but muted --
+   it reports a resting state, so it must not compete with a live card's
+   red for attention on a dashboard scanned at a glance. */
+.pillOffline {
+  background: transparent;
+  color: var(--tw-text-dim);
+  border: 1px solid var(--tw-border);
+}
+
 .dot {
   width: 6px;
   height: 6px;

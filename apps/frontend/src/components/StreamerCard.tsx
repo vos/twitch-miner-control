@@ -81,10 +81,26 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             </Text>
           </Group>
           <Group gap={6} wrap="nowrap">
-            {live && (
+            {live ? (
               <span className={classes.pill} data-testid="live-pill">
                 <span className={classes.dot} />
                 {elapsed === null ? "LIVE" : `LIVE ${formatLiveSpan(elapsed)}`}
+              </span>
+            ) : (
+              /* The offline counterpart sits in the same slot so a card
+                 keeps one status element whichever state it is in. It
+                 carries the last time we saw the channel live -- which is
+                 our own observation, not Twitch's history: the GQL layer
+                 exposes a stream's createdAt only while it is running, so
+                 a channel we have never seen live has no date to show and
+                 reads a bare "offline". */
+              <span
+                className={`${classes.pill} ${classes.pillOffline}`}
+                data-testid="offline-pill"
+              >
+                {s.lastLive == null
+                  ? "OFFLINE"
+                  : `OFFLINE ${formatSpan(Math.max(0, Date.now() - s.lastLive))}`}
               </span>
             )}
             {s.pointsEnabled === false && (

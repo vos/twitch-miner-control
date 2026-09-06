@@ -39,13 +39,13 @@ function duration(ms: number): string {
 }
 
 /**
- * The time block under a card's sparkline: last activity, mining time,
- * and when an offline channel was last live.
+ * The time block under a card's sparkline: last activity and mining time.
  *
- * The *current* stream's duration is deliberately not here -- it lives in
- * the LIVE badge, which already asserts the channel is live and so is the
- * natural place to say for how long. Rendering it here as well printed
- * the same fact twice down one card.
+ * Neither "how long has this channel been live" nor "when was it last
+ * live" is here: both live in the status badge, which already asserts
+ * which state the channel is in and so is the natural place to say since
+ * when. Rendering either here as well printed the same fact twice down
+ * one card.
  */
 export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // A minute is enough: every string here is minute-granular or coarser,
@@ -61,7 +61,6 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // to a card without a time block, never take the whole dashboard down
   // with it. `?? null` rather than `?.` alone so the render conditions
   // below stay strict null checks.
-  const lastLive = s.lastLive ?? null;
   const lastActivity = s.lastActivity ?? null;
 
   // Taken as sent. The card must NOT add the running stream to these:
@@ -78,7 +77,11 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // its own "1d 03h" uptime. The uptime line already answers "how long
   // has this channel been live"; this line answers "how much of it did
   // we mine", which is the number the uptime cannot give.
-  const has24h = mined24h > 0 || s.isOnline === true;
+  // Also shown on an offline card with mining history, so the pair of
+  // figures stays in the same place whichever state the card is in --
+  // an all-time total sitting alone on one side reads as a stray number.
+  // A channel we have never mined shows neither.
+  const has24h = mined24h > 0 || s.isOnline === true || minedTotal > 0;
   // Gated separately from the 24h figures: a channel that streamed
   // heavily last week and not since still has a real all-time total, and
   // hiding it because the last day was quiet would lose that.
@@ -86,13 +89,8 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
 
   return (
     <>
-      {(lastLive !== null || lastActivity !== null) && (
+      {lastActivity !== null && (
         <Group justify="space-between" gap="xs" wrap="nowrap">
-          {lastLive !== null && (
-            <Text size="xs" c="dimmed" data-testid="last-live">
-              last live {ago(lastLive, now)}
-            </Text>
-          )}
           {lastActivity !== null && (
             <Text size="xs" c="dimmed" truncate data-testid="last-activity">
               {activityLabel(lastActivity.type)} {ago(lastActivity.ts, now)}

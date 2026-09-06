@@ -132,6 +132,38 @@ test("carries no duration in the badge when offline", () => {
   expect(screen.queryByTestId("live-pill")).not.toBeInTheDocument();
 });
 
+test("shows an offline badge carrying when the channel was last seen", () => {
+  view({ isOnline: false, liveSince: null, lastLive: Date.now() - 2 * 86_400_000 });
+  expect(screen.getByTestId("offline-pill")).toHaveTextContent("OFFLINE 2d");
+});
+
+test("shows a bare offline badge for a channel never seen live", () => {
+  // Twitch's GQL layer exposes a stream's createdAt only while it is
+  // running, so there is no last-broadcast date to fall back on -- the
+  // badge must not invent one or render blank.
+  view({ isOnline: false, liveSince: null, lastLive: null });
+  expect(screen.getByTestId("offline-pill")).toHaveTextContent("OFFLINE");
+});
+
+test("keeps the all-time figure on an offline card", () => {
+  // A channel mined heavily last week and idle since still has a real
+  // total, and it belongs in the same place it sits on a live card.
+  view({
+    isOnline: false, liveSince: null, lastLive: Date.now() - 2 * 86_400_000,
+    mined24h: 0, minedTotal: 5 * 3_600_000,
+  });
+  expect(screen.getByTestId("mined-total")).toHaveTextContent("5h all-time");
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 0m of 24h");
+  expect(screen.queryByTestId("last-live")).not.toBeInTheDocument();
+});
+
+test("shows no time figures for a channel never mined", () => {
+  view({ isOnline: false, liveSince: null, lastLive: null,
+    mined24h: 0, minedTotal: 0 });
+  expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("mined-total")).not.toBeInTheDocument();
+});
+
 test("does not repeat the live duration below the sparkline", () => {
   // It used to render in both places, which is what this move fixes.
   view({ isOnline: true, liveSince: Date.now() - 27 * 3_600_000 });
@@ -179,9 +211,11 @@ test("shows the mining time the server reports, not the stream's length", () => 
   expect(screen.getByTestId("mined-total")).toHaveTextContent("13m");
 });
 
-test("shows when an offline channel was last live", () => {
+test("shows when an offline channel was last live, in the badge only", () => {
   view({ isOnline: false, liveSince: null, lastLive: Date.now() - 3 * 86_400_000 });
-  expect(screen.getByTestId("last-live")).toHaveTextContent("3d ago");
+  expect(screen.getByTestId("offline-pill")).toHaveTextContent("OFFLINE 3d");
+  // Not repeated below the sparkline, the way the live duration is not.
+  expect(screen.queryByTestId("last-live")).not.toBeInTheDocument();
 });
 
 test("shows the all-time mining figure", () => {
