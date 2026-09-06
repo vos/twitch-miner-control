@@ -241,6 +241,19 @@ export class History {
     this.db.exec("UPDATE miner_sessions SET end_ts = heartbeat WHERE end_ts IS NULL");
   }
 
+  /**
+   * Deletes point snapshots older than `olderThan`. Returns rows removed.
+   *
+   * Only this table is pruned: it is the one that grows per tick. The
+   * session tables are tiny and back the all-time mining figure, so
+   * dropping rows from them would corrupt it.
+   */
+  prunePoints(olderThan: number): number {
+    return this.db
+      .prepare("DELETE FROM point_snapshots WHERE ts < ?")
+      .run(olderThan).changes;
+  }
+
   recentEvents(limit: number): EventSample[] {
     return this.db
       .prepare("SELECT ts, type, message FROM events ORDER BY ts DESC, id DESC LIMIT ?")

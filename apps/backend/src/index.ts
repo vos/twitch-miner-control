@@ -9,6 +9,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolvePythonBin } from "./config/pythonBin.js";
 import { resolveStopGraceMs } from "./config/stopGrace.js";
+import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
@@ -92,6 +93,25 @@ const history = new History(db);
 // An open miner session claims the miner is still running, so a crash
 // would otherwise keep accruing mining time for the whole downtime.
 history.recoverOpenSessions();
+
+// point_snapshots is the only table that grows per tick. The session
+// tables are deliberately never pruned: they are tiny, and they are the
+// source of the all-time mining figure.
+const retentionDays = resolveRetentionDays(process.env.HISTORY_RETENTION_DAYS);
+if (retentionDays > 0) {
+  const prune = () => {
+    const removed = history.prunePoints(Date.now() - retentionDays * 86_400_000);
+    // VACUUM only when something was actually deleted: it rewrites the
+    // whole file, which is not worth doing daily to reclaim nothing.
+    if (removed > 0) {
+      console.log(`pruned ${removed} point snapshots older than ${retentionDays}d`);
+      db.exec("VACUUM");
+    }
+  };
+  prune();
+  // unref() so a pending prune never holds the process open at shutdown.
+  setInterval(prune, 86_400_000).unref();
+}
 
 const supervisor = new Supervisor({
   command: python,

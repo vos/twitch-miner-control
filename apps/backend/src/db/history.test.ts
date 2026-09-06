@@ -287,3 +287,25 @@ test("filters spans by window", () => {
   expect(history.streamerSpans("alpha", 5000)).toEqual([]);
   expect(history.streamerSpans("alpha", 1500)).toHaveLength(1);
 });
+
+test("prunes snapshots older than the cutoff", () => {
+  history.recordPoints("alpha", 100, 1000);
+  history.recordPoints("alpha", 200, 9000);
+  expect(history.prunePoints(5000)).toBe(1);
+  expect(history.pointsSeries("alpha", 0, 99_999)).toEqual([{ ts: 9000, balance: 200 }]);
+});
+
+test("reports nothing pruned when everything is inside the window", () => {
+  history.recordPoints("alpha", 100, 9000);
+  expect(history.prunePoints(5000)).toBe(0);
+});
+
+test("leaves span tables alone when pruning", () => {
+  // They are the source of the all-time mining figure; pruning them
+  // would corrupt the number they exist to answer.
+  history.openStreamerSession("alpha", "S1", 1000, 0);
+  history.openMinerSession(1000);
+  history.prunePoints(99_999);
+  expect(history.streamerSpans("alpha")).toHaveLength(1);
+  expect(history.minerSpans()).toHaveLength(1);
+});
