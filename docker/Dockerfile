@@ -60,9 +60,17 @@ COPY --from=web /build/deploy/backend/dist apps/backend/dist
 COPY --from=web /build/deploy/backend/node_modules apps/backend/node_modules
 COPY --from=web /build/apps/frontend/dist public
 
+# MINER_DIR is set explicitly even though the backend's fallback --
+# PYTHON_DIR/../vendor/miner -- already lands on /app/vendor/miner here.
+# That fallback makes the miner's location a silent consequence of where
+# the Python helpers live, so moving PYTHON_DIR alone would send
+# PYTHONPATH at a directory this image never populated, and the miner
+# would fail to import only once someone pressed Start. Naming the path
+# the COPY above actually wrote keeps the two independent.
 ENV DATA_DIR=/data \
     PYTHON_DIR=/app/python \
     PYTHON_BIN=/app/.venv/bin/python \
+    MINER_DIR=/app/vendor/miner \
     STATIC_ROOT=/app/public \
     PORT=8080
 VOLUME ["/data"]

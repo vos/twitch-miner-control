@@ -1,8 +1,15 @@
 services:
-  miner-ui:
+  twitch-miner-control:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    # Without this, Compose names the container after the directory it was
+    # cloned into -- `workspace-twitch-miner-control-1` in a dev container,
+    # or a stuttering `twitch-miner-control-twitch-miner-control-1` in a
+    # directory named after the app. Pinning the name costs `--scale` and
+    # makes a second stack on one host collide, neither of which applies:
+    # the fixed 8080:8080 host port already limits this to one instance.
+    container_name: twitch-miner-control
     init: true            # reap orphaned Python children
     ports:
       - "8080:8080"
