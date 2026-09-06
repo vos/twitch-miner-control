@@ -687,7 +687,7 @@ wheels = [
 ]
 
 [[package]]
-name = "twitch-miner-ui-helpers"
+name = "twitch-miner-control-helpers"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

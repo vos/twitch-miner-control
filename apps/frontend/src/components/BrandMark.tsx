@@ -19,7 +19,7 @@ export function BrandMark({ size = 32 }: { size?: number }) {
       viewBox="0 0 48 48"
       fill="none"
       role="img"
-      aria-label="Miner Control"
+      aria-label="Twitch Miner Control"
     >
       {/* Channel-points coin. */}
       <circle cx="17" cy="32" r="11" fill="var(--tw-warn)" />

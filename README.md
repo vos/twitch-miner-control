@@ -1,7 +1,9 @@
-# Twitch Miner Control UI
+# Twitch Miner Control
 
-Web UI to configure and control
-[mpforce1/Twitch-Channel-Points-Miner](https://github.com/mpforce1/Twitch-Channel-Points-Miner).
+A control panel for
+[Twitch Channel Points Miner](https://github.com/mpforce1/Twitch-Channel-Points-Miner) —
+a web UI to configure and control the miner, in place of editing
+`run.py` by hand.
 
 ## Quick start
 

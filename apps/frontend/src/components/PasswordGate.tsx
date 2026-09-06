@@ -101,9 +101,16 @@ export function PasswordGate({
         <Stack align="center" gap="xs">
           <BrandMark size={96} />
           <Text fw={700} size="xl" style={{ letterSpacing: "0.1em" }}>
-            MINER CONTROL
+            TWITCH MINER CONTROL
           </Text>
-          <Text size="sm" c="dimmed">Twitch Channel Points</Text>
+          {/* One sentence, two tones: the framing words recede so the
+              upstream project's name is what the eye lands on. */}
+          <Text size="sm" c="dimmed">
+            a control panel for{" "}
+            <Text span inherit c="var(--mantine-color-text)">
+              Twitch Channel Points Miner
+            </Text>
+          </Text>
         </Stack>
         <Box
           key={attempt}
