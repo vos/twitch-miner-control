@@ -14,9 +14,17 @@ function activityLabel(type: string): string {
   return type.toLowerCase().replace(/^gain_for_/, "").replace(/_/g, " ");
 }
 
-const DAY_MS = 86_400_000;
-
 const ago = (ts: number, now: number) => `${formatSpan(Math.max(0, now - ts))} ago`;
+
+/**
+ * A duration, where a genuine zero stays zero.
+ *
+ * formatSpan floors at "1m" -- right for an elapsed window, which is
+ * never truly zero -- but wrong here: "mined 1m" for a miner that has
+ * not run at all is a small lie, and this figure exists precisely to
+ * show when mining time is missing.
+ */
+const duration = (ms: number) => (ms < 60_000 ? "0m" : formatSpan(ms));
 
 /**
  * The time block under a card's sparkline.
@@ -51,17 +59,16 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   const lastLive = s.lastLive ?? null;
   const lastActivity = s.lastActivity ?? null;
 
-  // The live stream counts as both online and mined: we are watching it
-  // right now, which is what "mining" means here.
   const live = liveSince === null ? 0 : Math.max(0, now - liveSince);
-  // Clipped to the window before it is added. A stream running longer
-  // than a day would otherwise push the 24h figures past 24h -- a
-  // channel live for 26 hours reported "mined 26h" in a window that is
-  // a day wide. The all-time figure has no such ceiling.
-  const live24h = Math.min(live, DAY_MS);
-  const online24h = Math.min((s.online24h ?? 0) + live24h, DAY_MS);
-  const mined24h = Math.min((s.mined24h ?? 0) + live24h, DAY_MS);
-  const minedTotal = (s.minedTotal ?? 0) + live;
+
+  // Taken as sent. The card must NOT add the running stream to these:
+  // mining time is the intersection of "channel live" and "miner up",
+  // and this side knows only the first half. Adding the live stream
+  // here assumed the miner had been up for all of it, so a miner
+  // started ten minutes into a day-long stream reported a full day.
+  const online24h = s.online24h ?? 0;
+  const mined24h = s.mined24h ?? 0;
+  const minedTotal = s.minedTotal ?? 0;
 
   // A gap smaller than a rounding step is not a gap worth two numbers.
   const gap = online24h - mined24h >= 60_000;
@@ -97,13 +104,13 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
         <Group justify="space-between" gap="xs" wrap="nowrap">
           {has24h && (
             <Text size="xs" c="dimmed" data-testid="times-24h">
-              {gap ? `live ${formatSpan(online24h)} · ` : ""}
-              mined {formatSpan(mined24h)}
+              {gap ? `live ${duration(online24h)} · ` : ""}
+              mined {duration(mined24h)}
             </Text>
           )}
           {hasTotal && (
             <Text size="xs" c="dimmed" data-testid="mined-total">
-              {formatSpan(minedTotal)} all-time
+              {duration(minedTotal)} all-time
             </Text>
           )}
         </Group>

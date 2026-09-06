@@ -588,6 +588,20 @@ test("counts no mining time when the miner never ran", async () => {
   expect(s.mined24h).toBe(0);
 });
 
+test("counts only the miner's own uptime inside a much longer stream", () => {
+  // The bug from the dashboard: a miner started minutes into a day-long
+  // stream must report minutes, not the stream's whole length.
+  clock = 10_000_000;
+  history.openStreamerSession("alpha", "S1", clock - 26 * 3_600_000, 0);
+  history.openMinerSession(clock - 13 * 60_000);
+  const { service } = make([alpha(100, true, "S1", clock - 26 * 3_600_000)]);
+  return service.refresh().then(() => {
+    const s = service.snapshot().streamers[0];
+    expect(s.mined24h).toBe(10 * 60_000);   // 13 min, quantised down to 10
+    expect(s.online24h).toBe(86_400_000);   // the window's full width
+  });
+});
+
 test("counts mining time only while the miner was up", async () => {
   // A two-hour closed stream with the miner up for only the last hour of
   // it: the gap between the clocks is the figure that matters.
@@ -602,20 +616,21 @@ test("counts mining time only while the miner was up", async () => {
   const { service } = make([alpha(100, true, "S1", clock - 60_000)]);
   await service.refresh();
   const s = service.snapshot().streamers[0];
+  // The closed stream's hour, plus the minute the live one has run.
   expect(s.online24h).toBe(3_600_000);
   expect(s.mined24h).toBe(1_800_000);
 });
 
-test("keeps time figures still while a stream runs", async () => {
-  // The live stream's own duration is excluded from these figures on
-  // purpose: an open span grows every tick, and encoding that here would
-  // wake every SSE client with a frame carrying nothing new. The card
-  // adds the live remainder from liveSince, which it ticks itself.
+test("quantises live figures so a poll rarely changes the payload", async () => {
+  // These grow with the wall clock while a stream runs, so they are
+  // rounded down to a coarse step rather than cut off -- cutting them
+  // off is what under-reported mining time to zero. One poll's worth of
+  // elapsed time must not move them.
   clock = 10_000_000;
   const { service } = make([alpha(100), alpha(100)]);
   await service.refresh();
   const first = service.snapshot().streamers[0].online24h;
-  clock += 600_000;
+  clock += 60_000;
   await service.refresh();
   expect(service.snapshot().streamers[0].online24h).toBe(first);
 });

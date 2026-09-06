@@ -84,13 +84,24 @@ const HOUR_MS = 3_600_000;
 const MIN_MINED_FOR_RATE_MS = 15 * 60_000;
 
 /**
- * Durations reaching the snapshot are whole minutes.
+ * Quantisation step for the duration figures.
  *
- * Unrounded, they differ on every tick by definition -- an open span
- * always grows -- which would defeat the change comparison gating SSE
- * emission and make every poll a broadcast to every client.
+ * These are inherently time-dependent while a stream is live -- an open
+ * span grows with the wall clock -- so they cannot be made perfectly
+ * still without lying about them (an earlier attempt cut them off at the
+ * stream's start, which under-reported mining time to zero). Instead
+ * they are rounded down to a coarse step, so a poll changes the payload
+ * at most once per step rather than on every tick.
+ *
+ * Five minutes is chosen against the poll interval (60s): at most one
+ * SSE frame per five polls from this source, while the card's own
+ * client-side clock carries the second-by-second detail.
+ *
+ * Rounded *down*, not to nearest: these are "time so far" figures, and
+ * rounding up would claim mining that has not happened yet.
  */
-const toMinutes = (ms: number) => Math.round(ms / 60_000) * 60_000;
+const QUANTUM_MS = 5 * 60_000;
+const quantise = (ms: number) => Math.floor(ms / QUANTUM_MS) * QUANTUM_MS;
 
 export interface StateSnapshot {
   streamers: StreamerState[];
@@ -290,29 +301,28 @@ export class StateService extends EventEmitter {
             ? null
             : s.points - window.balance;
 
-        // Time figures are measured to the *start of the current stream*,
-        // not to `at`.
+        // Measured all the way to `at`, including the stream and miner
+        // session still running.
         //
-        // An open span grows with the wall clock, so measuring to "now"
-        // would change these numbers on every single tick even after
-        // rounding -- waking every SSE client with a frame carrying no
-        // new information. Cutting at the live stream's start makes them
-        // a function of closed history alone: they change only when a
-        // stream actually ends. The card adds the live remainder itself,
-        // which it can do exactly because `liveSince` is a timestamp it
-        // already ticks client-side.
+        // These figures must never be completed by the client. Mining
+        // time is the *intersection* of "channel live" and "miner up",
+        // and only this side knows the second half -- a card that added
+        // the running stream's own elapsed time would be assuming the
+        // miner was up for all of it, which is precisely the conflation
+        // the two clocks exist to prevent. A miner started ten minutes
+        // into a day-long stream reported a full day of mining.
         //
-        // Same principle as `gainedSince` above: a derived field must
-        // never encode "now".
-        const upto = s.streamStartedAt ?? at;
-        const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, upto);
+        // The SSE cost of an ever-growing figure is handled by rounding
+        // to the minute (toMinutes below): a live figure then changes at
+        // most once a minute rather than on every poll.
+        const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, at);
         const mined24h = total(intersect(
           online,
-          clip(this.deps.history.minerSpans(dayAgo), dayAgo, upto),
+          clip(this.deps.history.minerSpans(dayAgo), dayAgo, at),
         ));
         const minedTotal = total(intersect(
-          clip(this.deps.history.streamerSpans(s.username), 0, upto),
-          clip(this.deps.history.minerSpans(), 0, upto),
+          clip(this.deps.history.streamerSpans(s.username), 0, at),
+          clip(this.deps.history.minerSpans(), 0, at),
         ));
 
         return {
@@ -326,9 +336,9 @@ export class StateService extends EventEmitter {
           liveSince: s.streamStartedAt,
           lastLive: this.deps.history.lastLive(s.username),
           lastActivity: this.deps.history.lastActivity(s.username),
-          online24h: toMinutes(total(online)),
-          mined24h: toMinutes(mined24h),
-          minedTotal: toMinutes(minedTotal),
+          online24h: quantise(total(online)),
+          mined24h: quantise(mined24h),
+          minedTotal: quantise(minedTotal),
           pointsPerHour:
             mined24h < MIN_MINED_FOR_RATE_MS || gained24h === null
               ? null

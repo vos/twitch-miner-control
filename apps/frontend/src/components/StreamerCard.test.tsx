@@ -142,16 +142,21 @@ test("collapses to one figure when the clocks agree", () => {
   expect(line).not.toHaveTextContent("live 6h");
 });
 
-test("adds the live stream to the 24h figures", () => {
-  // The server measures only up to the stream's start, so the card must
-  // add the running remainder or a live stream would appear uncounted.
+test("shows the mining time the server reports, not the stream's length", () => {
+  // The bug this replaces: the card added the running stream to these
+  // figures, assuming the miner had been up for all of it. A miner
+  // started 12 minutes into a day-long stream reported "mined 24h".
   view({
     isOnline: true,
-    liveSince: Date.now() - 2 * 3_600_000,
-    online24h: 3_600_000,
-    mined24h: 3_600_000,
+    liveSince: Date.now() - 26 * 3_600_000,
+    online24h: 24 * 3_600_000,
+    mined24h: 13 * 60_000,
+    minedTotal: 13 * 60_000,
   });
-  expect(screen.getByTestId("times-24h")).toHaveTextContent("3h");
+  const line = screen.getByTestId("times-24h");
+  expect(line).toHaveTextContent("live 24h");
+  expect(line).toHaveTextContent("mined 13m");
+  expect(screen.getByTestId("mined-total")).toHaveTextContent("13m");
 });
 
 test("shows when an offline channel was last live", () => {
@@ -196,18 +201,16 @@ test("survives a snapshot missing the time fields entirely", () => {
   expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
 });
 
-test("never reports more than a day inside the 24h window", () => {
-  // A channel live for 26 hours must not report "mined 26h" in a window
-  // that is a day wide. Caught against real data: 24/7 channels are
-  // common and every one of them overflowed.
+test("shows a live card with no mining time yet", () => {
+  // Channel live for a day, miner never started: the card must not
+  // invent mining time from the stream being up.
   view({
     isOnline: true,
     liveSince: Date.now() - 26 * 3_600_000,
-    online24h: 0,
+    online24h: 24 * 3_600_000,
     mined24h: 0,
-    minedTotal: 26 * 3_600_000,
+    minedTotal: 0,
   });
-  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 24h");
-  // The all-time figure has no such ceiling.
-  expect(screen.getByTestId("mined-total")).toHaveTextContent("2d");
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 0m");
+  expect(screen.queryByTestId("mined-total")).not.toBeInTheDocument();
 });
