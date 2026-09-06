@@ -14,6 +14,8 @@ function activityLabel(type: string): string {
   return type.toLowerCase().replace(/^gain_for_/, "").replace(/_/g, " ");
 }
 
+const DAY_MS = 86_400_000;
+
 const ago = (ts: number, now: number) => `${formatSpan(Math.max(0, now - ts))} ago`;
 
 /**
@@ -52,8 +54,13 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // The live stream counts as both online and mined: we are watching it
   // right now, which is what "mining" means here.
   const live = liveSince === null ? 0 : Math.max(0, now - liveSince);
-  const online24h = (s.online24h ?? 0) + live;
-  const mined24h = (s.mined24h ?? 0) + live;
+  // Clipped to the window before it is added. A stream running longer
+  // than a day would otherwise push the 24h figures past 24h -- a
+  // channel live for 26 hours reported "mined 26h" in a window that is
+  // a day wide. The all-time figure has no such ceiling.
+  const live24h = Math.min(live, DAY_MS);
+  const online24h = Math.min((s.online24h ?? 0) + live24h, DAY_MS);
+  const mined24h = Math.min((s.mined24h ?? 0) + live24h, DAY_MS);
   const minedTotal = (s.minedTotal ?? 0) + live;
 
   // A gap smaller than a rounding step is not a gap worth two numbers.

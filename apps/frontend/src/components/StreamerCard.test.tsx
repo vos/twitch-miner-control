@@ -195,3 +195,19 @@ test("survives a snapshot missing the time fields entirely", () => {
   expect(screen.getByTestId("balance")).toBeInTheDocument();
   expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
 });
+
+test("never reports more than a day inside the 24h window", () => {
+  // A channel live for 26 hours must not report "mined 26h" in a window
+  // that is a day wide. Caught against real data: 24/7 channels are
+  // common and every one of them overflowed.
+  view({
+    isOnline: true,
+    liveSince: Date.now() - 26 * 3_600_000,
+    online24h: 0,
+    mined24h: 0,
+    minedTotal: 26 * 3_600_000,
+  });
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 24h");
+  // The all-time figure has no such ceiling.
+  expect(screen.getByTestId("mined-total")).toHaveTextContent("2d");
+});
