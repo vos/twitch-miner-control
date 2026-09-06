@@ -1,4 +1,4 @@
-import { Box, Button, Card, Center, PasswordInput, Stack, Text } from "@mantine/core";
+import { Anchor, Box, Button, Card, Center, PasswordInput, Stack, Text } from "@mantine/core";
 import { type ReactNode, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { BrandMark } from "./BrandMark.js";
@@ -139,6 +139,24 @@ export function PasswordGate({
             </Stack>
           </Card>
         </Box>
+        {/* The subtitle above already names the miner, so this credits
+            its author and links out instead of repeating the sentence.
+            Dimmed a step below: findable on the way out, not competing
+            with the password field. */}
+        <Text size="xs" c="dimmed" ta="center">
+          Miner by mpforce1 —{" "}
+          <Anchor
+            href="https://github.com/mpforce1/Twitch-Channel-Points-Miner"
+            target="_blank"
+            rel="noreferrer"
+            inherit
+            // "view on GitHub" alone is meaningless in a screen
+            // reader's list of links, which strips the sentence.
+            aria-label="Twitch Channel Points Miner on GitHub"
+          >
+            view on GitHub
+          </Anchor>
+        </Text>
       </Stack>
     </Center>
   );

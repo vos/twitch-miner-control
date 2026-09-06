@@ -110,3 +110,21 @@ test("unlocks after a login even while the live stream still reports the session
   await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
   expect(await screen.findByText("secret content")).toBeInTheDocument();
 });
+
+test("credits the upstream miner with a link out", async () => {
+  // The app only drives mpforce1's miner, so the unlock screen is where
+  // that credit belongs -- it is the one screen every user sees.
+  stubSequence(401);
+  render(ui);
+  await screen.findByText("TWITCH MINER CONTROL");
+  // Queried by its aria-label: the visible text is "view on GitHub",
+  // which would say nothing in a screen reader's link list.
+  const link = screen.getByRole("link", {
+    name: "Twitch Channel Points Miner on GitHub",
+  });
+  expect(link).toHaveAttribute(
+    "href",
+    "https://github.com/mpforce1/Twitch-Channel-Points-Miner",
+  );
+  expect(link).toHaveAttribute("rel", "noreferrer");
+});
