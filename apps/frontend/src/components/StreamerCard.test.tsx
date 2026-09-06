@@ -127,19 +127,21 @@ test("shows the last activity in the miner's own terms", () => {
   expect(line).toHaveTextContent("4m ago");
 });
 
-test("shows both clocks when they differ", () => {
+test("shows mining time against the window", () => {
   view({ online24h: 8 * 3_600_000, mined24h: 6 * 3_600_000 });
-  const line = screen.getByTestId("times-24h");
-  expect(line).toHaveTextContent("live 8h");
-  expect(line).toHaveTextContent("mined 6h");
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 6h of 24h");
 });
 
-test("collapses to one figure when the clocks agree", () => {
-  // "live 6h · mined 6h" on every card is noise; the gap is the signal.
-  view({ online24h: 6 * 3_600_000, mined24h: 6 * 3_600_000 });
+test("never repeats the uptime as an online figure", () => {
+  // The uptime top-left already says how long the channel has been live,
+  // and clipping it to the window made it worse -- a stream up for 27
+  // hours read "live 24h" right beside its own "1d 03h".
+  view({ isOnline: true, liveSince: Date.now() - 27 * 3_600_000,
+    online24h: 24 * 3_600_000, mined24h: 55 * 60_000 });
   const line = screen.getByTestId("times-24h");
-  expect(line).toHaveTextContent("mined 6h");
-  expect(line).not.toHaveTextContent("live 6h");
+  expect(line).toHaveTextContent("mined 55m");
+  expect(line).not.toHaveTextContent("live");
+  expect(line).not.toHaveTextContent("24h ·");
 });
 
 test("shows the mining time the server reports, not the stream's length", () => {
@@ -154,7 +156,6 @@ test("shows the mining time the server reports, not the stream's length", () => 
     minedTotal: 13 * 60_000,
   });
   const line = screen.getByTestId("times-24h");
-  expect(line).toHaveTextContent("live 24h");
   expect(line).toHaveTextContent("mined 13m");
   expect(screen.getByTestId("mined-total")).toHaveTextContent("13m");
 });
@@ -165,8 +166,10 @@ test("shows when an offline channel was last live", () => {
 });
 
 test("shows the all-time mining figure", () => {
+  // 142h is 5.9 days: truncated to "5d", not rounded up to "6d". Time
+  // mined is a claim about work done, so it never rounds up.
   view({ minedTotal: 142 * 3_600_000 });
-  expect(screen.getByTestId("mined-total")).toHaveTextContent("6d");
+  expect(screen.getByTestId("mined-total")).toHaveTextContent("5d");
 });
 
 test("shows points per hour when it is reported", () => {
@@ -198,7 +201,10 @@ test("survives a snapshot missing the time fields entirely", () => {
     </MantineProvider>,
   );
   expect(screen.getByTestId("balance")).toBeInTheDocument();
-  expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
+  // The base fixture is online, so the mined line still renders -- with a
+  // truthful zero rather than a number invented from a missing field.
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 0m");
+  expect(screen.queryByTestId("mined-total")).not.toBeInTheDocument();
 });
 
 test("shows a live card with no mining time yet", () => {
@@ -213,4 +219,15 @@ test("shows a live card with no mining time yet", () => {
   });
   expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 0m");
   expect(screen.queryByTestId("mined-total")).not.toBeInTheDocument();
+});
+
+test("rounds mining time down, never up", () => {
+  // A mining figure is a claim about work actually done. formatSpan
+  // rounds to nearest for gain-window labels, which would render 30
+  // minutes of mining as "1h" -- overstating it by 2x.
+  view({ isOnline: true, mined24h: 30 * 60_000, minedTotal: 30 * 60_000 });
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 30m of 24h");
+
+  view({ isOnline: true, mined24h: 119 * 60_000, minedTotal: 119 * 60_000 });
+  expect(screen.getAllByTestId("times-24h").at(-1)).toHaveTextContent("mined 1h");
 });

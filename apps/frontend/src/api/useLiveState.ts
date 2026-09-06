@@ -26,12 +26,13 @@ export interface StreamerState {
   lastLive: number | null;
   lastActivity: { ts: number; type: string } | null;
   /**
-   * Online and mined milliseconds in the last 24h, and mined all-time,
-   * measured up to the *current stream's start* -- so they hold still
-   * while a stream runs instead of waking every client each tick. The
-   * card adds the live remainder from `liveSince`.
+   * Milliseconds live in the last 24h. Deliberately not rendered: the
+   * uptime from `liveSince` already answers "how long has this channel
+   * been live", and clipping it to the window made it read "live 24h"
+   * beside a 27-hour uptime.
    */
   online24h: number;
+  /** Milliseconds mined -- live AND the miner up -- in the last 24h. */
   mined24h: number;
   minedTotal: number;
   pointsPerHour: number | null;

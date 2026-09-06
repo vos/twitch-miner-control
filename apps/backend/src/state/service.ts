@@ -50,7 +50,15 @@ export interface StreamerState {
   lastLive: number | null;
   /** The newest event attributed to this streamer, for the activity line. */
   lastActivity: { ts: number; type: string } | null;
-  /** Milliseconds online in the last 24h, rounded to the minute. */
+  /**
+   * Milliseconds the channel was live in the last 24h.
+   *
+   * Not shown on the card: for a single ongoing stream it is the same
+   * fact as `liveSince` already renders as uptime, only clipped to the
+   * window, so a channel up for 27 hours read "live 24h" beside its own
+   * "1d 03h". Kept because the intersection below computes the spans
+   * anyway, and a per-streamer view would want it.
+   */
   online24h: number;
   /** Milliseconds online *and* mined in the last 24h, rounded to the minute. */
   mined24h: number;

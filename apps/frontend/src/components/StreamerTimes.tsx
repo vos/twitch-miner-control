@@ -16,15 +16,28 @@ function activityLabel(type: string): string {
 
 const ago = (ts: number, now: number) => `${formatSpan(Math.max(0, now - ts))} ago`;
 
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
 /**
- * A duration, where a genuine zero stays zero.
+ * A duration of *work done*, rounded down.
  *
- * formatSpan floors at "1m" -- right for an elapsed window, which is
- * never truly zero -- but wrong here: "mined 1m" for a miner that has
- * not run at all is a small lie, and this figure exists precisely to
- * show when mining time is missing.
+ * formatSpan is built for labelling a gain window, where "about an hour"
+ * is the point, so it rounds to nearest and floors at "1m": 30 minutes
+ * renders "1h" and zero renders "1m". Both are wrong for a mining
+ * figure, which is a claim about time actually spent -- rounding up
+ * overstates it by as much as 2x, and this figure exists precisely to
+ * show when mining time is short or missing.
+ *
+ * So: truncate, and let a genuine zero read "0m".
  */
-const duration = (ms: number) => (ms < 60_000 ? "0m" : formatSpan(ms));
+function duration(ms: number): string {
+  if (ms < MINUTE) return "0m";
+  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+  if (ms < DAY) return `${Math.floor(ms / HOUR)}h`;
+  return `${Math.floor(ms / DAY)}d`;
+}
 
 /**
  * The time block under a card's sparkline.
@@ -66,13 +79,16 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // and this side knows only the first half. Adding the live stream
   // here assumed the miner had been up for all of it, so a miner
   // started ten minutes into a day-long stream reported a full day.
-  const online24h = s.online24h ?? 0;
   const mined24h = s.mined24h ?? 0;
   const minedTotal = s.minedTotal ?? 0;
 
-  // A gap smaller than a rounding step is not a gap worth two numbers.
-  const gap = online24h - mined24h >= 60_000;
-  const has24h = online24h > 0 || mined24h > 0;
+  // Online time is deliberately not shown here. For a single ongoing
+  // stream it is the same fact as the uptime above -- and worse, clipped
+  // to the window, so a channel up for 27 hours read "live 24h" beside
+  // its own "1d 03h" uptime. The uptime line already answers "how long
+  // has this channel been live"; this line answers "how much of it did
+  // we mine", which is the number the uptime cannot give.
+  const has24h = mined24h > 0 || s.isOnline === true;
   // Gated separately from the 24h figures: a channel that streamed
   // heavily last week and not since still has a real all-time total, and
   // hiding it because the last day was quiet would lose that.
@@ -104,8 +120,7 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
         <Group justify="space-between" gap="xs" wrap="nowrap">
           {has24h && (
             <Text size="xs" c="dimmed" data-testid="times-24h">
-              {gap ? `live ${duration(online24h)} · ` : ""}
-              mined {duration(mined24h)}
+              mined {duration(mined24h)} of 24h
             </Text>
           )}
           {hasTotal && (
