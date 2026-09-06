@@ -1,6 +1,6 @@
 import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CLIENT_STALE_AFTER_MS } from "../components/StalenessBadge.js";
 import { Dashboard } from "./Dashboard.js";
 import { renderApp } from "../test-utils.js";
@@ -202,4 +202,89 @@ test("remembers the offline section stays collapsed across a remount", async () 
   view();
   expect(await screen.findByTestId("streamer-alpha")).toBeInTheDocument();
   expect(screen.queryByTestId("streamer-beta")).not.toBeInTheDocument();
+});
+
+// A roster big enough that order is visible: three live, two offline.
+const sortable = {
+  lastUpdated: Date.now(),
+  stale: false,
+  error: null,
+  streamers: [
+    { username: "carol", displayName: "Carol", points: 10, isOnline: true,
+      channelId: "1", pointsEnabled: true, gained24h: 50, gainedSince: null,
+      gainedStream: null, spark: [], liveSince: 3_000, lastLive: null },
+    { username: "alice", displayName: "Alice", points: 10, isOnline: true,
+      channelId: "2", pointsEnabled: true, gained24h: 900, gainedSince: null,
+      gainedStream: null, spark: [], liveSince: 1_000, lastLive: null },
+    { username: "bob", displayName: "Bob", points: 10, isOnline: true,
+      channelId: "3", pointsEnabled: true, gained24h: 100, gainedSince: null,
+      gainedStream: null, spark: [], liveSince: 2_000, lastLive: null },
+    { username: "zed", displayName: "Zed", points: 10, isOnline: false,
+      channelId: "4", pointsEnabled: true, gained24h: 5, gainedSince: null,
+      gainedStream: null, spark: [], liveSince: null, lastLive: 9_000 },
+    { username: "yuri", displayName: "Yuri", points: 10, isOnline: false,
+      channelId: "5", pointsEnabled: true, gained24h: 7, gainedSince: null,
+      gainedStream: null, spark: [], liveSince: null, lastLive: 1_000 },
+  ],
+};
+
+/** The usernames of the rendered cards, in DOM order. */
+function cardOrder(): string[] {
+  return screen.getAllByTestId(/^streamer-/)
+    .map((el) => el.getAttribute("data-testid")!.replace("streamer-", ""));
+}
+
+async function sortBy(label: string) {
+  await userEvent.selectOptions(screen.getByTestId("sort-control"), label);
+}
+
+describe("sorting", () => {
+  beforeEach(() => stub(sortable));
+
+  test("leaves the roster order alone until a sort is chosen", async () => {
+    view();
+    expect(await screen.findByTestId("streamer-carol")).toBeInTheDocument();
+    expect(cardOrder()).toEqual(["carol", "alice", "bob", "zed", "yuri"]);
+  });
+
+  test("sorts the cards by name", async () => {
+    view();
+    expect(await screen.findByTestId("streamer-carol")).toBeInTheDocument();
+
+    await sortBy("Name");
+
+    // Each section is ordered in place: the live/offline split still wins.
+    expect(cardOrder()).toEqual(["alice", "bob", "carol", "yuri", "zed"]);
+  });
+
+  test("sorts the cards by 24h gain, biggest first", async () => {
+    view();
+    expect(await screen.findByTestId("streamer-carol")).toBeInTheDocument();
+
+    await sortBy("24h gain");
+
+    expect(cardOrder()).toEqual(["alice", "bob", "carol", "yuri", "zed"]);
+  });
+
+  // The two halves answer "how recently" with different fields, so this is
+  // the option most likely to break if a section ever shares a comparator.
+  test("sorts live by longest stream and offline by most recently live", async () => {
+    view();
+    expect(await screen.findByTestId("streamer-carol")).toBeInTheDocument();
+
+    await sortBy("Recently live");
+
+    expect(cardOrder()).toEqual(["alice", "bob", "carol", "zed", "yuri"]);
+  });
+
+  test("remembers the chosen sort across a remount", async () => {
+    const first = view();
+    expect(await screen.findByTestId("streamer-carol")).toBeInTheDocument();
+    await sortBy("Name");
+    first.unmount();
+
+    view();
+    expect(await screen.findByTestId("streamer-alice")).toBeInTheDocument();
+    expect(cardOrder()).toEqual(["alice", "bob", "carol", "yuri", "zed"]);
+  });
 });

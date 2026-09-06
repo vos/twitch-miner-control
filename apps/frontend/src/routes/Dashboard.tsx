@@ -1,9 +1,11 @@
-import { Alert, Group, SimpleGrid, Stack, Switch, Text, UnstyledButton } from "@mantine/core";
+import { Alert, Group, NativeSelect, SimpleGrid, Stack, Switch, Text, UnstyledButton } from "@mantine/core";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
 import { StatTile } from "../components/StatTile.js";
 import { StreamerCard } from "../components/StreamerCard.js";
+import { SORT_KEYS, SORT_LABELS, sortStreamers, type SortKey } from "../lib/sortStreamers.js";
+import { useLocalChoice } from "../lib/useLocalChoice.js";
 import { useLocalToggle } from "../lib/useLocalToggle.js";
 
 const nf = new Intl.NumberFormat("en-US");
@@ -79,6 +81,10 @@ export function Dashboard() {
   // Offline streamers are the bulk of a big roster and the least
   // interesting part of it, so they start shown but collapse away.
   const [offlineOn, toggleOffline] = useLocalToggle("dashboard.offline", true);
+  // One choice drives both sections. Per-section controls would have to
+  // live in the headings, and the offline heading is already a button --
+  // nesting a menu inside it is both an a11y problem and an easy misclick.
+  const [sort, setSort] = useLocalChoice<SortKey>("dashboard.sort", "default", SORT_KEYS);
 
   if (!snapshot) {
     if (loadError) {
@@ -92,10 +98,15 @@ export function Dashboard() {
   }
 
   const total = snapshot.streamers.reduce((sum, s) => sum + (s.points ?? 0), 0);
-  const live = snapshot.streamers.filter((s) => s.isOnline);
+  // Sorted after the split, not before: "recently live" reads a different
+  // field on each side (a live channel has no lastLive, an offline one no
+  // liveSince), and the grouping is the dashboard's primary claim anyway.
+  const live = sortStreamers(snapshot.streamers.filter((s) => s.isOnline), sort, "live");
   // Streamers already shown above under "Live now" are omitted here so a
   // live streamer's points aren't rendered twice in the same view.
-  const others = snapshot.streamers.filter((s) => !s.isOnline);
+  const others = sortStreamers(
+    snapshot.streamers.filter((s) => !s.isOnline), sort, "offline",
+  );
 
   // null stays null until at least one streamer has a baseline, for the
   // same reason the total does: "nothing earned" and "nothing known yet"
@@ -147,12 +158,27 @@ export function Dashboard() {
     <Stack gap="md">
       <Group justify="space-between" wrap="wrap">
         <StalenessBadge lastUpdated={snapshot.lastUpdated} stale={snapshot.stale} />
-        <Switch
-          checked={feedOn}
-          onChange={toggleFeed}
-          label="Activity feed"
-          size="sm"
-        />
+        <Group gap="md" wrap="nowrap">
+          {/* A native <select> rather than Mantine's Select: four fixed
+              options need no search or portal, it is the better control
+              on a phone and by keyboard, and Mantine's Combobox hangs
+              under jsdom, which would cost this screen its test coverage. */}
+          <NativeSelect
+            data={SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
+            value={sort}
+            onChange={(event) => setSort(event.currentTarget.value as SortKey)}
+            aria-label="Sort streamers"
+            data-testid="sort-control"
+            size="xs"
+            w={150}
+          />
+          <Switch
+            checked={feedOn}
+            onChange={toggleFeed}
+            label="Activity feed"
+            size="sm"
+          />
+        </Group>
       </Group>
 
       {snapshot.error && <Alert role="alert" color="orange">{snapshot.error}</Alert>}
