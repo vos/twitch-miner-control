@@ -115,9 +115,28 @@ test("the streamer's name links to their channel", () => {
   expect(nameLink).toHaveAttribute("href", "https://twitch.tv/alpha");
 });
 
-test("ticks the live duration from the stream start", () => {
+test("shows how long the channel has been live in the LIVE badge", () => {
   view({ isOnline: true, liveSince: Date.now() - 3 * 3_600_000 - 24 * 60_000 });
-  expect(screen.getByTestId("live-duration")).toHaveTextContent("3h 24m");
+  expect(screen.getByTestId("live-pill")).toHaveTextContent("LIVE 3h 24m");
+});
+
+test("shows a bare LIVE badge when the stream start is unknown", () => {
+  // An older backend, or a frame that dropped the field: the badge must
+  // still assert the channel is live rather than vanishing.
+  view({ isOnline: true, liveSince: null });
+  expect(screen.getByTestId("live-pill")).toHaveTextContent("LIVE");
+});
+
+test("carries no duration in the badge when offline", () => {
+  view({ isOnline: false, liveSince: null });
+  expect(screen.queryByTestId("live-pill")).not.toBeInTheDocument();
+});
+
+test("does not repeat the live duration below the sparkline", () => {
+  // It used to render in both places, which is what this move fixes.
+  view({ isOnline: true, liveSince: Date.now() - 27 * 3_600_000 });
+  expect(screen.queryByTestId("live-duration")).not.toBeInTheDocument();
+  expect(screen.getByTestId("live-pill")).toHaveTextContent("1d 03h");
 });
 
 test("shows the last activity in the miner's own terms", () => {

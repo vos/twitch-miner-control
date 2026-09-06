@@ -1,7 +1,6 @@
 import { Group, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { formatSpan } from "../lib/formatSpan.js";
-import { formatUptime } from "../lib/formatUptime.js";
 import type { StreamerState } from "../api/useLiveState.js";
 
 /**
@@ -40,39 +39,30 @@ function duration(ms: number): string {
 }
 
 /**
- * The time block under a card's sparkline.
+ * The time block under a card's sparkline: last activity, mining time,
+ * and when an offline channel was last live.
  *
- * Two things are deliberately computed here rather than sent:
- *
- * The live duration ticks from `liveSince`, a timestamp. A server-sent
- * duration would change on every poll and wake every SSE client with a
- * frame carrying nothing new.
- *
- * The 24h and all-time figures arrive measured only up to the *current
- * stream's start*, for the same reason -- an open span grows with the
- * wall clock. So this adds the running stream's own elapsed time back on,
- * which it can do exactly because `liveSince` is already ticking.
+ * The *current* stream's duration is deliberately not here -- it lives in
+ * the LIVE badge, which already asserts the channel is live and so is the
+ * natural place to say for how long. Rendering it here as well printed
+ * the same fact twice down one card.
  */
 export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
+  // A minute is enough: every string here is minute-granular or coarser,
+  // and the live duration itself now lives in the LIVE badge.
   const [now, setNow] = useState(() => Date.now());
-
   useEffect(() => {
-    // Nothing ticks on an offline card, so it costs no timer at all.
-    if (s.liveSince == null) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
-  }, [s.liveSince]);
+  }, []);
 
   // Every field is read defensively. A snapshot from a backend that
   // predates these fields -- or any frame that drops one -- must degrade
   // to a card without a time block, never take the whole dashboard down
   // with it. `?? null` rather than `?.` alone so the render conditions
   // below stay strict null checks.
-  const liveSince = s.liveSince ?? null;
   const lastLive = s.lastLive ?? null;
   const lastActivity = s.lastActivity ?? null;
-
-  const live = liveSince === null ? 0 : Math.max(0, now - liveSince);
 
   // Taken as sent. The card must NOT add the running stream to these:
   // mining time is the intersection of "channel live" and "miner up",
@@ -96,14 +86,9 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
 
   return (
     <>
-      {(liveSince !== null || lastLive !== null || lastActivity !== null) && (
+      {(lastLive !== null || lastActivity !== null) && (
         <Group justify="space-between" gap="xs" wrap="nowrap">
-          {liveSince !== null && (
-            <Text size="xs" c="dimmed" data-testid="live-duration">
-              {formatUptime(live)}
-            </Text>
-          )}
-          {liveSince === null && lastLive !== null && (
+          {lastLive !== null && (
             <Text size="xs" c="dimmed" data-testid="last-live">
               last live {ago(lastLive, now)}
             </Text>

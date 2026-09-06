@@ -3,6 +3,7 @@ import { Sparkline } from "./Sparkline.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamerTimes } from "./StreamerTimes.js";
 import { formatSpan } from "../lib/formatSpan.js";
+import { formatLiveSpan, useLiveDuration } from "../lib/useLiveDuration.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -43,6 +44,11 @@ function Gain({ value, label, since, testId }: {
 
 export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
   const live = s.isOnline === true;
+  // Ticked here rather than below the sparkline: the badge already says
+  // "this channel is live", and how long it has been live is the same
+  // statement -- so the two belong in one element instead of repeating
+  // each other down the card.
+  const elapsed = useLiveDuration(live ? s.liveSince ?? null : null);
   return (
     <div
       className={`${classes.card} ${live ? classes.live : classes.offline}`}
@@ -78,7 +84,7 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             {live && (
               <span className={classes.pill} data-testid="live-pill">
                 <span className={classes.dot} />
-                LIVE
+                {elapsed === null ? "LIVE" : `LIVE ${formatLiveSpan(elapsed)}`}
               </span>
             )}
             {s.pointsEnabled === false && (
