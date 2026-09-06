@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
+import { attribute } from "./attribute.js";
 import { downsample } from "./gains.js";
 import { normaliseUsername } from "./roster.js";
 
@@ -88,6 +89,12 @@ export class StateService extends EventEmitter {
    * rounds to nothing in a points-gained figure.
    */
   private streamAnchor = new Map<string, number>();
+  /**
+   * The roster from the last refresh, used to attribute doorbell events.
+   * Empty before the first refresh, so early events are unattributed
+   * rather than misattributed.
+   */
+  private roster: string[] = [];
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
@@ -176,6 +183,7 @@ export class StateService extends EventEmitter {
 
   private async doRefresh(): Promise<void> {
     const usernames = await this.deps.getStreamers();
+    this.roster = usernames;
     if (usernames.length === 0) {
       // An empty streamer list is fully up to date -- there is nothing
       // outstanding to fetch, so this is a *successful* refresh, not a
@@ -269,7 +277,12 @@ export class StateService extends EventEmitter {
 
   /** Doorbell: something happened, refresh soon. Bursts coalesce. */
   ring(eventType: string, message: string | null = null): void {
-    this.deps.history.recordEvent(eventType, this.now(), message);
+    // Attributed against the roster resolved by the last refresh, so the
+    // card can show "last: claim 4m ago" per streamer. An unattributable
+    // line is stored with a null streamer, exactly as before.
+    this.deps.history.recordEvent(
+      eventType, this.now(), message, attribute(message, this.roster),
+    );
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;

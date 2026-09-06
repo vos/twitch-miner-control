@@ -490,3 +490,19 @@ test("a stable avatar url does not emit a change frame on every tick", async () 
   await service.refresh();
   expect(changes).not.toHaveBeenCalled();
 });
+
+test("attributes a doorbell event to a roster streamer", async () => {
+  const { service } = make([alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  expect(history.lastActivity("alpha")).toEqual({ ts: clock, type: "GAIN_FOR_CLAIM" });
+});
+
+test("leaves an unattributable event off every card", async () => {
+  const { service } = make([alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_CLAIM", "+50 -> someone_else");
+  expect(history.lastActivity("alpha")).toBeNull();
+  // Still recorded for the feed, which shows every event.
+  expect(history.recentEvents(10)).toHaveLength(1);
+});

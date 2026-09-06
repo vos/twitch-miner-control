@@ -80,10 +80,29 @@ export class History {
    * millified ("12.3k") and must never be parsed back into numbers. Point
    * history is recorded by recordPoints() from the state pipeline.
    */
-  recordEvent(type: string, ts = Date.now(), message: string | null = null): void {
+  recordEvent(
+    type: string,
+    ts = Date.now(),
+    message: string | null = null,
+    streamer: string | null = null,
+  ): void {
     this.db
-      .prepare("INSERT INTO events (ts, type, message) VALUES (?, ?, ?)")
-      .run(ts, type, message);
+      .prepare("INSERT INTO events (ts, type, message, streamer) VALUES (?, ?, ?, ?)")
+      .run(ts, type, message, streamer);
+  }
+
+  /**
+   * The newest attributed event for a streamer, for the card's activity
+   * line. Unattributed rows (streamer NULL) are invisible here by
+   * design -- they are still in the feed, which shows every event.
+   */
+  lastActivity(streamer: string): { ts: number; type: string } | null {
+    const row = this.db
+      .prepare(
+        "SELECT ts, type FROM events WHERE streamer = ? ORDER BY ts DESC, id DESC LIMIT 1",
+      )
+      .get(streamer) as { ts: number; type: string } | undefined;
+    return row ?? null;
   }
 
   /**
