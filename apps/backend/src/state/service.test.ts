@@ -28,10 +28,12 @@ function make(responses: unknown[], streamers = ["alpha"]) {
   return { service, request };
 }
 
-const alpha = (points: number, isOnline = true) => ({
+const alpha = (points: number, isOnline = true, stream = "S1", startedAt = 1000) => ({
   streamers: [{
     username: "alpha", channelId: "42", displayName: "Alpha",
     points, isOnline, pointsEnabled: true,
+    streamId: isOnline ? stream : null,
+    streamStartedAt: isOnline ? startedAt : null,
   }],
 });
 
@@ -505,4 +507,125 @@ test("leaves an unattributable event off every card", async () => {
   expect(history.lastActivity("alpha")).toBeNull();
   // Still recorded for the feed, which shows every event.
   expect(history.recentEvents(10)).toHaveLength(1);
+});
+
+test("reports the stream start from Twitch, not from when we looked", async () => {
+  clock = 3_600_000;
+  const { service } = make([alpha(100, true, "S1", 1000)]);
+  await service.refresh();
+  // Twitch says the stream began at 1000; we first looked an hour in.
+  expect(service.snapshot().streamers[0].liveSince).toBe(1000);
+});
+
+test("keeps the stream gain across a restart", async () => {
+  // Two services sharing only the database, as a restart would. The old
+  // in-memory anchor map lost this and silently reset the gain to zero.
+  const first = make([alpha(100)]).service;
+  await first.refresh();
+  const second = make([alpha(150)]).service;
+  await second.refresh();
+  expect(second.snapshot().streamers[0].gainedStream).toBe(50);
+});
+
+test("reports a stream gain for a streamer added mid-stream", async () => {
+  // No false->true transition was ever observed, so the old map had no
+  // anchor and reported null forever.
+  const { service } = make([alpha(100), alpha(180)]);
+  await service.refresh();
+  clock += 60_000;
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gainedStream).toBe(80);
+});
+
+test("resets the stream gain when a new stream starts", async () => {
+  const { service } = make([alpha(100, true, "S1"), alpha(180, true, "S2", 500_000)]);
+  await service.refresh();
+  clock += 60_000;
+  await service.refresh();
+  // A new stream id is a new anchor, not a continuation of the old one.
+  expect(service.snapshot().streamers[0].gainedStream).toBe(0);
+});
+
+test("reports no stream gain when offline", async () => {
+  const { service } = make([alpha(100, false)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].gainedStream).toBeNull();
+  expect(service.snapshot().streamers[0].liveSince).toBeNull();
+});
+
+test("suppresses points per hour below the mining floor", async () => {
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  // A single tick of mining time is far under 15 minutes; a rate here
+  // would be a confident four-digit number contradicted next tick.
+  expect(service.snapshot().streamers[0].pointsPerHour).toBeNull();
+});
+
+test("quantises durations to whole minutes", async () => {
+  clock = 10_000_000;
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  for (const value of [s.online24h, s.mined24h, s.minedTotal]) {
+    // Unrounded values change every tick by definition -- an open span
+    // always grows -- and would make every SSE frame a broadcast.
+    expect(value % 60_000).toBe(0);
+  }
+});
+
+test("counts no mining time when the miner never ran", async () => {
+  // A closed stream, so there is history to measure. The live stream's
+  // own duration is deliberately excluded -- see the next test.
+  clock = 10_000_000;
+  history.openStreamerSession("alpha", "S0", clock - 7_200_000, 0);
+  history.recordPoints("alpha", 1, clock - 3_600_000);
+  history.closeStreamerSessionsExcept("alpha", null, clock - 3_600_000);
+  const { service } = make([alpha(100, true, "S1", clock - 60_000)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  // Online but unmined: the whole point of two clocks.
+  expect(s.online24h).toBe(3_600_000);
+  expect(s.mined24h).toBe(0);
+});
+
+test("counts mining time only while the miner was up", async () => {
+  // A two-hour closed stream with the miner up for only the last hour of
+  // it: the gap between the clocks is the figure that matters.
+  clock = 10_000_000;
+  const streamStart = clock - 7_200_000;
+  const streamEnd = clock - 3_600_000;
+  history.openStreamerSession("alpha", "S0", streamStart, 0);
+  history.recordPoints("alpha", 1, streamEnd);
+  history.closeStreamerSessionsExcept("alpha", null, streamEnd);
+  history.openMinerSession(streamStart + 1_800_000);
+  history.closeMinerSession(streamEnd);
+  const { service } = make([alpha(100, true, "S1", clock - 60_000)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  expect(s.online24h).toBe(3_600_000);
+  expect(s.mined24h).toBe(1_800_000);
+});
+
+test("keeps time figures still while a stream runs", async () => {
+  // The live stream's own duration is excluded from these figures on
+  // purpose: an open span grows every tick, and encoding that here would
+  // wake every SSE client with a frame carrying nothing new. The card
+  // adds the live remainder from liveSince, which it ticks itself.
+  clock = 10_000_000;
+  const { service } = make([alpha(100), alpha(100)]);
+  await service.refresh();
+  const first = service.snapshot().streamers[0].online24h;
+  clock += 600_000;
+  await service.refresh();
+  expect(service.snapshot().streamers[0].online24h).toBe(first);
+});
+
+test("beats the miner heartbeat on every refresh", async () => {
+  const { service } = make([alpha(100)]);
+  history.openMinerSession(500);
+  await service.refresh();
+  history.recoverOpenSessions();
+  // The heartbeat advanced to the refresh, so recovery closes there
+  // rather than back at the session's start.
+  expect(history.minerSpans()).toEqual([{ start: 500, end: clock }]);
 });

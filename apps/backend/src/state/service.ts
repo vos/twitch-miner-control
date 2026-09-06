@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
 import { attribute } from "./attribute.js";
 import { downsample } from "./gains.js";
+import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
 
 export interface StreamerState {
@@ -36,15 +37,60 @@ export interface StreamerState {
    * change comparison without waking SSE clients every tick.
    */
   avatarUrl: string | null;
+  /**
+   * When the current stream started, per Twitch itself; null when
+   * offline. A timestamp rather than a duration so the card can tick it
+   * client-side -- a server-sent duration would differ on every poll and
+   * wake every SSE client with a frame nothing meaningful changed in.
+   */
+  liveSince: number | null;
+  /** Identity of the current stream; the anchor key for gainedStream. */
+  streamId: string | null;
+  /** When this channel was last live; null while live or if never seen. */
+  lastLive: number | null;
+  /** The newest event attributed to this streamer, for the activity line. */
+  lastActivity: { ts: number; type: string } | null;
+  /** Milliseconds online in the last 24h, rounded to the minute. */
+  online24h: number;
+  /** Milliseconds online *and* mined in the last 24h, rounded to the minute. */
+  mined24h: number;
+  /** Milliseconds mined all-time, rounded to the minute. */
+  minedTotal: number;
+  /** Points per hour mined, or null below MIN_MINED_FOR_RATE_MS. */
+  pointsPerHour: number | null;
 }
 
 /** What the Python helper reports, before this service derives the rest. */
 export type RawStreamerState = Omit<
   StreamerState,
-  "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
->;
+  | "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
+  | "liveSince" | "lastLive" | "lastActivity"
+  | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
+> & {
+  /** Twitch's stream createdAt in epoch ms; null when offline. */
+  streamStartedAt: number | null;
+};
 
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * Mining time below which points-per-hour is not reported.
+ *
+ * A handful of points over six minutes extrapolates to a confident
+ * four-digit rate that the next tick contradicts. The figure only means
+ * something once the denominator is large enough to be stable.
+ */
+const MIN_MINED_FOR_RATE_MS = 15 * 60_000;
+
+/**
+ * Durations reaching the snapshot are whole minutes.
+ *
+ * Unrounded, they differ on every tick by definition -- an open span
+ * always grows -- which would defeat the change comparison gating SSE
+ * emission and make every poll a broadcast to every client.
+ */
+const toMinutes = (ms: number) => Math.round(ms / 60_000) * 60_000;
 
 export interface StateSnapshot {
   streamers: StreamerState[];
@@ -76,19 +122,6 @@ export class StateService extends EventEmitter {
   private ticker: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private dirty = false;
-  /**
-   * Balance observed when each streamer was last seen going online.
-   *
-   * The anchor is the `isOnline` false->true transition this poller
-   * observes, not an `events` row. An event row now carries the miner's
-   * formatted message, so it does name a channel -- but only as display
-   * text whose balances are millified and lossy, so attributing an anchor
-   * would mean parsing numbers back out of prose. The poller's balances
-   * are exact, so they stay the source. The cost is that the anchor is
-   * accurate to one refresh interval rather than to the second, which
-   * rounds to nothing in a points-gained figure.
-   */
-  private streamAnchor = new Map<string, number>();
   /**
    * The roster from the last refresh, used to attribute doorbell events.
    * Empty before the first refresh, so early events are unattributed
@@ -220,6 +253,10 @@ export class StateService extends EventEmitter {
       const previous = new Map(this.streamers.map((s) => [s.username, s]));
       const at = this.now();
       this.lastUpdated = at;
+      // Rides the existing poll rather than its own timer: this is exactly
+      // the cadence the heartbeat needs, and a second timebase would be
+      // one more thing to reconcile when the two disagree.
+      this.deps.history.beatMinerSession(at);
       this.lastError = null;
       const dayAgo = at - DAY_MS;
 
@@ -228,30 +265,74 @@ export class StateService extends EventEmitter {
           this.deps.history.recordPoints(s.username, s.points, at);
         }
 
-        const wasOnline = previous.get(s.username)?.isOnline ?? null;
-        if (s.isOnline && wasOnline === false && typeof s.points === "number") {
-          this.streamAnchor.set(s.username, s.points);
+        // An upsert on Twitch's stream id rather than a reaction to an
+        // observed transition: this runs on every live tick, so a restart
+        // mid-stream finds the existing row and keeps its anchor intact.
+        if (s.isOnline && s.streamId !== null && s.streamStartedAt !== null) {
+          this.deps.history.openStreamerSession(
+            s.username,
+            s.streamId,
+            s.streamStartedAt,
+            typeof s.points === "number" ? s.points : null,
+          );
         }
-        if (!s.isOnline) {
-          this.streamAnchor.delete(s.username);
-        }
+        // Any other open session for this streamer has ended. Clamped
+        // inside History to our last snapshot, so an outage is not billed
+        // as online time.
+        this.deps.history.closeStreamerSessionsExcept(s.username, s.streamId, at);
 
-        const anchor = this.streamAnchor.get(s.username);
+        const anchor = s.streamId === null
+          ? null
+          : this.deps.history.streamAnchor(s.username, s.streamId);
         const window = this.gainWindow(s.username, dayAgo);
+        const gained24h =
+          window === null || typeof s.points !== "number"
+            ? null
+            : s.points - window.balance;
+
+        // Time figures are measured to the *start of the current stream*,
+        // not to `at`.
+        //
+        // An open span grows with the wall clock, so measuring to "now"
+        // would change these numbers on every single tick even after
+        // rounding -- waking every SSE client with a frame carrying no
+        // new information. Cutting at the live stream's start makes them
+        // a function of closed history alone: they change only when a
+        // stream actually ends. The card adds the live remainder itself,
+        // which it can do exactly because `liveSince` is a timestamp it
+        // already ticks client-side.
+        //
+        // Same principle as `gainedSince` above: a derived field must
+        // never encode "now".
+        const upto = s.streamStartedAt ?? at;
+        const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, upto);
+        const mined24h = total(intersect(
+          online,
+          clip(this.deps.history.minerSpans(dayAgo), dayAgo, upto),
+        ));
+        const minedTotal = total(intersect(
+          clip(this.deps.history.streamerSpans(s.username), 0, upto),
+          clip(this.deps.history.minerSpans(), 0, upto),
+        ));
 
         return {
           ...s,
-          gained24h:
-            window === null || typeof s.points !== "number"
-              ? null
-              : s.points - window.balance,
+          gained24h,
           gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
           gainedStream:
-            anchor === undefined || typeof s.points !== "number"
-              ? null
-              : s.points - anchor,
+            anchor === null || typeof s.points !== "number" ? null : s.points - anchor,
           spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
           avatarUrl: avatars.get(normaliseUsername(s.username)) ?? null,
+          liveSince: s.streamStartedAt,
+          lastLive: this.deps.history.lastLive(s.username),
+          lastActivity: this.deps.history.lastActivity(s.username),
+          online24h: toMinutes(total(online)),
+          mined24h: toMinutes(mined24h),
+          minedTotal: toMinutes(minedTotal),
+          pointsPerHour:
+            mined24h < MIN_MINED_FOR_RATE_MS || gained24h === null
+              ? null
+              : Math.round((gained24h / (mined24h / HOUR_MS)) * 10) / 10,
         };
       });
 
