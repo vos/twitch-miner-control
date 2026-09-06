@@ -379,9 +379,15 @@ export class StateService extends EventEmitter {
     // Attributed against the roster resolved by the last refresh, so the
     // card can show "last: claim 4m ago" per streamer. An unattributable
     // line is stored with a null streamer, exactly as before.
+    const ts = this.now();
     this.deps.history.recordEvent(
-      eventType, this.now(), message, attribute(message, this.roster),
+      eventType, ts, message, attribute(message, this.roster),
     );
+    // Pushed straight to connected clients, in the row shape /api/events
+    // serves. Emitted per ring rather than alongside the debounced
+    // "change": a burst coalesces into one refresh, but each ring is its
+    // own feed row and dropping any would leave a hole in the log.
+    this.emit("event", { ts, type: eventType, message });
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;

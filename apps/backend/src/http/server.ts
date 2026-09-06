@@ -385,6 +385,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   deps.stateService.on("change", (snapshot) => hub.broadcast("state", snapshot));
+  // The activity feed used to poll /api/events every 5s, which re-sent the
+  // same 20 rows forever and still showed a new one up to 5s late. Pushing
+  // the row the moment it is recorded means only genuinely new events cross
+  // the wire; the client fetches the backlog once on mount.
+  deps.stateService.on("event", (row) => hub.broadcast("event", row));
   // Read at emit time rather than captured, so the frame carries the start
   // time that belongs to the state being announced: a RUNNING frame gets the
   // new process's timestamp, and a STOPPED/CRASHED frame gets null.

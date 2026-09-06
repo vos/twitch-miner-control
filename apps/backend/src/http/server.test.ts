@@ -525,6 +525,28 @@ test("an authenticated SSE client connects and receives broadcasts", async () =>
   controller.abort();
 });
 
+test("a recorded event is pushed to SSE clients instead of waiting for a poll", async () => {
+  await ctx.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = ctx.app.server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+
+  const controller = new AbortController();
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream`, {
+    headers: { cookie: `session=${ctx.cookie}` },
+    signal: controller.signal,
+  });
+  const reader = res.body!.getReader();
+  await reader.read(); // ": connected"
+
+  const seen = reader.read();
+  ctx.state.emit("event", { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" });
+  const frame = new TextDecoder().decode((await seen).value);
+  expect(frame).toContain("event: event");
+  expect(frame).toContain('"message":"+50 -> forsen"');
+
+  controller.abort();
+});
+
 // --- Shutdown with an attached SSE client (I4) --------------------------
 // Node's http.Server#close() waits for every open connection to end
 // before its callback fires. A hijacked /api/stream socket never ends on

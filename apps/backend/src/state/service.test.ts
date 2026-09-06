@@ -644,3 +644,28 @@ test("beats the miner heartbeat on every refresh", async () => {
   // rather than back at the session's start.
   expect(history.minerSpans()).toEqual([{ start: 500, end: clock }]);
 });
+
+test("emits the recorded row so the stream can push it to clients", async () => {
+  const { service } = make([alpha(100)], ["alpha"]);
+  await service.refresh();
+  const events = vi.fn();
+  service.on("event", events);
+  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  // The same shape /api/events serves, so a client can append a pushed row
+  // to the list it fetched on mount without reconciling two formats.
+  expect(events).toHaveBeenCalledWith({
+    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha",
+  });
+});
+
+test("emits an event per ring, even while the refresh debounce coalesces", async () => {
+  const { service } = make([alpha(100)], ["alpha"]);
+  await service.refresh();
+  const events = vi.fn();
+  service.on("event", events);
+  // Bursts coalesce into one refresh -- but every event is a distinct feed
+  // row, so none may be dropped along the way.
+  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  service.ring("GAIN_FOR_CLAIM", "+60 -> alpha");
+  expect(events).toHaveBeenCalledTimes(2);
+});
