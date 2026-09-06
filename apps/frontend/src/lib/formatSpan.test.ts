@@ -19,3 +19,16 @@ test("never renders a zero span, which would read as no time at all", () => {
   expect(formatSpan(20_000)).toBe("1m");
   expect(formatSpan(0)).toBe("1m");
 });
+
+test("rolls over to days past 48h", () => {
+  // The all-time mining figure reaches hundreds of hours, and "1400h" is
+  // a number to decode rather than read.
+  expect(formatSpan(72 * 3_600_000)).toBe("3d");
+  expect(formatSpan(142 * 3_600_000)).toBe("6d");
+});
+
+test("keeps hours up to 48h", () => {
+  // Guards every existing caller: the gain windows and the 24h figures
+  // never reach the new branch, so their labels are untouched.
+  expect(formatSpan(47 * 3_600_000)).toBe("47h");
+});
