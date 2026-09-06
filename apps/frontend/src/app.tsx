@@ -36,7 +36,7 @@ export function App() {
   // dot. `connected` is computed by the hook from EventSource's own
   // lifecycle and, before this, was read nowhere -- so a dropped stream
   // looked exactly like a healthy one.
-  const { snapshot, connected } = useLiveState();
+  const { snapshot, connected, authExpired } = useLiveState();
 
   useEffect(() => {
     const load = () =>
@@ -63,7 +63,7 @@ export function App() {
   };
 
   return (
-    <PasswordGate>
+    <PasswordGate sessionExpired={authExpired}>
       <AppShell
         header={{ height: 56 }}
         navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }}

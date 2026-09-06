@@ -3,7 +3,18 @@ import { type ReactNode, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { BrandMark } from "./BrandMark.js";
 
-export function PasswordGate({ children }: { children: ReactNode }) {
+export interface PasswordGateProps {
+  children: ReactNode;
+  /**
+   * Set once something else discovers the session is gone -- the live
+   * stream 401ing, say. The mount-time check cannot notice that on its
+   * own, which left a dead cookie rendering a full dashboard whose every
+   * request was quietly failing until the user happened to refresh.
+   */
+  sessionExpired?: boolean;
+}
+
+export function PasswordGate({ children, sessionExpired = false }: PasswordGateProps) {
   const [unlocked, setUnlocked] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +27,7 @@ export function PasswordGate({ children }: { children: ReactNode }) {
   }, []);
 
   if (unlocked === null) return null;
-  if (unlocked) return <>{children}</>;
+  if (unlocked && !sessionExpired) return <>{children}</>;
 
   const submit = async () => {
     setError(null);

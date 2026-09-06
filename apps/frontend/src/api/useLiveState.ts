@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "./client.js";
+import { api, UnauthorizedError } from "./client.js";
 
 export interface StreamerState {
   username: string;
@@ -24,10 +24,25 @@ export interface StateSnapshot {
   error: string | null;
 }
 
+/**
+ * How long a dropped stream must stay down before the header badge says so.
+ *
+ * EventSource reconnects on its own within a few seconds, so a shorter-lived
+ * drop is invisible to the user in every way except the badge -- reporting it
+ * trains people to ignore the indicator.
+ */
+export const DISCONNECT_GRACE_MS = 5_000;
+
+/** Delay before rebuilding a stream that failed to open. */
+export const RECONNECT_DELAY_MS = 3_000;
+
 export function useLiveState() {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The session cookie is gone, so reconnecting is pointless -- the app has
+  // to send the user back through the login gate.
+  const [authExpired, setAuthExpired] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -39,25 +54,101 @@ export function useLiveState() {
         if (alive) setLoadError(cause instanceof Error ? cause.message : String(cause));
       });
 
-    const source = new EventSource("/api/stream");
+    let source: EventSource | null = null;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // `connected` is driven by EventSource's own lifecycle, not by
-    // whether a "state" frame happened to arrive: the connection can be
-    // open with no traffic yet, and it can drop and silently auto-
-    // reconnect (EventSource fires "open" again on recovery).
-    source.addEventListener("open", () => { if (alive) setConnected(true); });
-    source.addEventListener("error", () => { if (alive) setConnected(false); });
-
-    source.addEventListener("state", (event) => {
-      try {
-        setSnapshot(JSON.parse((event as MessageEvent).data) as StateSnapshot);
-      } catch {
-        // A malformed frame must never take the page down.
+    const clearGrace = () => {
+      if (graceTimer !== null) {
+        clearTimeout(graceTimer);
+        graceTimer = null;
       }
-    });
+    };
 
-    return () => { alive = false; source.close(); };
+    /**
+     * Distinguishes "session expired" from "backend briefly unreachable".
+     *
+     * EventSource cannot report a status code -- a 401 and a dropped socket
+     * both surface as a bare "error" event -- so the only way to tell them
+     * apart is to ask an authenticated endpoint directly.
+     */
+    const probeAuth = async (): Promise<boolean> => {
+      try {
+        await api.get("/api/status");
+        return true;
+      } catch (cause) {
+        if (cause instanceof UnauthorizedError) return false;
+        // Any other failure (backend down, network blip) is not an auth
+        // problem, so reconnecting is still the right move.
+        return true;
+      }
+    };
+
+    const connect = () => {
+      if (!alive) return;
+      source = new EventSource("/api/stream");
+
+      source.addEventListener("open", () => {
+        if (!alive) return;
+        clearGrace();
+        setConnected(true);
+      });
+
+      source.addEventListener("state", (event) => {
+        try {
+          setSnapshot(JSON.parse((event as MessageEvent).data) as StateSnapshot);
+        } catch {
+          // A malformed frame must never take the page down.
+        }
+      });
+
+      source.addEventListener("error", () => {
+        if (!alive) return;
+
+        // Only report a drop that outlasts the grace window: a transport
+        // blip that recovers inside it is invisible to the user otherwise.
+        if (graceTimer === null) {
+          graceTimer = setTimeout(() => {
+            graceTimer = null;
+            if (alive) setConnected(false);
+          }, DISCONNECT_GRACE_MS);
+        }
+
+        // EventSource retries transport failures itself but gives up
+        // permanently on an HTTP error response -- which is exactly what a
+        // restarted backend serves, since sessions live in an in-memory Map
+        // and every existing cookie becomes unknown. Rebuild the source
+        // ourselves rather than leaving the page silently dead until a
+        // manual refresh.
+        if (reconnectTimer !== null) return;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          if (!alive) return;
+          void probeAuth().then((authed) => {
+            if (!alive) return;
+            if (!authed) {
+              // Retrying against a dead cookie would 401 forever.
+              setAuthExpired(true);
+              setConnected(false);
+              clearGrace();
+              return;
+            }
+            source?.close();
+            connect();
+          });
+        }, RECONNECT_DELAY_MS);
+      });
+    };
+
+    connect();
+
+    return () => {
+      alive = false;
+      clearGrace();
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      source?.close();
+    };
   }, []);
 
-  return { snapshot, connected, loadError };
+  return { snapshot, connected, loadError, authExpired };
 }

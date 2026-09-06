@@ -60,3 +60,19 @@ test("shows the brand mark above the unlock form", async () => {
   render(ui);
   expect(await screen.findByRole("img", { name: /miner control/i })).toBeInTheDocument();
 });
+
+test("re-locks when a session that was valid expires", async () => {
+  stubSequence(200);
+  render(
+    <MantineProvider>
+      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
+    </MantineProvider>,
+  );
+
+  // The backend restarted and dropped every in-memory session, so the
+  // content on screen is backed by a cookie the server no longer knows.
+  await waitFor(() =>
+    expect(screen.getByLabelText("Password")).toBeInTheDocument(),
+  );
+  expect(screen.queryByText("secret content")).not.toBeInTheDocument();
+});
