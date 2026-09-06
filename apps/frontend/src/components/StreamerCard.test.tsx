@@ -9,6 +9,8 @@ const base: StreamerState = {
   points: 1000, isOnline: true, pointsEnabled: true,
   gained24h: 250, gainedSince: null, gainedStream: 40, spark: [900, 950, 1000],
   avatarUrl: null,
+  liveSince: null, streamId: null, lastLive: null, lastActivity: null,
+  online24h: 0, mined24h: 0, minedTotal: 0, pointsPerHour: null,
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -111,4 +113,85 @@ test("the streamer's name links to their channel", () => {
   view({ avatarUrl: null });
   const nameLink = screen.getByRole("link", { name: "Alpha" });
   expect(nameLink).toHaveAttribute("href", "https://twitch.tv/alpha");
+});
+
+test("ticks the live duration from the stream start", () => {
+  view({ isOnline: true, liveSince: Date.now() - 3 * 3_600_000 - 24 * 60_000 });
+  expect(screen.getByTestId("live-duration")).toHaveTextContent("3h 24m");
+});
+
+test("shows the last activity in the miner's own terms", () => {
+  view({ lastActivity: { ts: Date.now() - 4 * 60_000, type: "GAIN_FOR_CLAIM" } });
+  const line = screen.getByTestId("last-activity");
+  expect(line).toHaveTextContent("claim");
+  expect(line).toHaveTextContent("4m ago");
+});
+
+test("shows both clocks when they differ", () => {
+  view({ online24h: 8 * 3_600_000, mined24h: 6 * 3_600_000 });
+  const line = screen.getByTestId("times-24h");
+  expect(line).toHaveTextContent("live 8h");
+  expect(line).toHaveTextContent("mined 6h");
+});
+
+test("collapses to one figure when the clocks agree", () => {
+  // "live 6h · mined 6h" on every card is noise; the gap is the signal.
+  view({ online24h: 6 * 3_600_000, mined24h: 6 * 3_600_000 });
+  const line = screen.getByTestId("times-24h");
+  expect(line).toHaveTextContent("mined 6h");
+  expect(line).not.toHaveTextContent("live 6h");
+});
+
+test("adds the live stream to the 24h figures", () => {
+  // The server measures only up to the stream's start, so the card must
+  // add the running remainder or a live stream would appear uncounted.
+  view({
+    isOnline: true,
+    liveSince: Date.now() - 2 * 3_600_000,
+    online24h: 3_600_000,
+    mined24h: 3_600_000,
+  });
+  expect(screen.getByTestId("times-24h")).toHaveTextContent("3h");
+});
+
+test("shows when an offline channel was last live", () => {
+  view({ isOnline: false, liveSince: null, lastLive: Date.now() - 3 * 86_400_000 });
+  expect(screen.getByTestId("last-live")).toHaveTextContent("3d ago");
+});
+
+test("shows the all-time mining figure", () => {
+  view({ minedTotal: 142 * 3_600_000 });
+  expect(screen.getByTestId("mined-total")).toHaveTextContent("6d");
+});
+
+test("shows points per hour when it is reported", () => {
+  view({ pointsPerHour: 42.5 });
+  expect(screen.getByTestId("points-per-hour")).toHaveTextContent("42.5");
+});
+
+test("omits points per hour below the mining floor", () => {
+  view({ pointsPerHour: null });
+  expect(screen.queryByTestId("points-per-hour")).not.toBeInTheDocument();
+});
+
+test("renders nothing rather than zeros without history", () => {
+  // "0h mined" and "we have not watched yet" are different claims.
+  view({ isOnline: false, liveSince: null, lastLive: null, lastActivity: null });
+  expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("last-live")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("live-duration")).not.toBeInTheDocument();
+});
+
+test("survives a snapshot missing the time fields entirely", () => {
+  // A frame from a backend that predates these fields must degrade to a
+  // card without a time block, never throw and blank the dashboard.
+  const { liveSince, lastLive, lastActivity, online24h, mined24h, minedTotal,
+    pointsPerHour, streamId, ...withoutTimes } = base;
+  render(
+    <MantineProvider>
+      <StreamerCard streamer={withoutTimes as StreamerState} />
+    </MantineProvider>,
+  );
+  expect(screen.getByTestId("balance")).toBeInTheDocument();
+  expect(screen.queryByTestId("times-24h")).not.toBeInTheDocument();
 });

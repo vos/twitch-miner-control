@@ -1,6 +1,7 @@
 import { Badge, Group, Stack, Text, Tooltip } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
+import { StreamerTimes } from "./StreamerTimes.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -98,11 +99,18 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             past its edge on a narrow column. */}
         <Sparkline values={s.spark} height={34} fill />
 
+        <StreamerTimes streamer={s} />
+
         <Group gap="sm">
           {live && s.gainedStream !== null && (
             <Gain value={s.gainedStream} label="stream" testId="gain-stream" />
           )}
           <Gain value={s.gained24h} label="24h" since={s.gainedSince} testId="gain-24h" />
+          {s.pointsPerHour !== null && (
+            <Text size="xs" c="dimmed" data-testid="points-per-hour">
+              {s.pointsPerHour}/h
+            </Text>
+          )}
         </Group>
 
         {s.error && (

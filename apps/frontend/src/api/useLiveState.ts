@@ -15,6 +15,26 @@ export interface StreamerState {
   gainedStream: number | null;
   spark: number[];
   avatarUrl: string | null;
+  /**
+   * When the current stream started, per Twitch; null when offline.
+   * A timestamp, not a duration: the card ticks it client-side, so the
+   * server never has to resend a number that changes every second.
+   */
+  liveSince: number | null;
+  streamId: string | null;
+  /** When this channel was last live; null while live or if never seen. */
+  lastLive: number | null;
+  lastActivity: { ts: number; type: string } | null;
+  /**
+   * Online and mined milliseconds in the last 24h, and mined all-time,
+   * measured up to the *current stream's start* -- so they hold still
+   * while a stream runs instead of waking every client each tick. The
+   * card adds the live remainder from `liveSince`.
+   */
+  online24h: number;
+  mined24h: number;
+  minedTotal: number;
+  pointsPerHour: number | null;
 }
 
 export interface StateSnapshot {
