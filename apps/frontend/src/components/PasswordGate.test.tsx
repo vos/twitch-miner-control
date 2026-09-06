@@ -93,3 +93,20 @@ test("keeps focus in the field after a wrong password", async () => {
   await screen.findByRole("alert");
   await waitFor(() => expect(screen.getByLabelText("Password")).toHaveFocus());
 });
+
+test("unlocks after a login even while the live stream still reports the session gone", async () => {
+  // A fresh page load with no cookie: the stream 401s and latches
+  // `authExpired` before the user has finished typing. The successful
+  // login is newer information than that latch, so it must win --
+  // otherwise the form silently does nothing and only a manual refresh
+  // (which remounts the hook) shows the dashboard.
+  stubSequence(401, 200, 200);
+  render(
+    <MantineProvider>
+      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
+    </MantineProvider>,
+  );
+  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
+  await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
+  expect(await screen.findByText("secret content")).toBeInTheDocument();
+});

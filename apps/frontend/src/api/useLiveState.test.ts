@@ -250,3 +250,30 @@ test("stops reconnecting once the session has expired", async () => {
     vi.useRealTimers();
   }
 });
+
+test("retry clears authExpired and opens a fresh stream", async () => {
+  vi.useFakeTimers();
+  try {
+    const { result } = setupWithExpiredSession();
+    act(() => { FakeEventSource.last!.fail(); });
+    await act(async () => {
+      vi.advanceTimersByTime(RECONNECT_DELAY_MS + 100);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.authExpired).toBe(true);
+
+    // The user logged back in, so the cookie the hook gave up on has been
+    // replaced -- the stream has to be rebuilt or the dashboard renders
+    // with no live updates until a manual refresh.
+    const beforeRetry = FakeEventSource.created.length;
+    await act(async () => {
+      result.current.retry();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.authExpired).toBe(false);
+    expect(FakeEventSource.created.length).toBeGreaterThan(beforeRetry);
+  } finally {
+    vi.useRealTimers();
+  }
+});

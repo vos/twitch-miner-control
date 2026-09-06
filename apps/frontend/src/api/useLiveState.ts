@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, UnauthorizedError } from "./client.js";
 
 export interface StreamerState {
@@ -59,6 +59,10 @@ export const RECONNECT_DELAY_MS = 3_000;
 
 export function useLiveState() {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
+  // Bumped to tear down a stream that gave up and build a fresh one --
+  // the only way back after `authExpired`, since that state stops the
+  // reconnect loop for good.
+  const [attempt, setAttempt] = useState(0);
   const [connected, setConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   // The session cookie is gone, so reconnecting is pointless -- the app has
@@ -169,7 +173,19 @@ export function useLiveState() {
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
       source?.close();
     };
+  }, [attempt]);
+
+  /**
+   * Resume after `authExpired`, once a new session has been established.
+   *
+   * Without this the hook stays parked: it deliberately stops reconnecting
+   * against a dead cookie, so a user who logs back in on the same page gets
+   * a dashboard with no live updates until they refresh by hand.
+   */
+  const retry = useCallback(() => {
+    setAuthExpired(false);
+    setAttempt((n) => n + 1);
   }, []);
 
-  return { snapshot, connected, loadError, authExpired };
+  return { snapshot, connected, loadError, authExpired, retry };
 }

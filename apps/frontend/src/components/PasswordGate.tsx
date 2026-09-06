@@ -13,9 +13,19 @@ export interface PasswordGateProps {
    * request was quietly failing until the user happened to refresh.
    */
   sessionExpired?: boolean;
+  /**
+   * Called once a fresh session exists. Lets the live stream -- which
+   * parks itself for good when it decides the cookie is dead -- start
+   * over, instead of leaving a logged-in dashboard with no updates.
+   */
+  onUnlocked?: () => void;
 }
 
-export function PasswordGate({ children, sessionExpired = false }: PasswordGateProps) {
+export function PasswordGate({
+  children,
+  sessionExpired = false,
+  onUnlocked,
+}: PasswordGateProps) {
   const [unlocked, setUnlocked] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +34,12 @@ export function PasswordGate({ children, sessionExpired = false }: PasswordGateP
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    api.get("/api/status").then(() => setUnlocked(true)).catch(() => setUnlocked(false));
+    api.get("/api/status")
+      // The probe was fired before any expiry could be reported, so its
+      // answer must not overrule one that arrived while it was in flight
+      // -- that would unlock the app on a cookie known to be dead.
+      .then(() => setUnlocked((prev) => (prev === false ? prev : true)))
+      .catch(() => setUnlocked(false));
   }, []);
 
   /**
@@ -38,8 +53,22 @@ export function PasswordGate({ children, sessionExpired = false }: PasswordGateP
     setError(null);
   };
 
+  /**
+   * A reported expiry re-locks the app.
+   *
+   * Handled here rather than by gating the render on `sessionExpired`: that
+   * read made the flag outrank everything that happened after it, so a
+   * stream 401ing before the user finished typing (every fresh load with no
+   * cookie) swallowed the login that followed -- the form appeared to do
+   * nothing, and only a manual refresh got the dashboard up. Folding it into
+   * state instead lets the newer event win.
+   */
+  useEffect(() => {
+    if (sessionExpired) lock();
+  }, [sessionExpired]);
+
   if (unlocked === null) return null;
-  if (unlocked && !sessionExpired) {
+  if (unlocked) {
     return (
       <SessionContext.Provider value={{ onLoggedOut: lock }}>
         {children}
@@ -52,6 +81,7 @@ export function PasswordGate({ children, sessionExpired = false }: PasswordGateP
     try {
       await api.post("/api/session", { password });
       setUnlocked(true);
+      onUnlocked?.();
     } catch {
       setError("Wrong password");
       setAttempt((n) => n + 1);
