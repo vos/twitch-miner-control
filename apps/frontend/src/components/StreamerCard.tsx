@@ -3,7 +3,8 @@ import { Sparkline } from "./Sparkline.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamerTimes } from "./StreamerTimes.js";
 import { formatSpan } from "../lib/formatSpan.js";
-import { formatLiveSpan, useLiveDuration } from "../lib/useLiveDuration.js";
+import { useLiveDuration } from "../lib/useLiveDuration.js";
+import { StatusPill } from "./StatusPill.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -81,28 +82,19 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             </Text>
           </Group>
           <Group gap={6} wrap="nowrap">
-            {live ? (
-              <span className={classes.pill} data-testid="live-pill">
-                <span className={classes.dot} />
-                {elapsed === null ? "LIVE" : `LIVE ${formatLiveSpan(elapsed)}`}
-              </span>
-            ) : (
-              /* The offline counterpart sits in the same slot so a card
-                 keeps one status element whichever state it is in. It
-                 carries the last time we saw the channel live -- which is
-                 our own observation, not Twitch's history: the GQL layer
-                 exposes a stream's createdAt only while it is running, so
-                 a channel we have never seen live has no date to show and
-                 reads a bare "offline". */
-              <span
-                className={`${classes.pill} ${classes.pillOffline}`}
-                data-testid="offline-pill"
-              >
-                {s.lastLive == null
-                  ? "OFFLINE"
-                  : `OFFLINE ${formatSpan(Math.max(0, Date.now() - s.lastLive))}`}
-              </span>
-            )}
+            {/* Shared with the streamer config rows, so the two screens
+                cannot drift on what a channel's status looks like. The
+                offline pill carries the last time WE saw the channel live
+                -- our own observation, not Twitch's history: the GQL layer
+                exposes a stream's createdAt only while it is running, so a
+                channel we have never seen live reads a bare "offline".
+                `elapsed` is passed because this card ticks its own clock. */}
+            <StatusPill
+              isOnline={s.isOnline}
+              liveSince={s.liveSince}
+              lastLive={s.lastLive}
+              elapsed={live ? elapsed : null}
+            />
             {s.pointsEnabled === false && (
               <Tooltip label="Channel points are disabled for this channel, so the balance cannot move.">
                 <Badge color="yellow" variant="light" size="sm" data-testid="points-disabled">

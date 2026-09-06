@@ -1,4 +1,4 @@
-import { Alert, Stack, Text, Title } from "@mantine/core";
+import { ActionIcon, Alert, Group, Stack, Text, Title } from "@mantine/core";
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCenter,
   type DragEndEvent, useSensor, useSensors,
@@ -8,7 +8,8 @@ import {
   SortableContext, arrayMove, sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { useEffect, useState } from "react";
+import { IconRefresh } from "@tabler/icons-react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { AddStreamer } from "../components/AddStreamer.js";
 import { PendingBar } from "../components/PendingBar.js";
@@ -18,6 +19,20 @@ interface StreamerEntry {
   username: string;
   enabled: boolean;
   settings: Record<string, unknown>;
+}
+/**
+ * The slice of the live snapshot this screen reads.
+ *
+ * Every field is optional-by-nullability: a backend that predates them,
+ * or a frame that drops one, must degrade to a row without a pill rather
+ * than take the config screen down.
+ */
+interface StreamerStatus {
+  username: string;
+  avatarUrl: string | null;
+  isOnline: boolean | null;
+  liveSince: number | null;
+  lastLive: number | null;
 }
 interface Config {
   version: 1; username: string; followers: boolean; followersOrder: string;
@@ -31,7 +46,8 @@ export function Streamers() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [avatars, setAvatars] = useState<Map<string, string | null>>(new Map());
+  const [status, setStatus] = useState<Map<string, StreamerStatus>>(new Map());
+  const [refreshing, setRefreshing] = useState(false);
 
   // An activation distance keeps a click on the grip from being read as a
   // drag; the keyboard sensor is the only reorder path for a keyboard user
@@ -41,20 +57,32 @@ export function Streamers() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  useEffect(() => {
-    // Pictures only. A failure here must not touch `loadError` -- the
-    // config screen has to work with the miner stopped, which is exactly
-    // when someone is most likely to be on it.
-    api.get<{ streamers: { username: string; avatarUrl: string | null }[] }>(
-      "/api/streamers",
-    )
-      .then((snapshot) => {
-        setAvatars(new Map(
-          snapshot.streamers.map((s) => [s.username.toLowerCase(), s.avatarUrl]),
-        ));
-      })
-      .catch(() => {});
+  /**
+   * Pictures and live state. A failure here must not touch `loadError` --
+   * the config screen has to work with the miner stopped, which is exactly
+   * when someone is most likely to be on it. It leaves `status` empty, and
+   * a row with no entry renders no pill rather than claiming "offline".
+   *
+   * Only ever writes `status`, never `draft`: a refresh must not discard
+   * an order the user has staged but not applied.
+   */
+  const loadStatus = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const snapshot = await api.get<{ streamers: StreamerStatus[] }>("/api/streamers");
+      setStatus(new Map(
+        snapshot.streamers.map((s) => [s.username.toLowerCase(), s]),
+      ));
+    } catch {
+      // Decoration only -- leave whatever we last knew on screen.
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
+
+  // Re-runs on every visit: app.tsx swaps the screen element, so this
+  // component remounts and the status is fresh each time you arrive.
+  useEffect(() => { void loadStatus(); }, [loadStatus]);
 
   useEffect(() => {
     api.get<Config>("/api/config")
@@ -131,7 +159,20 @@ export function Streamers() {
   return (
     <Stack pb={80}>
       <Title order={2}>Streamers</Title>
-      <Text size="sm" c="dimmed">Order is priority — the miner watches the top two.</Text>
+      <Group justify="space-between" wrap="nowrap">
+        <Text size="sm" c="dimmed">Order is priority — the miner watches the top two.</Text>
+          {/* No Mantine <Tooltip> here: its hover transition never settles
+              under userEvent, which hangs the whole vitest worker for 30s.
+              `title` gives the same hint natively, and the aria-label already
+              names the control. */}
+          <ActionIcon
+            variant="subtle" color="gray"
+            aria-label="Refresh live status" title="Refresh live status"
+            onClick={() => void loadStatus()} loading={refreshing}
+          >
+            <IconRefresh size={16} />
+          </ActionIcon>
+      </Group>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       <AddStreamer onAdd={add} />
       <DndContext
@@ -150,7 +191,7 @@ export function Streamers() {
                 key={streamer.username}
                 username={streamer.username}
                 enabled={streamer.enabled}
-                avatarUrl={avatars.get(streamer.username.toLowerCase()) ?? null}
+                status={status.get(streamer.username.toLowerCase()) ?? null}
                 index={index}
                 watching={index < 2}
                 onToggle={() => toggle(index)}

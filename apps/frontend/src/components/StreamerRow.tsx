@@ -2,12 +2,21 @@ import { ActionIcon, Badge, Card, Group, Switch, Text } from "@mantine/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { IconGripVertical } from "@tabler/icons-react";
+import { StatusPill } from "./StatusPill.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
+
+/** What the live snapshot knows about this channel; null when unreachable. */
+export interface RowStatus {
+  avatarUrl: string | null;
+  isOnline: boolean | null;
+  liveSince: number | null;
+  lastLive: number | null;
+}
 
 interface Props {
   username: string;
   enabled: boolean;
-  avatarUrl: string | null;
+  status: RowStatus | null;
   /** 0-based position, shown as the priority number and drives the tint. */
   index: number;
   /** True for the rows the miner actually watches -- the top two. */
@@ -23,7 +32,7 @@ interface Props {
  * makes those fight the reorder.
  */
 export function StreamerRow(
-  { username, enabled, avatarUrl, index, watching, onToggle }: Props,
+  { username, enabled, status, index, watching, onToggle }: Props,
 ) {
   const {
     attributes, listeners, setNodeRef, setActivatorNodeRef, transform,
@@ -61,7 +70,12 @@ export function StreamerRow(
             <IconGripVertical size={16} />
           </ActionIcon>
           <Text size="sm" c="dimmed" ff="monospace" w={20}>{index + 1}</Text>
-          <StreamerAvatar login={username} avatarUrl={avatarUrl} size={28} />
+          <StreamerAvatar
+            login={username}
+            avatarUrl={status?.avatarUrl ?? null}
+            size={28}
+            live={status?.isOnline === true}
+          />
           <Text
             component="a"
             href={`https://twitch.tv/${username}`}
@@ -77,6 +91,14 @@ export function StreamerRow(
               watching
             </Badge>
           )}
+          {/* Live state is what the ordering decision is actually made on,
+              so it sits on the row being dragged. Absent when the miner is
+              unreachable -- see StatusPill. */}
+          <StatusPill
+            isOnline={status?.isOnline ?? null}
+            liveSince={status?.liveSince ?? null}
+            lastLive={status?.lastLive ?? null}
+          />
         </Group>
         <Switch
           checked={enabled}

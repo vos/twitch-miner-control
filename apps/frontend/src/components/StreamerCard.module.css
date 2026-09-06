@@ -24,45 +24,6 @@
 
 .offline { opacity: 0.6; }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: var(--tw-live);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  /* The badge now carries a duration, so it is several times its old
-     width. Never let it shrink or wrap: it is the card's primary status,
-     and the name beside it already truncates, which is the right thing
-     to give up first when the column is narrow. */
-  flex-shrink: 0;
-  white-space: nowrap;
-  /* Tabular figures so the minute ticking over cannot change the badge's
-     width and nudge the name beside it. */
-  font-variant-numeric: tabular-nums;
-}
-
-/* The offline counterpart of .pill: same shape and slot, but muted --
-   it reports a resting state, so it must not compete with a live card's
-   red for attention on a dashboard scanned at a glance. */
-.pillOffline {
-  background: transparent;
-  color: var(--tw-text-dim);
-  border: 1px solid var(--tw-border);
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: tw-pulse 2s ease-in-out infinite;
-}
-
 .balance {
   font-family: var(--mantine-font-family-monospace);
   font-size: 22px;

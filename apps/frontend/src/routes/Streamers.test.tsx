@@ -31,7 +31,13 @@ beforeEach(() => {
     // an exact-match branch placed first would swallow lookup calls.
     if (url === "/api/streamers") {
       return { ok: true, status: 200, json: async () => ({
-        streamers: [{ username: "alpha", avatarUrl: "https://cdn/a.png" }],
+        streamers: [
+          { username: "alpha", avatarUrl: "https://cdn/a.png",
+            isOnline: true, liveSince: Date.now() - 2 * 60 * 60 * 1000, lastLive: null },
+          { username: "beta", avatarUrl: null,
+            isOnline: false, liveSince: null,
+            lastLive: Date.now() - 3 * 24 * 60 * 60 * 1000 },
+        ],
       }) };
     }
     return { ok: true, status: 200, json: async () => ({ ok: true }) };
@@ -308,4 +314,61 @@ test("stays usable when the live state cannot be loaded", async () => {
   view();
   expect(await screen.findByText("alpha")).toBeInTheDocument();
   expect(screen.getAllByTestId("streamer-row").length).toBe(2);
+});
+
+
+// --- live status on the config rows ---
+
+test("shows each streamer's live state so the order can be judged", async () => {
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  // alpha is live, beta went offline three days ago. Both facts drive the
+  // decision this screen exists for: who is worth the top two slots.
+  expect(await screen.findByTestId("live-pill")).toHaveTextContent("LIVE 2h");
+  expect(screen.getByTestId("offline-pill")).toHaveTextContent("OFFLINE 3d");
+});
+
+test("shows no status at all when the miner cannot be reached", async () => {
+  // The config screen has to work with the miner stopped. An OFFLINE pill
+  // here would assert something we did not observe.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/config") {
+      return { ok: true, status: 200, json: async () => config };
+    }
+    throw new Error("miner is stopped");
+  }));
+  view();
+  await screen.findAllByTestId("streamer-row");
+  expect(screen.queryByTestId("live-pill")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("offline-pill")).not.toBeInTheDocument();
+});
+
+test("the refresh button re-reads the live state", async () => {
+  view();
+  await screen.findAllByTestId("streamer-row");
+  const before = calls.filter((c) => c.url === "/api/streamers").length;
+
+  await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+  await waitFor(() => {
+    expect(calls.filter((c) => c.url === "/api/streamers").length).toBe(before + 1);
+  });
+});
+
+test("refreshing keeps a staged reorder instead of discarding it", async () => {
+  // The draft is the user's unsaved work. Refreshing pulls status only --
+  // clobbering the order they just arranged would be the worst possible
+  // moment to lose it.
+  stubRowRects();
+  view();
+  await screen.findAllByTestId("streamer-row");
+  await dragBy(screen.getAllByRole("button", { name: /reorder/i })[0], 60);
+  expect(screen.getAllByTestId("streamer-row")[0].textContent).toContain("beta");
+
+  await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
+  await waitFor(() => {
+    expect(screen.getAllByTestId("streamer-row")[0].textContent).toContain("beta");
+  });
+  expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
 });
