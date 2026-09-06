@@ -48,11 +48,57 @@ point: "live 8h · mined 6h" says something "8h" alone cannot.
 - `Supervisor.runningSince` -- when the live miner process started, or
   null. In memory; emits `state` transitions.
 
-The poller already observes every `isOnline` false->true transition (it
-uses one to set `streamAnchor`) and simply discards it. Nothing about
-online periods or miner uptime is persisted anywhere.
+Nothing about online periods or miner uptime is persisted anywhere: both
+live in memory and die with the process.
+
+### Twitch already tells us when the stream started
+
+`state.py:_one()` calls `with_is_stream_live_query` on every poll and
+reduces the whole response to a boolean:
+
+```python
+live = self.session.gql.with_is_stream_live_query(channel.id)
+"isOnline": live.user.stream is not None,   # everything else discarded
+```
+
+That `Stream` object carries `id` and `created_at` -- Twitch's own
+authoritative stream start time, already parsed by the miner's typed
+parser (`vendor/miner/.../response/WithIsStreamLiveQuery.py`). We fetch
+it every 60 seconds and throw it away.
+
+This is **better than deriving the same figure from observed
+transitions**, which is what an earlier draft of this design did:
+
+- It is correct on *first* observation. A transition-derived clock can
+  only measure from the moment we first looked, so a streamer added
+  mid-stream would report "live 4m" for a stream running six hours.
+- It survives restarts for free -- no boot recovery, no last-known-good
+  timestamp, no systematic under-count.
+- `stream.id` is a stable identity for the current stream, which is a
+  sounder anchor than an in-memory map that empties on restart.
+
+So the current stream's duration comes from Twitch, and the span tables
+below are reduced to what only they can answer: history.
 
 ## Design
+
+### 0. The division of labour
+
+Twitch answers **"now"**; the span tables answer **"history"**.
+
+`created_at` is a point-in-time fact about the *current* stream. It says
+nothing about streams that have ended, and Twitch does not hand us past
+stream durations. So it cannot answer:
+
+- Online time in the last 24h -- potentially several streams, most of
+  them over.
+- Mining time -- needs miner uptime, which Twitch knows nothing about.
+- All-time mined -- same.
+
+Hence both halves. The tables stay, but they get *better*: their rows are
+stamped with Twitch's real stream boundaries rather than with the moment
+our poller happened to notice, so the historical figures inherit the same
+accuracy as the live one.
 
 ### 1. Spans, not samples
 
@@ -63,11 +109,18 @@ more and answer worse.
 
 ```sql
 CREATE TABLE streamer_sessions (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  streamer TEXT    NOT NULL,
-  start_ts INTEGER NOT NULL,
-  end_ts   INTEGER,          -- NULL = still live
-  UNIQUE (streamer, start_ts)
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  streamer  TEXT    NOT NULL,
+  -- Twitch's stream id. The row's identity: one row per real stream,
+  -- no matter how many times we restart while it runs.
+  stream_id TEXT    NOT NULL,
+  -- Twitch's own createdAt, not when our poller first looked.
+  start_ts  INTEGER NOT NULL,
+  end_ts    INTEGER,         -- NULL = still live
+  -- Balance at our first sighting of this stream; the gainedStream
+  -- anchor, persisted so a restart cannot reset it (see 5b).
+  anchor_points INTEGER,
+  UNIQUE (streamer, stream_id)
 );
 CREATE INDEX idx_streamer_sessions_lookup
   ON streamer_sessions (streamer, start_ts);
@@ -81,14 +134,21 @@ CREATE TABLE miner_sessions (
 CREATE INDEX idx_miner_sessions_start ON miner_sessions (start_ts);
 ```
 
-`streamer_sessions` is written by the state poller on the `isOnline`
-transitions it already detects. `miner_sessions` is written by the
-supervisor from its `state` transitions: a row opens on entry to
-RUNNING, and closes on leaving it.
+`streamer_sessions` is written by the state poller on every tick where a
+streamer is live, as an upsert keyed on `(streamer, stream_id)`: insert
+the row on the first sighting of a stream, and leave it alone thereafter.
+A stream whose id is no longer live gets its `end_ts` stamped.
 
-The `UNIQUE (streamer, start_ts)` constraint makes reopening idempotent,
-so a double transition cannot produce two overlapping open spans for one
-streamer.
+The upsert is what makes this restart-proof. It is not a transition
+detector -- it does not care whether we *saw* the stream begin. A backend
+that boots mid-stream finds the same `stream_id` it stored before and
+updates that row rather than opening a second one, and a stream first
+seen four hours in is still recorded with its true start.
+
+`miner_sessions` is written by the supervisor from its `state`
+transitions: a row opens on entry to RUNNING and closes on leaving it.
+This one *is* transition-driven, because miner uptime is our own fact
+with no external source of truth.
 
 ### 2. Deriving the numbers
 
@@ -114,22 +174,31 @@ meaningful once there is enough denominator to be stable.
 
 ### 3. Crash recovery
 
-An open span is a claim that something is still running. If the process
-is killed, that claim keeps growing: on next boot an 8-hour-old open
-span would silently become 8 hours of mining time that never happened.
-This is the single most likely way for this feature to produce
-confidently wrong numbers, so it gets explicit handling.
+An open span is a claim that something is still running, and a killed
+process leaves that claim growing unattended. This is the single most
+likely way for this feature to produce confidently wrong numbers, so
+each table gets an explicit answer -- and they are different answers,
+because only one of the two has an external source of truth.
 
-**On boot, close every open span at the last known-good timestamp**, not
-at boot time:
+**`streamer_sessions` needs no recovery.** Anchoring on `stream_id`
+removes the problem rather than handling it: on the first poll after a
+restart, a stream still live matches its existing row and continues it,
+and one that ended is absent from the response and gets closed. The open
+span was never a guess to begin with -- it was Twitch's fact, and Twitch
+is still there to confirm or retire it.
 
-- `miner_sessions`: at its `heartbeat` column (below).
-- `streamer_sessions`: at `MAX(point_snapshots.ts)` for that streamer --
-  the last moment we were demonstrably watching. If a streamer has no
-  snapshot at or after `start_ts`, close it at `start_ts`, contributing
-  zero rather than a guess.
+The one case needing care: a stream that ended *while we were down* is
+closed at the first post-boot poll, which over-counts by the downtime.
+Clamp it to `MIN(now, MAX(point_snapshots.ts for that streamer))` -- the
+last moment we were demonstrably watching -- so the row closes where our
+evidence stops rather than where our outage ended.
 
-Both under-count a clean shutdown by up to one poll interval. That is
+**`miner_sessions` does need recovery**, because miner uptime has no
+external source of truth. On boot, close any open row at its `heartbeat`
+(below), never at boot time: otherwise an 8-hour-old open span from a
+killed process silently becomes 8 hours of mining that never happened.
+
+This under-counts a clean shutdown by up to one poll interval, which is
 the correct direction to err: a mining figure that is slightly low is a
 mild inaccuracy, one that is high is a lie.
 
@@ -171,6 +240,29 @@ prototype/no-back-compat stance.
 `{ ts, type }`. The raw message is not sent to the card -- the feed
 already renders those, and the card wants a short label.
 
+### 5b. Fixing `gainedStream` while we are here
+
+`gainedStream` currently anchors on `StateService.streamAnchor`, an
+in-memory map populated only on an observed false->true transition. It
+has two bugs that `streamId` fixes for free, so this design closes them
+rather than building alongside them:
+
+- A backend restart mid-stream empties the map, so the per-stream gain
+  silently resets to zero and the card under-reports for the rest of the
+  stream.
+- A streamer added mid-stream never had a transition observed, so it
+  shows no stream gain at all until the *next* stream.
+
+Replace the map with an anchor persisted per `(streamer, stream_id)`:
+the balance at the first sighting of that stream, stored on the
+`streamer_sessions` row as `anchor_points INTEGER`. Restart-proof,
+and correct from the first poll of a stream we joined late.
+
+This changes an existing behaviour, so `service.test.ts`'s
+`gainedStream` cases need updating rather than merely still passing --
+called out here because it is the one place this design edits semantics
+instead of adding them.
+
 ### 6. Retention
 
 `point_snapshots` grows without bound and is the only table that grows
@@ -199,10 +291,30 @@ given.
 
 ### 7. State shape
 
+`state.py:_one()` gains two fields, straight from the response it
+already fetches:
+
+```python
+stream = live.user.stream
+"streamId": stream.id if stream else None,
+"streamStartedAt": int(stream.created_at.timestamp() * 1000) if stream else None,
+```
+
+`created_at` is a **timezone-aware** `datetime` (Twitch sends UTC with a
+`Z` suffix, and `expect_iso_8601` preserves the offset), so
+`.timestamp()` is unambiguous. It must be converted here rather than
+passed through: `datetime` is not JSON-serializable and would throw when
+the NDJSON response is written. Epoch milliseconds also match every
+other timestamp already crossing this boundary.
+
+Both are on `RawStreamerState`, so they arrive before the service derives
+anything.
+
 New fields on `StreamerState`:
 
 ```ts
-liveSince: number | null;        // start of the current online span
+liveSince: number | null;        // Twitch's stream start; null when offline
+streamId: string | null;         // identity of the current stream
 lastLive: number | null;         // end of the most recent closed span
 lastActivity: { ts: number; type: string } | null;
 online24h: number;               // ms
@@ -285,9 +397,14 @@ says less than the `live 8h · mined 6h` line does.
 - `spans.ts`: clipping, intersection, open-span handling, zero-length and
   adjacent spans, spans straddling the window edge. Pure functions, so
   these are cheap and carry the most risk.
-- Boot recovery: an open span from a killed process closes at the last
-  known-good timestamp, not at boot; a streamer with no snapshots
-  contributes zero.
+- Stream identity: a restart mid-stream continues the same row rather
+  than opening a second; a streamer first seen four hours into a stream
+  records Twitch's true start, not the sighting time.
+- Boot recovery: an open `miner_sessions` row from a killed process
+  closes at its heartbeat, not at boot. A stream that ended during
+  downtime closes at the last snapshot, not at the post-boot poll.
+- `gainedStream`: survives a restart mid-stream (the current bug), and
+  is correct for a streamer added mid-stream.
 - Event attribution: a message naming a roster streamer attributes; one
   naming none stays NULL; one naming two stays NULL.
 - Retention: rows past the cutoff go, rows inside stay, `0` disables,
@@ -297,21 +414,27 @@ says less than the `live 8h · mined 6h` line does.
 - `formatSpan` day rollover: unchanged below 48h (guarding existing
   callers), rolls to days above it.
 
-Existing suites that must keep passing: `service.test.ts` (the snapshot
-shape changes), `history.test.ts`, `supervisor.test.ts`.
+Existing suites: `history.test.ts` and `supervisor.test.ts` must keep
+passing. `service.test.ts` needs its `gainedStream` cases *rewritten* --
+5b deliberately changes that behaviour, so a passing old test there would
+mean the fix did not land. `python/tests/test_contract.py` gains a case
+pinning `Stream.created_at`, since we now depend on it.
 
 ## Implementation order
 
-1. `spans.ts` pure functions + tests.
-2. Schema: two tables, the `events.streamer` column, the migration guard.
-3. `History` methods for spans, boot recovery, pruning.
-4. Poller writes streamer spans; supervisor writes miner spans + heartbeat.
-5. Event attribution against the roster.
-6. Derive the new `StreamerState` fields.
-7. `formatSpan` day rollover.
-8. Card UI.
-9. `.env.example` documentation for `HISTORY_RETENTION_DAYS`.
+1. `state.py` returns `streamId` / `streamStartedAt`; contract test for
+   `created_at`. Everything else depends on this.
+2. `spans.ts` pure functions + tests.
+3. Schema: two tables, the `events.streamer` column, the migration guard.
+4. `History` methods for spans, boot recovery, pruning.
+5. Poller upserts streamer spans; supervisor writes miner spans + heartbeat.
+6. Move `gainedStream` onto the persisted anchor (5b).
+7. Event attribution against the roster.
+8. Derive the new `StreamerState` fields.
+9. `formatSpan` day rollover.
+10. Card UI.
+11. `.env.example` documentation for `HISTORY_RETENTION_DAYS`.
 
-Steps 1-3 are independent of 4-6 and could be built in parallel; the card
-is last because it is the only step that cannot be verified without the
-rest.
+Step 1 gates everything. Steps 2-4 are then independent of 5-8 and could
+be built in parallel; the card is last because it is the only step that
+cannot be verified without the rest.
