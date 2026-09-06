@@ -112,13 +112,32 @@ test("moving a streamer up reorders priority and stages a change", async () => {
   expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
 });
 
+test("adding by pasted channel link looks up and stores the bare username", async () => {
+  view();
+  await screen.findAllByTestId("streamer-row");
+  await userEvent.type(
+    screen.getByLabelText(/add streamer/i),
+    "https://www.twitch.tv/gamma{Enter}",
+  );
+
+  // The URL never reaches the server: the lookup route only accepts a login.
+  await waitFor(() => {
+    expect(calls.some((c) => c.url === "/api/streamers/lookup?q=gamma")).toBe(true);
+  });
+  const rows = await screen.findAllByTestId("streamer-row");
+  expect(rows).toHaveLength(3);
+  expect(rows[2].textContent).toContain("gamma");
+});
+
 // --- Correction 1: the add-streamer path must not swallow errors ---
 
 test("surfaces an error when the username lookup rejects, and leaves the form usable", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
     if (url.startsWith("/api/streamers/lookup")) {
-      // Mirrors the backend: usernameSchema rejects a too-short query with a 400.
+      // Mirrors the backend rejecting the lookup. The value below is
+      // username-shaped -- the field's own parser has to let it through --
+      // so what is under test is the server error path, not client parsing.
       return {
         ok: false, status: 400,
         json: async () => ({ error: "not a valid Twitch username" }),
@@ -133,7 +152,7 @@ test("surfaces an error when the username lookup rejects, and leaves the form us
   view();
   await screen.findAllByTestId("streamer-row");
   const input = screen.getByLabelText(/add streamer/i);
-  await userEvent.type(input, "bad");
+  await userEvent.type(input, "badname");
   const addButton = screen.getByRole("button", { name: /^add$/i });
   await userEvent.click(addButton);
 
