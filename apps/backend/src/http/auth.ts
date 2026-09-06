@@ -114,6 +114,20 @@ export async function registerAuth(
       .send({ ok: true });
   });
 
+  /**
+   * Drops the caller's token server-side, then clears the cookie.
+   *
+   * Deliberately *not* public: it runs behind the session check, so it can
+   * only ever revoke the token the caller already holds. Forgetting the
+   * token is the part that matters -- expiring the cookie alone would leave
+   * a captured value working for the rest of its 24h TTL.
+   */
+  app.post("/api/session/logout", async (request, reply) => {
+    const token = request.cookies?.session;
+    if (token) sessions.delete(token);
+    return reply.clearCookie("session", { path: "/" }).send({ ok: true });
+  });
+
   app.addHook("onRequest", async (request, reply) => {
     if (isPublic(request)) return;
     const token = request.cookies?.session;

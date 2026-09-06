@@ -1,10 +1,11 @@
-import { Badge, Box, Group, Stack, Text } from "@mantine/core";
+import { Badge, Box, Divider, Group, Stack, Text } from "@mantine/core";
 import {
   IconChartBar, IconDeviceTv, IconSettings, IconTerminal2, IconUserCircle,
 } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import type { ScreenKey } from "../app.js";
 import { BrandMark } from "./BrandMark.js";
+import { LogoutButton } from "./LogoutButton.js";
 import { MinerDock } from "./MinerDock.js";
 import type { MinerStatus } from "./MinerStatusBadge.js";
 import { NavItem } from "./NavItem.js";
@@ -69,7 +70,13 @@ export function Sidebar({
         </Stack>
       </Box>
       <Box p="md" style={{ borderTop: "1px solid var(--tw-border)" }}>
-        <MinerDock state={miner.state} onChange={onMinerChange} />
+        <Stack gap="xs">
+          <MinerDock state={miner.state} onChange={onMinerChange} />
+          {/* Set apart from the miner actions: this one ends the browser
+              session and touches nothing the miner is doing. */}
+          <Divider my={4} color="var(--tw-border)" />
+          <LogoutButton />
+        </Stack>
       </Box>
     </Stack>
   );

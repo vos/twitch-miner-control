@@ -2,6 +2,7 @@ import { Box, Button, Card, Center, PasswordInput, Stack, Text } from "@mantine/
 import { type ReactNode, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { BrandMark } from "./BrandMark.js";
+import { SessionContext } from "./session.js";
 
 export interface PasswordGateProps {
   children: ReactNode;
@@ -26,8 +27,25 @@ export function PasswordGate({ children, sessionExpired = false }: PasswordGateP
     api.get("/api/status").then(() => setUnlocked(true)).catch(() => setUnlocked(false));
   }, []);
 
+  /**
+   * Drop every trace of the finished session before showing the form
+   * again -- leaving the old password in state would repopulate the
+   * field for whoever sits down next.
+   */
+  const lock = () => {
+    setUnlocked(false);
+    setPassword("");
+    setError(null);
+  };
+
   if (unlocked === null) return null;
-  if (unlocked && !sessionExpired) return <>{children}</>;
+  if (unlocked && !sessionExpired) {
+    return (
+      <SessionContext.Provider value={{ onLoggedOut: lock }}>
+        {children}
+      </SessionContext.Provider>
+    );
+  }
 
   const submit = async () => {
     setError(null);
@@ -66,6 +84,10 @@ export function PasswordGate({ children, sessionExpired = false }: PasswordGateP
             <Stack>
               <PasswordInput
                 label="Password"
+                // The only thing there is to do on this screen, so the
+                // user should be able to just start typing.
+                data-autofocus
+                autoFocus
                 value={password}
                 onChange={(e) => setPassword(e.currentTarget.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}

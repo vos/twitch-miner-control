@@ -198,3 +198,47 @@ test("does not accept a session minted by a different server instance", async ()
   });
   expect(res.statusCode).toBe(401);
 });
+
+// --- Logout -------------------------------------------------------------
+
+test("logout revokes the token it was called with", async () => {
+  const instance = await app();
+  const session = await login(instance);
+  const out = await instance.inject({
+    method: "POST", url: "/api/session/logout", cookies: { session },
+  });
+  expect(out.statusCode).toBe(200);
+  const res = await instance.inject({
+    method: "GET", url: "/api/protected", cookies: { session },
+  });
+  expect(res.statusCode).toBe(401);
+  expect(handlerHits).toBe(0);
+});
+
+test("logout clears the session cookie", async () => {
+  const instance = await app();
+  const res = await instance.inject({
+    method: "POST", url: "/api/session/logout",
+    cookies: { session: await login(instance) },
+  });
+  const cleared = res.cookies.find((c) => c.name === "session");
+  expect(cleared?.value).toBe("");
+});
+
+test("logout needs a session of its own", async () => {
+  const res = await (await app()).inject({ method: "POST", url: "/api/session/logout" });
+  expect(res.statusCode).toBe(401);
+});
+
+test("logout leaves other sessions working", async () => {
+  const instance = await app();
+  const mine = await login(instance);
+  const theirs = await login(instance);
+  await instance.inject({
+    method: "POST", url: "/api/session/logout", cookies: { session: mine },
+  });
+  const res = await instance.inject({
+    method: "GET", url: "/api/protected", cookies: { session: theirs },
+  });
+  expect(res.statusCode).toBe(200);
+});

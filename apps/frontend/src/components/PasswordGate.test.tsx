@@ -76,3 +76,20 @@ test("re-locks when a session that was valid expires", async () => {
   );
   expect(screen.queryByText("secret content")).not.toBeInTheDocument();
 });
+
+test("focuses the password field so the user can just type", async () => {
+  stubSequence(401);
+  render(ui);
+  expect(await screen.findByLabelText("Password")).toHaveFocus();
+});
+
+test("keeps focus in the field after a wrong password", async () => {
+  // The form remounts on each attempt to restart the shake animation,
+  // which must not cost the user their cursor.
+  stubSequence(401, 401);
+  render(ui);
+  await userEvent.type(await screen.findByLabelText("Password"), "nope");
+  await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
+  await screen.findByRole("alert");
+  await waitFor(() => expect(screen.getByLabelText("Password")).toHaveFocus());
+});
