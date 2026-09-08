@@ -18,6 +18,17 @@ Running a points miner also violates the
 and can get the account it signs in as suspended. Use an account you are
 willing to lose.
 
+## Disclaimer
+
+Quoting
+[upstream](https://github.com/mpforce1/Twitch-Channel-Points-Miner#disclaimer),
+which applies to this control panel too:
+
+> This project comes with no guarantee or warranty. You are responsible for
+> whatever happens from using this project. It is possible to get soft or hard
+> banned by using this project if you are not careful. This is a personal
+> project and is in no way affiliated with Twitch.
+
 ## Quick start
 
     git clone --recurse-submodules <this repo>
