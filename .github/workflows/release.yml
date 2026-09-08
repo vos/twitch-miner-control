@@ -7,10 +7,10 @@ on:
     # which stops a broken Dockerfile from lying in wait until the next
     # release -- the worst moment to discover it.
     #
-    # paths-ignore applies to both, and that is deliberate: a commit that
-    # only touches Markdown cannot break the image. If a release ever needs
-    # to be cut from such a commit, run this workflow manually, or make the
-    # tag point at a commit that changed something real.
+    # paths-ignore is here for main's build check: a Markdown-only commit
+    # cannot break the image, so it does not need an emulated arm64 build.
+    # If a release ever fails to trigger because its tagged commit touched
+    # only docs, run this workflow manually from the tag.
     #
     # Building on pull_request would catch breakage a little earlier still,
     # at the cost of an emulated arm64 build on every PR -- and CI already
