@@ -1,7 +1,7 @@
 import { ActionIcon, Badge, Card, Group, Switch, Text } from "@mantine/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { IconGripVertical } from "@tabler/icons-react";
+import { IconGripVertical, IconX } from "@tabler/icons-react";
 import { StatusPill } from "./StatusPill.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 
@@ -22,6 +22,7 @@ interface Props {
   /** True for the rows the miner actually watches -- the top two. */
   watching: boolean;
   onToggle: () => void;
+  onRemove: () => void;
 }
 
 /**
@@ -32,7 +33,7 @@ interface Props {
  * makes those fight the reorder.
  */
 export function StreamerRow(
-  { username, enabled, status, index, watching, onToggle }: Props,
+  { username, enabled, status, index, watching, onToggle, onRemove }: Props,
 ) {
   const {
     attributes, listeners, setNodeRef, setActivatorNodeRef, transform,
@@ -100,11 +101,26 @@ export function StreamerRow(
             lastLive={status?.lastLive ?? null}
           />
         </Group>
-        <Switch
-          checked={enabled}
-          onChange={onToggle}
-          aria-label={`Enable ${username}`}
-        />
+        <Group gap="xs" wrap="nowrap">
+          <Switch
+            checked={enabled}
+            onChange={onToggle}
+            aria-label={`Enable ${username}`}
+          />
+          {/* Removal is staged like every other edit on this screen -- it
+              drops the row from the draft and the pending bar counts it, so
+              a stray click costs an Apply, not a config. `title` rather than
+              a Mantine <Tooltip>, which hangs the vitest worker. */}
+          <ActionIcon
+            variant="subtle"
+            color="red"
+            onClick={onRemove}
+            aria-label={`Remove ${username}`}
+            title={`Remove ${username}`}
+          >
+            <IconX size={16} />
+          </ActionIcon>
+        </Group>
       </Group>
     </Card>
   );

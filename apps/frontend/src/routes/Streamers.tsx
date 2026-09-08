@@ -134,6 +134,11 @@ export function Streamers() {
     setDraft({ ...draft, streamers });
   };
 
+  const remove = (index: number) => {
+    setError(null);
+    setDraft({ ...draft, streamers: draft.streamers.filter((_, i) => i !== index) });
+  };
+
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     // No `over` means the drag was cancelled or released outside the list.
     if (!over || active.id === over.id) return;
@@ -195,6 +200,7 @@ export function Streamers() {
                 index={index}
                 watching={index < 2}
                 onToggle={() => toggle(index)}
+                onRemove={() => remove(index)}
               />
             ))}
           </Stack>

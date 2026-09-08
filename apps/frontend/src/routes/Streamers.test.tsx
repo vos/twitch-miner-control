@@ -372,3 +372,60 @@ test("refreshing keeps a staged reorder instead of discarding it", async () => {
   });
   expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
 });
+
+test("removing a streamer drops the row and stages one change", async () => {
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  await userEvent.click(screen.getByRole("button", { name: /remove alpha/i }));
+
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows).toHaveLength(1);
+  expect(rows[0].textContent).toContain("beta");
+  expect(await screen.findByTestId("pending-bar")).toHaveTextContent("1 pending change");
+  // Staged only: nothing reaches the miner until Apply & Restart.
+  expect(calls.some((c) => c.url === "/api/config/apply")).toBe(false);
+  expect(calls.some((c) => c.init?.method === "PUT")).toBe(false);
+});
+
+test("applying a removal sends a config without that streamer", async () => {
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  await userEvent.click(screen.getByRole("button", { name: /remove alpha/i }));
+  await userEvent.click(await screen.findByRole("button", { name: /apply & restart/i }));
+
+  await waitFor(() => {
+    expect(calls.some((c) => c.url === "/api/config" && c.init?.method === "PUT")).toBe(true);
+  });
+  const put = calls.find((c) => c.url === "/api/config" && c.init?.method === "PUT");
+  const sent = JSON.parse(String(put?.init?.body)) as typeof config;
+  expect(sent.streamers.map((s) => s.username)).toEqual(["beta"]);
+  expect(calls.some((c) => c.url === "/api/config/apply")).toBe(true);
+});
+
+test("removing a streamer promotes the next one into the watching set", async () => {
+  // The top two are what the miner watches, so a removal above them has to
+  // pull the third row up into a watching slot.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/config") {
+      return { ok: true, status: 200, json: async () => ({
+        ...config,
+        streamers: [
+          { username: "aaa", enabled: true, settings: {} },
+          { username: "bbb", enabled: true, settings: {} },
+          { username: "ccc", enabled: true, settings: {} },
+        ],
+      }) };
+    }
+    throw new Error("no live state");
+  }));
+  view();
+  await screen.findAllByTestId("streamer-row");
+
+  await userEvent.click(screen.getByRole("button", { name: /remove aaa/i }));
+
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows.map((r) => r.textContent?.includes("watching"))).toEqual([true, true]);
+  expect(rows[1].textContent).toContain("ccc");
+});
