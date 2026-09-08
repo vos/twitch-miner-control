@@ -7,7 +7,18 @@ RUN corepack enable
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/backend/package.json apps/backend/
 COPY apps/frontend/package.json apps/frontend/
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts is what keeps this stage buildable on node:24-slim.
+# better-sqlite3 ships no install script of its own, but it does ship a
+# binding.gyp, and pnpm runs `node-gyp rebuild` for such packages by
+# default -- node-gyp needs Python, which the slim image does not have, so
+# the install dies at `gyp ERR! find Python`. The rebuild is wasted work
+# regardless: better-sqlite3 bundles prebuilt binaries for linux-x64 and
+# linux-arm64, both of which this image is built for, and the prebuild is
+# what gets loaded at runtime either way. Skipping scripts also skips
+# esbuild's postinstall, which is equally unnecessary -- pnpm links the
+# platform-specific @esbuild/linux-* optional dependency, and Vite builds
+# the frontend from that.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY . .
 RUN pnpm -r build
 # `pnpm -r build` leaves apps/backend/node_modules full of symlinks such as
@@ -21,7 +32,7 @@ RUN pnpm -r build
 # self-contained deployment directory: its own node_modules/.pnpm store with
 # only production dependencies, addressed by symlinks that stay inside that
 # same directory, so it survives being copied anywhere.
-RUN pnpm --filter @app/backend deploy --prod /build/deploy/backend
+RUN pnpm --filter @app/backend deploy --prod --ignore-scripts /build/deploy/backend
 
 # --- Stage 2: runtime (Python helpers + miner + the built Node backend) ---
 FROM python:3.12-slim
