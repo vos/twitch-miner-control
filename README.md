@@ -2,8 +2,13 @@
 
 A control panel for
 [Twitch Channel Points Miner](https://github.com/mpforce1/Twitch-Channel-Points-Miner) —
-a web UI to configure and control the miner, in place of editing
-`run.py` by hand.
+a web UI to configure and control the miner, in place of editing `run.py`
+by hand.
+
+Add and reorder streamers, watch points accrue, sign in to Twitch with a
+device code, and restart the miner — all from the browser. The miner
+itself is vendored as a submodule and imported directly, so this project
+tracks upstream rather than reimplementing it.
 
 ## ⚠️ Run this on your LAN only
 
@@ -69,7 +74,12 @@ which applies to this control panel too:
 
 ## Quick start
 
-    git clone --recurse-submodules <this repo>
+Requires Docker with the Compose plugin. The `--recurse-submodules` matters:
+the build imports the vendored miner from `vendor/miner`, and without it the
+image builds against an empty directory.
+
+    git clone --recurse-submodules https://github.com/vos/twitch-miner-control.git
+    cd twitch-miner-control
     echo "APP_PASSWORD=choose-something" > .env
     docker compose up -d
 
@@ -77,10 +87,29 @@ Open http://localhost:8080, unlock with your password, then go to
 **Twitch account** and sign in with the device code. Add streamers on the
 **Streamers** screen and press **Apply & Restart**.
 
+Config, point history and the Twitch cookies live in `./data`, mounted
+into the container — back that up, and keep it out of anywhere public,
+since the cookies are a signed-in Twitch session.
+
+If you already cloned without the submodule, `git submodule update --init`
+fixes it in place.
+
+## How it works
+
+A Fastify backend serves the API and the built frontend on one port, and
+runs the miner as a Python child process it can stop and restart. The
+React frontend talks to that API and polls for point updates.
+
+- `apps/backend` — Fastify + SQLite (`better-sqlite3`), TypeScript.
+- `apps/frontend` — React 19 + Mantine, built by Vite.
+- `python/` — the miner entry point (`run.py`), config translation
+  (`miner_config.py`) and helpers for login and state.
+- `vendor/miner` — upstream, as a git submodule, imported directly.
+
 ## Development
 
 Runs the backend and frontend on the host, without Docker. Requires
-Node, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
+Node 24+, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
 
     git submodule update --init      # vendor/miner
     pnpm install
@@ -88,7 +117,7 @@ Node, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
     cp .env.example .env             # then set APP_PASSWORD
     pnpm dev
 
-Open the Vite URL it prints (http://localhost:5173), **not** port 8080 --
+Open the Vite URL it prints (http://localhost:5173), **not** port 8080 —
 Vite serves the UI with hot reload and proxies `/api` to the backend.
 
 `pnpm dev` runs three watchers, named after the tool each one runs:
@@ -99,6 +128,14 @@ server automatically. Ctrl-C stops all three.
 Dev mode reads its configuration from `.env` (see `.env.example` for
 what each variable does) and keeps its data in `./.devdata`, so it never
 touches the `./data` volume Docker mounts.
+
+## Testing
+
+    pnpm test        # backend and frontend, via vitest
+    uv run pytest    # the Python helpers and the upstream contract test
+
+`scripts/smoke.sh` starts the stack and checks it answers, for when you
+want to know the whole thing boots rather than that the units pass.
 
 ## Updating the miner
 
