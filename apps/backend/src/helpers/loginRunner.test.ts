@@ -202,3 +202,13 @@ test("a clean cancel-to-exit clears the kill timer rather than leaving it to fir
   await done;
   expect((runner as unknown as { killTimer: unknown }).killTimer).toBeNull();
 });
+
+// Upstream's miner emits emoji on stderr. Decoding each Buffer on its own
+// turns any character whose bytes straddle a chunk boundary into
+// replacement characters, corrupting the message an operator reads.
+test("does not mangle a multi-byte character split across chunks", async () => {
+  const seen = await run({ FAKE_LOGIN: "stderr-utf8-split" });
+  const error = (seen.at(-1) as { error: string }).error;
+  expect(error).toContain("\u{1F389}");
+  expect(error).not.toContain("\uFFFD");
+});

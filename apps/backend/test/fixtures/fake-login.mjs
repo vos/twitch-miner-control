@@ -12,6 +12,16 @@ if (process.env.FAKE_LOGIN === "badstage") {
   // corruption) must never reach consumers as if it were valid progress.
   emit({ stage: "bogus", note: "unrecognised by the runner" });
 }
+if (process.env.FAKE_LOGIN === "stderr-utf8-split") {
+  // One emoji split across two writes, so its bytes straddle a chunk
+  // boundary. Decoding each chunk independently yields replacement
+  // characters; a streaming decoder holds the partial bytes.
+  const emoji = Buffer.from("\u{1F389}", "utf8");
+  process.stderr.write(emoji.subarray(0, 2));
+  await new Promise((r) => setTimeout(r, 50));
+  process.stderr.write(emoji.subarray(2));
+  process.exit(1);
+}
 if (process.env.FAKE_LOGIN === "stderr-flood") {
   // Task 11 correction 2: write past the OS pipe's ~64KB buffer so a
   // runner that isn't reading child.stderr would deadlock here forever.

@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 
 export type LoginProgress =
   | {
@@ -87,6 +88,13 @@ export class LoginRunner extends EventEmitter {
   private child: ChildProcess | null = null;
   private killTimer: NodeJS.Timeout | null = null;
   private stderrTail = "";
+  /**
+   * Decodes stderr across chunk boundaries. Converting each Buffer on its
+   * own splits any multi-byte character that straddles two reads into
+   * replacement characters -- and upstream's miner emits emoji -- so the
+   * decoder holds the partial bytes until the rest arrives.
+   */
+  private stderrDecoder = new StringDecoder("utf8");
 
   constructor(private readonly options: LoginRunnerOptions) {
     super();
@@ -99,6 +107,7 @@ export class LoginRunner extends EventEmitter {
   start(): void {
     if (this.child) return;
     this.stderrTail = "";
+    this.stderrDecoder = new StringDecoder("utf8");
     const child = spawn(this.options.command, this.options.args, {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
@@ -115,18 +124,27 @@ export class LoginRunner extends EventEmitter {
     // noise) would otherwise block forever on write() if nobody reads
     // it (Task 11 correction 2).
     child.stderr?.on("data", (chunk: Buffer | string) => {
-      this.stderrTail = (this.stderrTail + String(chunk)).slice(-STDERR_TAIL_BYTES);
+      const text =
+        typeof chunk === "string" ? chunk : this.stderrDecoder.write(chunk);
+      this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_BYTES);
     });
 
-    child.on("exit", (code) => this.finish(child, this.unexpectedExitProgress(code)));
-    // Without this listener, a spawn failure (ENOENT for a missing
-    // interpreter, EACCES for a non-executable helper, ...) emits only
-    // "error" and never "exit" -- `current` would stay null, "progress"
-    // would never fire, and "done" would never fire, hanging any HTTP
-    // request awaiting login completion forever. This exact defect
-    // shipped twice already on this branch (see supervisor.ts and
-    // ndjsonClient.ts's identical comments) -- do not repeat it a third
-    // time (Task 11 correction 1).
+    // "close", not "exit": exit fires when the process is gone, which can
+    // be before its stdout/stderr pipes have been fully read. The
+    // synthesized error message is built from the stderr collected so far,
+    // so reading it on exit can race the tail of a traceback and report
+    // padding instead of the error. "close" fires only once every stdio
+    // stream has ended, so everything the helper wrote has arrived.
+    child.on("close", (code) => this.finish(child, this.unexpectedExitProgress(code)));
+    // A spawn failure (ENOENT for a missing interpreter, EACCES for a
+    // non-executable helper, ...) emits "error" with no exit code, so
+    // without this listener `current` would stay null and the message
+    // below -- which names the actual cause -- would never be produced,
+    // leaving an operator with a generic failure. ("close" does still
+    // fire on ENOENT, so "done" is not lost; the diagnosis is.) This
+    // exact defect shipped twice already on this branch (see
+    // supervisor.ts and ndjsonClient.ts's identical comments) -- do not
+    // repeat it a third time (Task 11 correction 1).
     child.on("error", (err) => {
       this.finish(child, {
         stage: "error",
@@ -156,7 +174,9 @@ export class LoginRunner extends EventEmitter {
     if (this.current !== null && TERMINAL_STAGES.has(this.current.stage)) {
       return null;
     }
-    const tail = this.stderrTail.trim();
+    const tail = (this.stderrTail + this.stderrDecoder.end())
+      .slice(-STDERR_TAIL_BYTES)
+      .trim();
     const detail = tail ? `: ${tail}` : "";
     return {
       stage: "error",
