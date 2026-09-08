@@ -20,6 +20,11 @@ on:
     paths-ignore:
       - "**.md"
       - LICENSE
+      # Not a build input either: this file is shipped to users and read
+      # by their Docker, never by the image build. Workflow changes under
+      # .github/ are deliberately NOT ignored -- a change to this file
+      # should get exercised before a tag depends on it.
+      - compose.prod.yaml
   workflow_dispatch:
 
 # One run at a time. Two tags pushed in quick succession would otherwise
