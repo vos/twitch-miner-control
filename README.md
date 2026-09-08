@@ -139,8 +139,9 @@ React frontend talks to that API and polls for point updates.
 
 ## Development
 
-Runs the backend and frontend on the host, without Docker. Requires
-Node 24+, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/).
+Runs the backend and frontend directly, without Docker. Requires
+Node 24+, [pnpm](https://pnpm.io) and [uv](https://docs.astral.sh/uv/) —
+or the dev container below, which comes with all three preinstalled.
 
     git submodule update --init      # vendor/miner
     pnpm install
@@ -159,6 +160,34 @@ server automatically. Ctrl-C stops all three.
 Dev mode reads its configuration from `.env` (see `.env.example` for
 what each variable does) and keeps its data in `./.devdata`, so it never
 touches the `./data` volume Docker mounts.
+
+### Using the dev container
+
+`.devcontainer/` describes a ready-made environment, so you do not have to
+put the toolchain on your own machine. In VS Code with the Dev Containers
+extension, open the cloned repository and choose **Reopen in Container** —
+or use any other editor that reads `devcontainer.json`.
+
+It is built on `node:24` and ships:
+
+- Node 24, and pnpm through corepack — so the version follows the
+  `packageManager` pin in `package.json` rather than whatever happens to
+  be installed globally.
+- [uv](https://docs.astral.sh/uv/) with CPython 3.12 already fetched. The
+  Debian base only carries 3.11, and `pyproject.toml` requires >=3.12.
+- `git`, `gh`, `jq`, `zsh` as the default shell, and the Claude Code CLI.
+
+The repository is bind-mounted at `/workspace`, so edits appear on the
+host immediately and commits are ordinary local commits. VS Code forwards
+the ports, so the Vite URL opens on the host as usual.
+
+What it installs is the toolchain, not this project's dependencies: there
+is no `postCreateCommand`, so run the same setup steps above once inside
+the container before `pnpm dev`.
+
+It deliberately has no Docker in it. Building the image and running
+`docker compose` — `scripts/smoke.sh` included — have to happen on the
+host.
 
 ## Testing
 
