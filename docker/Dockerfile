@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Stage 1: build the pnpm workspace (backend dist + frontend dist) -----
-FROM node:22-slim AS web
+FROM node:24-slim AS web
 WORKDIR /build
 RUN corepack enable
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./

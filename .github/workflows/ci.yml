@@ -20,9 +20,12 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      # Matches docker/Dockerfile and .devcontainer -- CI testing a different
+      # major than the image ships is how a green build stops meaning
+      # anything. 24 is Active LTS; 20 went end-of-life 2026-04-30.
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
