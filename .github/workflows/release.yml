@@ -2,26 +2,38 @@ name: Publish image
 
 on:
   push:
+    # A v* tag is the only thing that publishes; see the `push:` input on
+    # the build step. A push to main builds the image without pushing it,
+    # which stops a broken Dockerfile from lying in wait until the next
+    # release -- the worst moment to discover it.
+    #
+    # paths-ignore applies to both, and that is deliberate: a commit that
+    # only touches Markdown cannot break the image. If a release ever needs
+    # to be cut from such a commit, run this workflow manually, or make the
+    # tag point at a commit that changed something real.
+    #
+    # Building on pull_request would catch breakage a little earlier still,
+    # at the cost of an emulated arm64 build on every PR -- and CI already
+    # type-checks and tests the same code there.
     branches: [main]
     tags: ["v*"]
-  # Building on pull_request too would catch a Dockerfile that stops
-  # building before it reaches main, but the arm64 leg costs ~20 minutes
-  # under emulation on every PR. CI already type-checks and tests the same
-  # code; this workflow only has to be right when it publishes.
+    paths-ignore:
+      - "**.md"
+      - LICENSE
   workflow_dispatch:
 
-# One publish at a time. Two pushes to main racing here would have their
-# `latest` tags land in whichever order the runners finished, which is not
-# necessarily the order the commits were pushed. Unlike CI, in-progress runs
-# are not cancelled: a run that has already pushed a tag is not something to
-# interrupt halfway.
+# One run at a time. Two tags pushed in quick succession would otherwise
+# have their `latest` land in whichever order the runners happened to
+# finish, which is not necessarily release order. Unlike CI, in-progress
+# runs are not cancelled: a run that has already pushed a tag is not
+# something to interrupt halfway.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    name: Build and push to GHCR
+    name: Build image (publish on tags)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,15 +74,20 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ steps.image.outputs.name }}
+          # latest=auto is already the default, but it is the whole
+          # contract the README's quick start rests on -- spell it out so
+          # it cannot change underneath us. `auto` means: attach `latest`
+          # to a semver tag build, and to nothing else.
+          flavor: latest=auto
           # A v1.2.3 tag publishes 1.2.3, 1.2 and 1, so a user can pin as
-          # loosely or as tightly as they like. `latest` follows main
-          # rather than the newest git tag (the action's default), because
-          # main is the branch this project actually ships from.
+          # loosely or as tightly as they like. `latest` tracks the newest
+          # release tag (metadata-action's default for semver), which is
+          # what the README's quick start tells people to pull -- releases,
+          # not the tip of main.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=Twitch Miner Control
             org.opencontainers.image.description=A web control panel for Twitch Channel Points Miner
@@ -82,7 +99,10 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
+          # Publish only from a v* tag. A push to main still builds
+          # everything above this line, so the build is verified, but the
+          # result is thrown away rather than moving any published tag.
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # better-sqlite3 compiles a native addon and the frontend build
