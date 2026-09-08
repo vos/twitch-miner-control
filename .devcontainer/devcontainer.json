@@ -24,6 +24,11 @@
           "source.fixAll.eslint": "explicit"
         },
         "terminal.integrated.defaultProfile.linux": "zsh",
+        // `pnpm dev` runs three watchers behind one concurrently prefix, so a
+        // session burns the 1000-line default fast and VSCode then discards
+        // the oldest lines -- the startup banner scrolls off and cannot be
+        // scrolled back to, because it is gone rather than merely off-screen.
+        "terminal.integrated.scrollback": 20000,
         "terminal.integrated.profiles.linux": {
           "bash": {
             "path": "bash",
