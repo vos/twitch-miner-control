@@ -9,6 +9,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolvePythonBin } from "./config/pythonBin.js";
 import { resolveStopGraceMs } from "./config/stopGrace.js";
+import { resolveEnvFlag } from "./config/envFlag.js";
 import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
@@ -169,9 +170,17 @@ const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
 // (wired inside buildServer).
 const loginStatus = new LoginStatus();
 
+// Both default off, for the documented LAN-over-HTTP deployment. A reverse
+// proxy terminating TLS wants them on together: SECURE_COOKIE stops the
+// session cookie from ever crossing a plaintext hop, and TRUST_PROXY makes
+// the login limiter count real client addresses rather than seeing every
+// request arrive from the proxy itself. See .env.example.
+const secureCookie = resolveEnvFlag(process.env.SECURE_COOKIE);
+const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
+
 const app = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
-  helper, loginRunner, loginStatus, staticRoot,
+  helper, loginRunner, loginStatus, staticRoot, secureCookie, trustProxy,
 });
 
 const loggedIn = await helper

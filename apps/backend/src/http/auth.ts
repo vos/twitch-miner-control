@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import cookie from "@fastify/cookie";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { LoginLimiter } from "./loginLimiter.js";
 
 /** Absolute session lifetime. A captured cookie stops working after this. */
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -9,6 +10,12 @@ export interface AuthOptions {
   password: string;
   /** Injectable clock, for tests. Defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Sets `Secure` on the session cookie. Off by default because the
+   * documented deployment is plain HTTP on a LAN, where the browser would
+   * silently drop a Secure cookie. See config/envFlag.ts.
+   */
+  secureCookie?: boolean;
 }
 
 /**
@@ -32,6 +39,28 @@ const PUBLIC_ENDPOINTS = new Set(["POST /api/session", "POST /internal/doorbell"
  */
 const PUBLIC_STATIC_ROUTES = new Set(["/*", "/"]);
 const SAFE_METHODS = new Set(["GET", "HEAD"]);
+
+/**
+ * The address the login limiter counts against.
+ *
+ * This is `request.ip`, which is the socket's peer address unless Fastify was
+ * built with `trustProxy`, in which case it is the address that option told
+ * Fastify to believe from `X-Forwarded-For`.
+ *
+ * Deliberately not read from the header directly. A spoofable key is worse
+ * than no key at all: an attacker who picks a fresh `X-Forwarded-For` per
+ * request gets a fresh bucket every time and never trips the limit, while the
+ * operator sees a limiter in the code and believes they are covered. Honoring
+ * the header is therefore a decision made once, at server construction, by
+ * someone who knows a proxy is actually in front -- see TRUST_PROXY in
+ * .env.example.
+ *
+ * Without a proxy every request already carries a real peer address, so the
+ * default path needs no header at all.
+ */
+function keyFor(request: FastifyRequest): string {
+  return request.ip;
+}
 
 function sameSecret(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -77,6 +106,7 @@ export async function registerAuth(
   // Owned by this registration, not the module, so a token minted against one
   // server instance cannot authenticate another in the same process.
   const sessions = new Map<string, number>();
+  const limiter = new LoginLimiter(now);
 
   function isLive(token: string): boolean {
     const expiresAt = sessions.get(token);
@@ -93,10 +123,23 @@ export async function registerAuth(
   await app.register(cookie);
 
   app.post("/api/session", async (request, reply) => {
+    const key = keyFor(request);
+    const retryAfter = limiter.retryAfter(key);
+    if (retryAfter > 0) {
+      // 429 rather than 401: the caller is being told to stop, not that this
+      // particular password was wrong. Answering 401 here would leak whether
+      // a guess landed, which is the one bit a locked-out guesser wants.
+      return reply
+        .code(429)
+        .header("retry-after", String(retryAfter))
+        .send({ error: "too many attempts" });
+    }
     const body = request.body as { password?: string } | undefined;
     if (!body?.password || !sameSecret(body.password, opts.password)) {
+      limiter.fail(key);
       return reply.code(401).send({ error: "invalid password" });
     }
+    limiter.succeed(key);
     const issuedAt = now();
     // Sweep on mint so abandoned tokens cannot accumulate unbounded.
     for (const [token, expiresAt] of sessions) {
@@ -108,6 +151,7 @@ export async function registerAuth(
       .setCookie("session", token, {
         httpOnly: true,
         sameSite: "lax",
+        secure: opts.secureCookie ?? false,
         path: "/",
         maxAge: SESSION_TTL_MS / 1000,
       })

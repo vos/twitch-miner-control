@@ -97,6 +97,18 @@ function messageOf(cause: unknown): string {
 export interface ServerDeps {
   configPath: string;
   password: string;
+  /**
+   * Sets `Secure` on the session cookie -- for deployments that terminate
+   * TLS at a reverse proxy. Off by default; see config/envFlag.ts.
+   */
+  secureCookie?: boolean;
+  /**
+   * Makes Fastify derive `request.ip` from `X-Forwarded-For` instead of the
+   * socket peer. Only ever safe when a proxy in front is overwriting that
+   * header, which is why it is opt-in: with it on and no such proxy, any
+   * caller can forge the address the login limiter counts against.
+   */
+  trustProxy?: boolean;
   doorbellToken: string;
   supervisor: Supervisor;
   stateService: StateService;
@@ -132,7 +144,11 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // server.closeAllConnections(), available since Node 18.2) instead of
   // waiting for them to end gracefully -- appropriate here because a
   // shutting-down backend has nothing left to say to a client anyway.
-  const app = Fastify({ logger: false, forceCloseConnections: true });
+  const app = Fastify({
+    logger: false,
+    forceCloseConnections: true,
+    trustProxy: deps.trustProxy ?? false,
+  });
   const hub = new SseHub();
   let staged: AppConfig | null = null;
 
@@ -188,7 +204,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   }
 
   app.register(async (instance) => {
-    await registerAuth(instance, { password: deps.password });
+    await registerAuth(instance, {
+      password: deps.password,
+      secureCookie: deps.secureCookie,
+    });
     hub.register(instance);
 
     instance.get("/api/config", async () => staged ?? loadConfig(deps.configPath));

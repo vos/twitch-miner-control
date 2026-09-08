@@ -11,9 +11,13 @@ beforeEach(() => {
   handlerHits = 0;
 });
 
-async function app(password = "hunter2", now?: () => number) {
+async function app(
+  password = "hunter2",
+  now?: () => number,
+  secureCookie?: boolean,
+) {
   const instance = Fastify();
-  await registerAuth(instance, { password, now });
+  await registerAuth(instance, { password, now, secureCookie });
   instance.get("/api/protected", async () => {
     handlerHits += 1;
     return { ok: true, secret: "LEAKED" };
@@ -239,6 +243,136 @@ test("logout leaves other sessions working", async () => {
   });
   const res = await instance.inject({
     method: "GET", url: "/api/protected", cookies: { session: theirs },
+  });
+  expect(res.statusCode).toBe(200);
+});
+
+// --- Cookie hardening --------------------------------------------------
+
+// The documented deployment is plain HTTP on a LAN, where a Secure cookie is
+// dropped by the browser: login would appear to work and every later request
+// would 401. So the default has to stay off.
+test("omits Secure from the session cookie by default", async () => {
+  const instance = await app();
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "hunter2" },
+  });
+  expect(res.cookies[0]).not.toHaveProperty("secure", true);
+});
+
+test("sets Secure on the session cookie when asked", async () => {
+  const instance = await app("hunter2", undefined, true);
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "hunter2" },
+  });
+  expect(res.cookies[0]).toHaveProperty("secure", true);
+});
+
+// --- Login throttling --------------------------------------------------
+
+test("locks out after ten failed attempts", async () => {
+  const instance = await app();
+  for (let i = 0; i < 10; i += 1) {
+    const res = await instance.inject({
+      method: "POST",
+      url: "/api/session",
+      payload: { password: "wrong" },
+    });
+    expect(res.statusCode).toBe(401);
+  }
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "wrong" },
+  });
+  expect(res.statusCode).toBe(429);
+  expect(Number(res.headers["retry-after"])).toBeGreaterThan(0);
+});
+
+// The whole point of the limiter: a locked-out guesser must not be able to
+// keep testing passwords, so the correct one has to be refused too. A 401
+// here would also tell them their guess had landed.
+test("refuses even the correct password while locked out", async () => {
+  const instance = await app();
+  for (let i = 0; i < 10; i += 1) {
+    await instance.inject({
+      method: "POST",
+      url: "/api/session",
+      payload: { password: "wrong" },
+    });
+  }
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "hunter2" },
+  });
+  expect(res.statusCode).toBe(429);
+  expect(res.cookies).toHaveLength(0);
+});
+
+test("a successful login clears earlier failures", async () => {
+  const instance = await app();
+  for (let i = 0; i < 9; i += 1) {
+    await instance.inject({
+      method: "POST",
+      url: "/api/session",
+      payload: { password: "wrong" },
+    });
+  }
+  const ok = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "hunter2" },
+  });
+  expect(ok.statusCode).toBe(200);
+  // Without the reset, one more failure would trip the limit.
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "wrong" },
+  });
+  expect(res.statusCode).toBe(401);
+});
+
+test("lets the caller back in once the lockout elapses", async () => {
+  let clock = 1_000_000;
+  const instance = await app("hunter2", () => clock);
+  for (let i = 0; i < 10; i += 1) {
+    await instance.inject({
+      method: "POST",
+      url: "/api/session",
+      payload: { password: "wrong" },
+    });
+  }
+  clock += 15 * 60 * 1000;
+  const res = await instance.inject({
+    method: "POST",
+    url: "/api/session",
+    payload: { password: "hunter2" },
+  });
+  expect(res.statusCode).toBe(200);
+});
+
+// The throttle guards the login exchange only -- a lockout must not become a
+// denial of service against an operator who is already signed in.
+test("a lockout does not affect an existing session", async () => {
+  const instance = await app();
+  const token = await login(instance);
+  for (let i = 0; i < 10; i += 1) {
+    await instance.inject({
+      method: "POST",
+      url: "/api/session",
+      payload: { password: "wrong" },
+    });
+  }
+  const res = await instance.inject({
+    method: "GET",
+    url: "/api/protected",
+    cookies: { session: token },
   });
   expect(res.statusCode).toBe(200);
 });
