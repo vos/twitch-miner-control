@@ -3,6 +3,12 @@ name = "twitch-miner-control-helpers"
 version = "0.1.0"
 requires-python = ">=3.12"
 license = "GPL-3.0-only"
+
+# Mirrors vendor/miner's own dependency list. The submodule is imported off
+# sys.path rather than pip-installed, so nothing else declares what it needs
+# at runtime -- only `requests` is imported by our code in python/. Keep this
+# in sync when bumping the submodule; upstream's dev-only `pre-commit` is
+# deliberately omitted.
 dependencies = [
     "colorama>=0.4.6",
     "emoji>=2.15.0",
