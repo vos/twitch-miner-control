@@ -28,7 +28,14 @@ if (process.env.FAKE_LOGIN === "stderr-flood") {
   // Exits without ever reaching "ok"/"error" so the runner's own
   // synthesized error message is what gets asserted on, proving the
   // collected (tail-capped) stderr text ends up in it.
-  process.stderr.write(`${"x".repeat(200_000)}TRACEBACK_MARKER_END`);
+  // Exit from the write callback, not straight after the write:
+  // process.exit() does not flush pending stdio, so a 200KB write to a
+  // pipe that has not drained is simply discarded. Node 20 happened to
+  // absorb it and Node 24 does not, which made this look like a bug in
+  // the runner rather than in this fixture.
+  await new Promise((resolve) =>
+    process.stderr.write(`${"x".repeat(200_000)}TRACEBACK_MARKER_END`, resolve),
+  );
   process.exit(1);
 }
 emit({ stage: "ok", username: "alex" });

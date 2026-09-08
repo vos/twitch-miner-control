@@ -129,22 +129,15 @@ export class LoginRunner extends EventEmitter {
       this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_BYTES);
     });
 
-    // "close", not "exit": exit fires when the process is gone, which can
-    // be before its stdout/stderr pipes have been fully read. The
-    // synthesized error message is built from the stderr collected so far,
-    // so reading it on exit can race the tail of a traceback and report
-    // padding instead of the error. "close" fires only once every stdio
-    // stream has ended, so everything the helper wrote has arrived.
-    child.on("close", (code) => this.finish(child, this.unexpectedExitProgress(code)));
-    // A spawn failure (ENOENT for a missing interpreter, EACCES for a
-    // non-executable helper, ...) emits "error" with no exit code, so
-    // without this listener `current` would stay null and the message
-    // below -- which names the actual cause -- would never be produced,
-    // leaving an operator with a generic failure. ("close" does still
-    // fire on ENOENT, so "done" is not lost; the diagnosis is.) This
-    // exact defect shipped twice already on this branch (see
-    // supervisor.ts and ndjsonClient.ts's identical comments) -- do not
-    // repeat it a third time (Task 11 correction 1).
+    child.on("exit", (code) => this.finish(child, this.unexpectedExitProgress(code)));
+    // Without this listener, a spawn failure (ENOENT for a missing
+    // interpreter, EACCES for a non-executable helper, ...) emits only
+    // "error" and never "exit" -- `current` would stay null, "progress"
+    // would never fire, and "done" would never fire, hanging any HTTP
+    // request awaiting login completion forever. This exact defect
+    // shipped twice already on this branch (see supervisor.ts and
+    // ndjsonClient.ts's identical comments) -- do not repeat it a third
+    // time (Task 11 correction 1).
     child.on("error", (err) => {
       this.finish(child, {
         stage: "error",
