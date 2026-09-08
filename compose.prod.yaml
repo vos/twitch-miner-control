@@ -1,10 +1,13 @@
 # Runs the published image -- no clone, no submodule, no build toolchain.
-# This is the file the README's quick start tells people to download.
 #
-# The sibling compose.yaml builds the image from a source checkout instead,
-# which is what you want when you are changing the code.
+# The README's quick start has you download this file as `compose.yaml`,
+# so the usual command just works:
 #
-#     docker compose -f compose.prod.yaml up -d
+#     docker compose up -d
+#
+# It keeps the `.prod` name here only to sit alongside the repository's own
+# compose.yaml, which builds the image from a source checkout instead --
+# that one is for changing the code, not for running the app.
 #
 services:
   twitch-miner-control:
