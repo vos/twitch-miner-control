@@ -20,7 +20,7 @@ dependencies = [
     "pytz>=2026.2",
     "requests>=2.34.2",
     "validators>=0.35.0",
-    "websocket-client>=1.9.0",
+    "websocket-client>=1.9.2",
     "werkzeug>=3.1.8",
 ]
 
