@@ -1,0 +1,93 @@
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  # Building on pull_request too would catch a Dockerfile that stops
+  # building before it reaches main, but the arm64 leg costs ~20 minutes
+  # under emulation on every PR. CI already type-checks and tests the same
+  # code; this workflow only has to be right when it publishes.
+  workflow_dispatch:
+
+# One publish at a time. Two pushes to main racing here would have their
+# `latest` tags land in whichever order the runners finished, which is not
+# necessarily the order the commits were pushed. Unlike CI, in-progress runs
+# are not cancelled: a run that has already pushed a tag is not something to
+# interrupt halfway.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and push to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for GITHUB_TOKEN to push to GHCR. The default token is
+      # read-only for packages, and the push fails without this.
+      packages: write
+
+    steps:
+      # The Dockerfile does `COPY vendor/miner vendor/miner`, and the miner
+      # is a submodule -- without this the build either fails outright or
+      # ships an image whose Start button cannot import the miner.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # arm64 is built under emulation; this registers the QEMU handlers
+      # that make the foreign-architecture stages runnable at all.
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ghcr.io wants a lowercase name; github.repository preserves the
+      # case of the owner and repo as they were typed. `vos` is already
+      # lowercase today, but a rename or a fork under a capitalised
+      # account would push to a path the registry rejects.
+      - name: Compute image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          # A v1.2.3 tag publishes 1.2.3, 1.2 and 1, so a user can pin as
+          # loosely or as tightly as they like. `latest` follows main
+          # rather than the newest git tag (the action's default), because
+          # main is the branch this project actually ships from.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Twitch Miner Control
+            org.opencontainers.image.description=A web control panel for Twitch Channel Points Miner
+            org.opencontainers.image.licenses=GPL-3.0-only
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # better-sqlite3 compiles a native addon and the frontend build
+          # is a full Vite run, both of which are wasted work when the
+          # layer inputs have not changed. GitHub's cache is scoped per
+          # branch, so main's cache is the one that stays warm.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -41,7 +41,8 @@ If you do it, do it with both of these set (see `.env.example`):
     TRUST_PROXY=1       # throttle sees real client IPs, not the proxy's
 
 and bind the container to loopback so the proxy is the only way in — swap
-the `ports:` entry in `compose.yaml` for:
+the `ports:` entry in your Compose file (`compose.prod.yaml`, or
+`compose.yaml` if you build from source) for:
 
     ports:
       - "127.0.0.1:8080:8080"
@@ -74,25 +75,55 @@ which applies to this control panel too:
 
 ## Quick start
 
-Requires Docker with the Compose plugin. The `--recurse-submodules` matters:
-the build imports the vendored miner from `vendor/miner`, and without it the
-image builds against an empty directory.
+Requires Docker with the Compose plugin. Nothing else — no clone, no
+Node, no Python. The image is published to the GitHub Container Registry
+and built for both `linux/amd64` and `linux/arm64`, so it runs on an
+ordinary PC or server as well as on a Raspberry Pi 4/5 or Apple Silicon.
+
+Make a directory to keep the app's data in, fetch the Compose file, and
+start it:
+
+    mkdir twitch-miner-control && cd twitch-miner-control
+    curl -O https://raw.githubusercontent.com/vos/twitch-miner-control/main/compose.prod.yaml
+    echo "APP_PASSWORD=choose-something" > .env
+    docker compose -f compose.prod.yaml up -d
+
+Open http://localhost:8080, unlock with your password, then go to
+**Twitch account** and sign in with the device code. Add streamers on the
+**Streamers** screen and press **Apply & Restart**.
+
+Config, point history and the Twitch cookies live in `./data`, next to the
+Compose file and mounted into the container — back that up, and keep it out
+of anywhere public, since the cookies are a signed-in Twitch session.
+
+### Updating
+
+`:latest` follows the `main` branch. Pull it and recreate the container;
+your `./data` directory is untouched.
+
+    docker compose -f compose.prod.yaml pull
+    docker compose -f compose.prod.yaml up -d
+
+To stay on a fixed version instead, replace `:latest` in
+`compose.prod.yaml` with a release tag — `:1`, `:1.2` or `:1.2.3`. The
+published tags are listed on the
+[package page](https://github.com/vos/twitch-miner-control/pkgs/container/twitch-miner-control).
+
+### Building the image yourself
+
+Only needed if you want to change the code, or run a commit that has not
+been published yet. The `--recurse-submodules` matters: the build imports
+the vendored miner from `vendor/miner`, and without it the image builds
+against an empty directory.
 
     git clone --recurse-submodules https://github.com/vos/twitch-miner-control.git
     cd twitch-miner-control
     echo "APP_PASSWORD=choose-something" > .env
     docker compose up -d
 
-Open http://localhost:8080, unlock with your password, then go to
-**Twitch account** and sign in with the device code. Add streamers on the
-**Streamers** screen and press **Apply & Restart**.
-
-Config, point history and the Twitch cookies live in `./data`, mounted
-into the container — back that up, and keep it out of anywhere public,
-since the cookies are a signed-in Twitch session.
-
-If you already cloned without the submodule, `git submodule update --init`
-fixes it in place.
+That uses `compose.yaml`, which builds from the checkout rather than
+pulling. If you already cloned without the submodule,
+`git submodule update --init` fixes it in place.
 
 ## How it works
 

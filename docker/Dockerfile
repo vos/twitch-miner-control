@@ -28,7 +28,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # python:3.12-slim's `nodejs` apt package tracks Debian bookworm's own
-# nodejs (18.20.x at the time of writing), not the Node 22 the backend was
+# nodejs (18.20.x at the time of writing), not the Node 24 the backend was
 # built and pnpm-deployed against; better-sqlite3's native addon is compiled
 # for a specific Node ABI (NODE_MODULE_VERSION), so running it under a
 # different Node major would fail to load at startup. Copying the actual

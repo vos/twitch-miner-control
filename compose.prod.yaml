@@ -1,0 +1,24 @@
+# Runs the published image -- no clone, no submodule, no build toolchain.
+# This is the file the README's quick start tells people to download.
+#
+# The sibling compose.yaml builds the image from a source checkout instead,
+# which is what you want when you are changing the code.
+#
+#     docker compose -f compose.prod.yaml up -d
+#
+services:
+  twitch-miner-control:
+    image: ghcr.io/vos/twitch-miner-control:latest
+    container_name: twitch-miner-control
+    init: true            # reap orphaned Python children
+    ports:
+      # Publishing on every interface is what makes this reachable from
+      # other machines on your LAN, which is the point. It is also why the
+      # README says not to port-forward it. Behind a reverse proxy, change
+      # this to "127.0.0.1:8080:8080".
+      - "8080:8080"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?set APP_PASSWORD in .env}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
