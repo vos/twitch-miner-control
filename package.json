@@ -11,7 +11,7 @@
     "predev": "pnpm run build:backend",
     "dev": "concurrently --kill-others --names tsc,server,web --prefix-colors blue,green,magenta \"pnpm run dev:tsc\" \"pnpm run dev:node\" \"pnpm run dev:web\"",
     "dev:tsc": "pnpm run build:backend --watch --preserveWatchOutput",
-    "dev:node": "node --watch --env-file=.env apps/backend/dist/index.js",
+    "dev:node": "node --watch --watch-preserve-output --env-file=.env apps/backend/dist/index.js",
     "dev:web": "pnpm --filter @app/frontend dev",
     "build": "pnpm -r build",
     "build:backend": "tsc -p apps/backend/tsconfig.json",
