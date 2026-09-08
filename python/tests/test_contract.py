@@ -1,8 +1,10 @@
 """Asserts the upstream miner API surface we depend on still exists.
 
-If this fails after bumping vendor/miner, read
-docs/superpowers/specs/2026-08-29-twitch-miner-web-ui-design.md
-section "Key findings from upstream source" before changing anything.
+A failure here means `vendor/miner` changed something we import or call --
+not that our code is wrong. Find the upstream commit that moved it, then
+adapt the adapters in `python/` (run.py, miner_config.py, helpers/) to the
+new surface. The assertions below name every attribute we rely on, so the
+failing one tells you exactly what moved.
 """
 import datetime
 import inspect

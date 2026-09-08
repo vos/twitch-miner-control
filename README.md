@@ -5,6 +5,19 @@ A control panel for
 a web UI to configure and control the miner, in place of editing
 `run.py` by hand.
 
+## ⚠️ Run this on your LAN only
+
+There is no TLS, no per-user accounts, and no rate limiting. Access is a
+single shared `APP_PASSWORD` sent over plain HTTP, so anyone who can reach
+the port can watch it go by and then log in themselves. **Do not port-forward
+this, and do not put it on a public host.** If you need it away from home,
+put it behind a VPN such as WireGuard or Tailscale.
+
+Running a points miner also violates the
+[Twitch Terms of Service](https://www.twitch.tv/p/legal/terms-of-service/)
+and can get the account it signs in as suspended. Use an account you are
+willing to lose.
+
 ## Quick start
 
     git clone --recurse-submodules <this repo>
@@ -38,20 +51,26 @@ Dev mode reads its configuration from `.env` (see `.env.example` for
 what each variable does) and keeps its data in `./.devdata`, so it never
 touches the `./data` volume Docker mounts.
 
-## Design
-
-- `docs/superpowers/specs/2026-08-29-twitch-miner-web-ui-design.md`
-- `docs/superpowers/plans/2026-08-29-twitch-miner-web-ui.md`
-
 ## Updating the miner
 
     git -C vendor/miner pull
     uv run pytest python/tests/test_contract.py
 
-If the contract test fails, the upstream API we depend on has changed. Read
-the spec's "Key findings from upstream source" before adapting.
+If the contract test fails, the upstream API we depend on has changed. The
+failing assertion names the attribute that moved; adapt `python/run.py`,
+`python/miner_config.py` or `python/helpers/` to the new surface.
 
-## Not supported
+## Credits
 
-LAN use only — there is no TLS, no per-user accounts, and no rate limiting.
-Do not expose this to the internet.
+This is a control panel only — all the actual mining is upstream's work.
+
+- [mpforce1/Twitch-Channel-Points-Miner](https://github.com/mpforce1/Twitch-Channel-Points-Miner),
+  vendored at `vendor/miner`, which this project imports directly.
+- [rdavydov/Twitch-Channel-Points-Miner-v2](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2),
+  the now-archived project mpforce1's fork continues.
+
+## License
+
+[GPL-3.0-only](LICENSE), the same license as upstream. The Python adapters in
+`python/` import `TwitchChannelPointsMiner` directly, so this project is a
+derivative work of a GPL-3.0 program and carries that license throughout.

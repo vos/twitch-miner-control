@@ -1,6 +1,8 @@
 {
   "name": "@app/backend",
   "type": "module",
+  "private": true,
+  "license": "GPL-3.0-only",
   "scripts": {
     "test": "vitest run",
     "build": "tsc -p tsconfig.json"
