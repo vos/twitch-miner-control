@@ -207,9 +207,7 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
         <Group gap="md" wrap="nowrap">
           {/* A native <select> rather than Mantine's Select: four fixed
               options need no search or portal, and it is the better
-              control on a phone and by keyboard. Mantine's Combobox also
-              renders enough inline CSS to stall vitest's reporter channel
-              in CI, which made the whole test file look hung. */}
+              control on a phone and by keyboard. */}
           <NativeSelect
             data={SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
             value={sort}

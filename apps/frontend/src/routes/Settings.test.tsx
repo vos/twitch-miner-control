@@ -6,7 +6,7 @@ import { Settings } from "./Settings.js";
 
 const config = {
   version: 1, username: "alex", followers: false, followersOrder: "ASC",
-  defaults: {}, streamers: [],
+  defaults: {}, miner: {}, streamers: [],
 };
 let calls: Array<{ url: string; init?: RequestInit }>;
 
@@ -52,4 +52,38 @@ test("changing follower order stages a change", async () => {
   await screen.findByLabelText(/mine my followed channels/i);
   await userEvent.click(screen.getByLabelText(/newest first/i));
   expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
+});
+
+test("edits a global default and stages it", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+  await userEvent.click(screen.getByRole("switch", { name: "Community goals" }));
+  // findByRole, not getByRole: PendingBar is absent from the DOM until a
+  // change is staged and then slides in over 180ms, so a synchronous query
+  // races the transition.
+  await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
+  await waitFor(() => {
+    const put = calls.find((c) => c.url === "/api/config" && c.init?.method === "PUT");
+    expect(JSON.parse(String(put?.init?.body)).defaults.communityGoals).toBe(true);
+  });
+});
+
+test("global defaults have no inherit control -- they are the defaults", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+  expect(screen.queryByRole("switch", { name: /^Override/ })).not.toBeInTheDocument();
+});
+
+test("stages the miner-wide priority order", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+  await userEvent.click(screen.getByRole("checkbox", { name: "Watch streaks" }));
+  // findByRole, not getByRole: PendingBar is absent from the DOM until a
+  // change is staged and then slides in over 180ms, so a synchronous query
+  // races the transition.
+  await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
+  await waitFor(() => {
+    const put = calls.find((c) => c.url === "/api/config" && c.init?.method === "PUT");
+    expect(JSON.parse(String(put?.init?.body)).miner.priority).toContain("STREAK");
+  });
 });
