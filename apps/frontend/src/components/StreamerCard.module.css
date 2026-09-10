@@ -30,6 +30,88 @@
   font-weight: 700;
 }
 
+/* The last event, marked so it does not read as a third cumulative
+   figure. It sits directly above "mined ... of 24h" and "... all-time",
+   and all three used to render as identical dimmed xs lines -- so the one
+   line describing something that HAPPENED looked like the two describing
+   running totals. The accent dot and the LAST tag carry that distinction;
+   the event name is full-strength text so the eye lands on it first. */
+.lastEvent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.eventDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tw-text-dim);
+  flex-shrink: 0;
+}
+
+/* Uppercase and letter-spaced, matching the StatTile label -- it is a
+   field name, not part of the sentence, so it must not be mistaken for
+   the event itself. */
+.eventTag {
+  color: var(--tw-text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+/* The points the event earned, when the miner's line carried a figure.
+   Monospace and green, matching how a positive gain reads elsewhere on
+   the card -- it is the same kind of fact as the gain row below. */
+.eventGain {
+  color: var(--tw-success);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Full-strength against the dimmed totals below: this is the payload. */
+.eventName {
+  color: var(--tw-text);
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eventAge {
+  color: var(--tw-text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+  /* Tabular so a ticking minute cannot change the row's width. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Something just happened here -- the case the marker exists to make
+   scannable across a grid of cards. The dot borrows the LIVE pill's
+   pulse, deliberately: both mean "this is happening now". */
+.fresh .eventDot {
+  background: var(--tw-purple);
+  animation: tw-pulse 2s ease-in-out infinite;
+}
+
+.fresh .eventTag,
+.fresh .eventAge {
+  color: var(--tw-purple);
+}
+
+/* A card the user is not looking at must not pulse forever in the corner
+   of their eye, and motion is a preference the OS already carries. */
+@media (prefers-reduced-motion: reduce) {
+  .fresh .eventDot { animation: none; }
+}
+
 /* Inherit the card's text colour rather than the browser's link blue --
    the name is a heading that happens to be clickable. */
 .name {

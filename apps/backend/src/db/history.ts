@@ -96,12 +96,13 @@ export class History {
    * line. Unattributed rows (streamer NULL) are invisible here by
    * design -- they are still in the feed, which shows every event.
    */
-  lastActivity(streamer: string): { ts: number; type: string } | null {
+  lastActivity(streamer: string): EventSample | null {
     const row = this.db
       .prepare(
-        "SELECT ts, type FROM events WHERE streamer = ? ORDER BY ts DESC, id DESC LIMIT 1",
+        "SELECT ts, type, message FROM events WHERE streamer = ? " +
+          "ORDER BY ts DESC, id DESC LIMIT 1",
       )
-      .get(streamer) as { ts: number; type: string } | undefined;
+      .get(streamer) as EventSample | undefined;
     return row ?? null;
   }
 

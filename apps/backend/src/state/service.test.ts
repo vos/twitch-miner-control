@@ -546,7 +546,9 @@ test("attributes a doorbell event to a roster streamer", async () => {
   const { service } = make([alpha(100)], ["alpha"]);
   await service.refresh();
   service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
-  expect(history.lastActivity("alpha")).toEqual({ ts: clock, type: "GAIN_FOR_CLAIM" });
+  expect(history.lastActivity("alpha")).toEqual({
+    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha",
+  });
 });
 
 test("leaves an unattributable event off every card", async () => {

@@ -48,8 +48,15 @@ export interface StreamerState {
   streamId: string | null;
   /** When this channel was last live; null while live or if never seen. */
   lastLive: number | null;
-  /** The newest event attributed to this streamer, for the activity line. */
-  lastActivity: { ts: number; type: string } | null;
+  /**
+   * The newest event attributed to this streamer, for the activity line.
+   *
+   * `message` is the miner's own formatted line. It is display text and
+   * lossy by construction -- balances inside it are millified -- so the
+   * card reads only the exact parts (the points earned, the reason) and
+   * never the balance. See `python/helpers/doorbell.py`.
+   */
+  lastActivity: { ts: number; type: string; message: string | null } | null;
   /**
    * Whether the miner appears to be watching this channel right now.
    *

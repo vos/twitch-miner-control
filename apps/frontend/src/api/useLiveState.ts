@@ -24,7 +24,12 @@ export interface StreamerState {
   streamId: string | null;
   /** When this channel was last live; null while live or if never seen. */
   lastLive: number | null;
-  lastActivity: { ts: number; type: string } | null;
+  /**
+   * The newest event attributed to this streamer. `message` is the miner's
+   * own log line, absent on rows stored before the doorbell forwarded one.
+   * Lossy display text -- see parseActivity, which reads only its exact parts.
+   */
+  lastActivity: { ts: number; type: string; message?: string | null } | null;
   /**
    * Milliseconds live in the last 24h. Deliberately not rendered: the
    * uptime from `liveSince` already answers "how long has this channel

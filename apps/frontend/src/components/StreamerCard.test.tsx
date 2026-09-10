@@ -178,6 +178,60 @@ test("shows the last activity in the miner's own terms", () => {
   expect(line).toHaveTextContent("4m ago");
 });
 
+test("labels the last event so it does not read as another total", () => {
+  // The three lines below the sparkline used to render identically, so
+  // the one describing something that HAPPENED looked like the two
+  // describing running totals. The tag is what separates them.
+  view({ lastActivity: { ts: Date.now() - 4 * 60_000, type: "GAIN_FOR_CLAIM" } });
+  expect(screen.getByTestId("last-activity")).toHaveTextContent("LAST");
+});
+
+test("marks a just-happened event as fresh", () => {
+  view({ lastActivity: { ts: Date.now() - 2 * 60_000, type: "GAIN_FOR_CLAIM" } });
+  expect(screen.getByTestId("last-activity")).toHaveAttribute("data-fresh", "true");
+});
+
+test("does not mark a stale event as fresh", () => {
+  // The marker exists to make "something just happened here" scannable
+  // across a grid; an hours-old event claiming it would defeat that.
+  view({ lastActivity: { ts: Date.now() - 3 * 3_600_000, type: "GAIN_FOR_RAID" } });
+  const line = screen.getByTestId("last-activity");
+  expect(line).toHaveAttribute("data-fresh", "false");
+  expect(line).toHaveTextContent("raid");
+  expect(line).toHaveTextContent("3h ago");
+});
+
+test("shows how many points the last event earned", () => {
+  // The amount is the one fact the bare label never carried.
+  view({
+    lastActivity: {
+      ts: Date.now() - 4 * 60_000,
+      type: "GAIN_FOR_CLAIM",
+      message: "+50 → Streamer(username=alpha, channel_id=1, channel_points=12.3k)"
+        + " - Reason: CLAIM.",
+    },
+  });
+  const line = screen.getByTestId("last-activity");
+  expect(screen.getByTestId("last-activity-gain")).toHaveTextContent("+50");
+  expect(line).toHaveTextContent("claim");
+  // The object noise in the miner's line never reaches the card.
+  expect(line).not.toHaveTextContent("Streamer(");
+  expect(line).not.toHaveTextContent("12.3k");
+});
+
+test("shows the label alone when the event carried no message", () => {
+  view({ lastActivity: { ts: Date.now() - 4 * 60_000, type: "GAIN_FOR_CLAIM", message: null } });
+  expect(screen.queryByTestId("last-activity-gain")).not.toBeInTheDocument();
+  expect(screen.getByTestId("last-activity")).toHaveTextContent("claim");
+});
+
+test("renders an unrecognised event type rather than dropping the line", () => {
+  // The doorbell route bounds the event name's SHAPE, not its vocabulary
+  // (see server.ts), so a name outside the pinned set can reach the card.
+  view({ lastActivity: { ts: Date.now() - 90 * 60_000, type: "DROP_CLAIM" } });
+  expect(screen.getByTestId("last-activity")).toHaveTextContent("drop claim");
+});
+
 test("shows mining time against the window", () => {
   view({ online24h: 8 * 3_600_000, mined24h: 6 * 3_600_000 });
   expect(screen.getByTestId("times-24h")).toHaveTextContent("mined 6h of 24h");

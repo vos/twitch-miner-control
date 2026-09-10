@@ -1,23 +1,29 @@
 import { Group, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { formatSpan } from "../lib/formatSpan.js";
+import { parseActivity } from "../lib/parseActivity.js";
+import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
-/**
- * Turns GAIN_FOR_CLAIM into "claim".
- *
- * The card wants a short label; the events feed already renders the
- * miner's own full line, so repeating it here would just truncate badly.
- */
-function activityLabel(type: string): string {
-  return type.toLowerCase().replace(/^gain_for_/, "").replace(/_/g, " ");
-}
-
 const ago = (ts: number, now: number) => `${formatSpan(Math.max(0, now - ts))} ago`;
+
+/** Grouped, so a five-figure claim does not read as a wall of digits. */
+const nf = new Intl.NumberFormat("en-US");
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+
+/**
+ * How recent an event has to be to render as "just happened".
+ *
+ * Five minutes because this component re-renders on a one-minute timer:
+ * a threshold finer than that would leave a card claiming freshness for
+ * up to a minute after it lapsed. It is also comfortably above the
+ * miner's own watch-gain cadence, so an actively mined channel stays
+ * marked between gains rather than flickering.
+ */
+const FRESH = 5 * MINUTE;
 
 /**
  * A duration of *work done*, rounded down.
@@ -90,13 +96,32 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   return (
     <>
       {lastActivity !== null && (
-        <Group justify="space-between" gap="xs" wrap="nowrap">
-          {lastActivity !== null && (
-            <Text size="xs" c="dimmed" truncate data-testid="last-activity">
-              {activityLabel(lastActivity.type)} {ago(lastActivity.ts, now)}
-            </Text>
-          )}
-        </Group>
+        <div
+          className={`${classes.lastEvent} ${
+            now - lastActivity.ts < FRESH ? classes.fresh : ""
+          }`}
+          data-testid="last-activity"
+          data-fresh={now - lastActivity.ts < FRESH ? "true" : "false"}
+        >
+          <span className={classes.eventDot} />
+          <span className={classes.eventTag}>LAST</span>
+          {(() => {
+            // The amount is the one genuinely new fact the message carries;
+            // the label alone never said how much arrived.
+            const { earned, label } = parseActivity(lastActivity.type, lastActivity.message);
+            return (
+              <>
+                {earned !== null && (
+                  <span className={classes.eventGain} data-testid="last-activity-gain">
+                    +{nf.format(earned)}
+                  </span>
+                )}
+                <span className={classes.eventName}>{label}</span>
+              </>
+            );
+          })()}
+          <span className={classes.eventAge}>{ago(lastActivity.ts, now)}</span>
+        </div>
       )}
 
       {(has24h || hasTotal) && (
