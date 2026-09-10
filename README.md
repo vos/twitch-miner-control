@@ -141,6 +141,51 @@ React frontend talks to that API and polls for point updates.
   (`miner_config.py`) and helpers for login and state.
 - `vendor/miner` — upstream, as a git submodule, imported directly.
 
+### Notifications
+
+The miner can push events to Telegram, Discord, Matrix, Pushover, Gotify or a
+plain webhook. Those are deliberately **not** configurable from the web UI:
+they carry bot tokens and webhook URLs, and this app serves a single shared
+password over plain HTTP on your LAN. Set them by hand instead.
+
+Edit the `LoggerSettings(...)` block in `python/run.py`:
+
+    logger_settings=LoggerSettings(
+        save=True,
+        console_level=20,
+        file_level=_file_level(),
+        hooks=[DoorbellHook(DOORBELL_URL, DOORBELL_TOKEN)],
+        telegram=Telegram(
+            chat_id=123456789,
+            token="123456789:your-bot-token",
+            events=[Events.STREAMER_ONLINE, Events.BET_LOSE],
+        ),
+    ),
+
+importing whichever integrations you use from
+`TwitchChannelPointsMiner.classes` (`Telegram`, `Discord`, `Webhook`,
+`Matrix`, `Pushover`, `Gotify`) and `Events` from
+`TwitchChannelPointsMiner.classes.Settings`. Keep the existing `hooks=[...]`
+entry: upstream appends the named integrations to that list rather than
+replacing it, so the app's own event feed keeps working alongside yours.
+
+Restart the miner from the dashboard to pick the change up.
+
+**If you run the published image**, `run.py` lives inside it and your edit is
+lost on the next `docker compose pull`. Copy the file out once and mount your
+copy over it:
+
+    docker compose cp twitch-miner-control:/app/python/run.py ./run.py
+
+then add to your `compose.yaml`:
+
+    volumes:
+      - ./data:/data
+      - ./run.py:/app/python/run.py:ro
+
+Re-copy the file after an upgrade that changes `run.py` upstream, or your
+pinned copy will keep overriding the new one.
+
 ## Development
 
 Runs the backend and frontend directly, without Docker. Requires
