@@ -11,6 +11,13 @@ export interface RowStatus {
   isOnline: boolean | null;
   liveSince: number | null;
   lastLive: number | null;
+  /**
+   * Whether the miner is actually watching this channel, as observed by
+   * the backend from watch-point gains. Absent on a snapshot from a
+   * backend that predates the field, which reads as "not watching" --
+   * no badge, rather than a guess.
+   */
+  watching?: boolean;
 }
 
 interface Props {
@@ -19,7 +26,16 @@ interface Props {
   status: RowStatus | null;
   /** 0-based position, shown as the priority number and drives the tint. */
   index: number;
-  /** True for the rows the miner actually watches -- the top two. */
+  /**
+   * Whether the miner is observed to be watching this channel right now.
+   *
+   * Not a function of position: the miner fills its two watch slots from
+   * the channels that are live with points enabled, and a pending watch
+   * streak or drop can promote one over a higher-priority channel. This
+   * reports what is happening, so it is legitimately empty when nothing
+   * is being mined -- the miner stopped, everyone offline, or a slot not
+   * yet confirmed by a first watch gain.
+   */
   watching: boolean;
   onToggle: () => void;
   onRemove: () => void;
@@ -52,6 +68,10 @@ export function StreamerRow(
         // The lifted row rides above its neighbours as they slide under it.
         zIndex: isDragging ? 1 : undefined,
         opacity: isDragging ? 0.6 : undefined,
+        // Tied to the badge, so the tint marks what is being mined rather
+        // than the first two positions. The number in the row already says
+        // where a streamer sits in the order; tinting by position as well
+        // restated it in a way that read as "these two are active".
         ...(watching
           ? { background: "rgba(145,71,255,0.08)", borderColor: "var(--tw-purple)" }
           : {}),
@@ -87,8 +107,13 @@ export function StreamerRow(
           >
             {username}
           </Text>
+          {/* `title` rather than a Mantine <Tooltip>, which hangs the
+              vitest worker. */}
           {watching && (
-            <Badge size="xs" variant="light" color="twitch" data-testid="watching-tag">
+            <Badge
+              size="xs" variant="light" color="twitch" data-testid="watching-tag"
+              title="The miner is currently watching this channel."
+            >
               watching
             </Badge>
           )}

@@ -51,6 +51,27 @@ export interface StreamerState {
   /** The newest event attributed to this streamer, for the activity line. */
   lastActivity: { ts: number; type: string } | null;
   /**
+   * Whether the miner appears to be watching this channel right now.
+   *
+   * Observed, not predicted. The miner watches two channels at a time and
+   * picks them itself -- filtering to live, points-enabled, un-banned
+   * channels and then applying a priority chain in which the configured
+   * order is only the last tiebreak, so a streamer with a pending watch
+   * streak or a claimable drop can take a slot ahead of the top two. None
+   * of that selection is published: it lives in the `run.py` process,
+   * while this service talks to a separate state helper.
+   *
+   * So this is inferred from the one thing that does cross over: a
+   * `GAIN_FOR_WATCH` event, which Twitch sends only for a channel we are
+   * actually watching. True when one arrived within WATCH_GAIN_TTL_MS.
+   *
+   * The cost of inferring it is latency at both edges -- it lags the first
+   * gain of a new slot and lingers briefly after a slot is dropped -- which
+   * is the honest trade for never claiming a channel is being mined when
+   * it is not.
+   */
+  watching: boolean;
+  /**
    * Milliseconds the channel was live in the last 24h.
    *
    * Not shown on the card: for a single ongoing stream it is the same
@@ -72,7 +93,7 @@ export interface StreamerState {
 export type RawStreamerState = Omit<
   StreamerState,
   | "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
-  | "liveSince" | "lastLive" | "lastActivity"
+  | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
@@ -90,6 +111,19 @@ const HOUR_MS = 3_600_000;
  * something once the denominator is large enough to be stable.
  */
 const MIN_MINED_FOR_RATE_MS = 15 * 60_000;
+
+/**
+ * How long a `GAIN_FOR_WATCH` keeps `watching` true.
+ *
+ * Twitch drips watch points roughly every five minutes, so the window has
+ * to clear that comfortably or the badge would blink off between two
+ * gains from a channel that never stopped being watched. Ten minutes is
+ * two missed drips: long enough to ride out a slow one, short enough that
+ * a dropped slot stops claiming to be mined within a minute or two of the
+ * next refresh. The miner's own WATCH_SESSION priority uses seven minutes
+ * for a related judgement (vendor StreamerSelector.py).
+ */
+const WATCH_GAIN_TTL_MS = 10 * 60_000;
 
 /**
  * Quantisation step for the duration figures.
@@ -389,6 +423,14 @@ export class StateService extends EventEmitter {
           liveSince: s.streamStartedAt,
           lastLive: this.deps.history.lastLive(s.username),
           lastActivity: this.deps.history.lastActivity(s.username),
+          // An offline channel is never being watched, whatever the last
+          // gain says: the guard keeps a stale event from outliving the
+          // stream it came from when a channel drops inside the window.
+          watching: (() => {
+            if (s.isOnline !== true) return false;
+            const gained = this.deps.history.lastWatchGain(s.username);
+            return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
+          })(),
           online24h: quantise(total(online)),
           mined24h: quantise(mined24h),
           minedTotal: quantise(minedTotal),

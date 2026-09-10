@@ -33,6 +33,8 @@ interface StreamerStatus {
   isOnline: boolean | null;
   liveSince: number | null;
   lastLive: number | null;
+  /** Observed by the backend from watch-point gains; see StreamerRow. */
+  watching?: boolean;
 }
 interface Config {
   version: 1; username: string; followers: boolean; followersOrder: string;
@@ -165,7 +167,14 @@ export function Streamers() {
     <Stack pb={80}>
       <Title order={2}>Streamers</Title>
       <Group justify="space-between" wrap="nowrap">
-        <Text size="sm" c="dimmed">Order is priority — the miner watches the top two.</Text>
+        <Text size="sm" c="dimmed">
+          The miner mines two channels at a time, choosing them from the
+          streamers that are live with channel points enabled — so an offline
+          or points-disabled channel is skipped and the next eligible one
+          takes the slot. Order below is your priority, but a pending watch
+          streak or drop can jump the queue. The “watching” tag marks what is
+          actually being mined right now.
+        </Text>
           {/* No Mantine <Tooltip> here: its hover transition never settles
               under userEvent, which hangs the whole vitest worker for 30s.
               `title` gives the same hint natively, and the aria-label already
@@ -198,7 +207,7 @@ export function Streamers() {
                 enabled={streamer.enabled}
                 status={status.get(streamer.username.toLowerCase()) ?? null}
                 index={index}
-                watching={index < 2}
+                watching={status.get(streamer.username.toLowerCase())?.watching === true}
                 onToggle={() => toggle(index)}
                 onRemove={() => remove(index)}
               />

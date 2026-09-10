@@ -558,6 +558,49 @@ test("leaves an unattributable event off every card", async () => {
   expect(history.recentEvents(10)).toHaveLength(1);
 });
 
+test("marks a streamer watched after a watch gain lands", async () => {
+  // The miner never publishes which channels hold its two watch slots, so
+  // a GAIN_FOR_WATCH is the only evidence this side gets.
+  const { service } = make([alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+
+  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(true);
+});
+
+test("stops calling a streamer watched once the gain goes stale", async () => {
+  const { service } = make([alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+
+  // Past the ten-minute window: the miner has moved the slot elsewhere and
+  // the badge must not keep claiming this channel is being mined.
+  clock += 11 * 60_000;
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+});
+
+test("an offline streamer is never watched, however recent the gain", async () => {
+  // Guards a channel that drops inside the window: the stream ended, so
+  // the gain it produced says nothing about now.
+  const { service } = make([alpha(100), alpha(100, false)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+});
+
+test("a claim alone does not mark a streamer watched", async () => {
+  // Points can arrive from a claim on a channel the miner is not watching.
+  const { service } = make([alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+});
+
 test("reports the stream start from Twitch, not from when we looked", async () => {
   clock = 3_600_000;
   const { service } = make([alpha(100, true, "S1", 1000)]);

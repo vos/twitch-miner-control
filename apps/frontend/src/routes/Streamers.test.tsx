@@ -33,10 +33,12 @@ beforeEach(() => {
       return { ok: true, status: 200, json: async () => ({
         streamers: [
           { username: "alpha", avatarUrl: "https://cdn/a.png",
-            isOnline: true, liveSince: Date.now() - 2 * 60 * 60 * 1000, lastLive: null },
+            isOnline: true, liveSince: Date.now() - 2 * 60 * 60 * 1000, lastLive: null,
+            watching: true },
           { username: "beta", avatarUrl: null,
             isOnline: false, liveSince: null,
-            lastLive: Date.now() - 3 * 24 * 60 * 60 * 1000 },
+            lastLive: Date.now() - 3 * 24 * 60 * 60 * 1000,
+            watching: false },
         ],
       }) };
     }
@@ -174,9 +176,10 @@ test("a drag cancelled mid-flight leaves the order alone", async () => {
   expect(screen.queryByTestId("pending-bar")).not.toBeInTheDocument();
 });
 
-test("the watching tags follow the rows to their new positions", async () => {
-  // The top two are what the miner actually watches, so the tag has to track
-  // the drag rather than the order the config arrived in.
+test("the watching tag stays with its streamer when the order changes", async () => {
+  // The tag reports what the miner is mining, which a drag does not
+  // change: reordering is a staged edit that has not reached the miner
+  // yet, so the tag has to follow the streamer, not the position.
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url === "/api/config") {
       return { ok: true, status: 200, json: async () => ({
@@ -188,11 +191,25 @@ test("the watching tags follow the rows to their new positions", async () => {
         ],
       }) };
     }
-    throw new Error("no live state");
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({
+        streamers: [
+          { username: "aaa", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: false },
+          { username: "bbb", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: false },
+          { username: "ccc", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: true },
+        ],
+      }) };
+    }
+    throw new Error("unexpected request");
   }));
   stubRowRects();
   view();
-  await screen.findAllByTestId("streamer-row");
+  await waitFor(() =>
+    expect(screen.getAllByTestId("watching-tag")).toHaveLength(1),
+  );
 
   // Drag ccc (last) to the top: two rows up, 100px.
   await dragBy(screen.getAllByRole("button", { name: /reorder/i })[2], -100);
@@ -200,7 +217,37 @@ test("the watching tags follow the rows to their new positions", async () => {
   const rows = screen.getAllByTestId("streamer-row");
   expect(rows[0].textContent).toContain("ccc");
   expect(rows[0].textContent).toContain("watching");
+  expect(rows[1].textContent).not.toContain("watching");
   expect(rows[2].textContent).not.toContain("watching");
+});
+
+test("no watching tag for a streamer the miner is not mining", async () => {
+  // The top of the list is not evidence of anything: an offline or
+  // points-disabled channel keeps its priority and earns no tag.
+  view();
+  await screen.findAllByTestId("streamer-row");
+  await waitFor(() =>
+    expect(screen.getAllByTestId("watching-tag")).toHaveLength(1),
+  );
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("alpha");
+  expect(rows[0].textContent).toContain("watching");
+  // beta is second in priority but offline, so nothing is claimed for it.
+  expect(rows[1].textContent).not.toContain("watching");
+});
+
+test("no watching tags at all when the live state is unreachable", async () => {
+  // The config screen is used with the miner stopped, which is exactly
+  // when a position-derived tag used to invent two watched streamers.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/config") {
+      return { ok: true, status: 200, json: async () => config };
+    }
+    throw new Error("no live state");
+  }));
+  view();
+  await screen.findAllByTestId("streamer-row");
+  expect(screen.queryAllByTestId("watching-tag")).toHaveLength(0);
 });
 
 test("adding by pasted channel link looks up and stores the bare username", async () => {
@@ -273,24 +320,45 @@ test("shows an error when the initial config fails to load, instead of a blank s
   expect(container.textContent).not.toBe("");
 });
 
-test("marks the top two rows as the ones actually being watched", async () => {
-  // The miner watches the top two. That was a sentence the user had to
-  // remember; it should be visible on the rows it applies to.
+test("tags whichever rows the miner reports it is watching", async () => {
+  // Which channels hold the two watch slots is the miner's decision, not
+  // the list's -- so the tags have to come from the live snapshot and can
+  // land on any rows at all.
   // Its own stub rather than mutating the shared `config`, which would
   // leak into whichever test ran next.
-  vi.stubGlobal("fetch", vi.fn(async () => ({
-    ok: true, status: 200,
-    json: async () => ({
-      ...config,
-      streamers: [
-        { username: "aaa", enabled: true, settings: {} },
-        { username: "bbb", enabled: true, settings: {} },
-        { username: "ccc", enabled: true, settings: {} },
-      ],
-    }),
-  })));
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({
+        streamers: [
+          { username: "aaa", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: true },
+          { username: "bbb", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: false },
+          { username: "ccc", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: true },
+        ],
+      }) };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        ...config,
+        streamers: [
+          { username: "aaa", enabled: true, settings: {} },
+          { username: "bbb", enabled: true, settings: {} },
+          { username: "ccc", enabled: true, settings: {} },
+        ],
+      }),
+    };
+  }));
   view();
+  // Two tags because the miner reports two watched channels -- and they are
+  // rows 1 and 3, which no position rule would have produced.
   expect(await screen.findAllByTestId("watching-tag")).toHaveLength(2);
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("watching");
+  expect(rows[1].textContent).not.toContain("watching");
+  expect(rows[2].textContent).toContain("watching");
 });
 
 test("shows an avatar and a channel link per configured streamer", async () => {
@@ -324,7 +392,8 @@ test("shows each streamer's live state so the order can be judged", async () => 
   await screen.findAllByTestId("streamer-row");
 
   // alpha is live, beta went offline three days ago. Both facts drive the
-  // decision this screen exists for: who is worth the top two slots.
+  // decision this screen exists for: who is worth a watch slot -- and an
+  // offline channel cannot take one at all.
   expect(await screen.findByTestId("live-pill")).toHaveTextContent("LIVE 2h");
   expect(screen.getByTestId("offline-pill")).toHaveTextContent("OFFLINE 3d");
 });
@@ -404,9 +473,10 @@ test("applying a removal sends a config without that streamer", async () => {
   expect(calls.some((c) => c.url === "/api/config/apply")).toBe(true);
 });
 
-test("removing a streamer promotes the next one into the watching set", async () => {
-  // The top two are what the miner watches, so a removal above them has to
-  // pull the third row up into a watching slot.
+test("a staged removal does not move the watching tag", async () => {
+  // Removal is staged until Apply & Restart, so the miner is still mining
+  // exactly what it was. Promoting the tag on a local edit would claim a
+  // slot change that has not happened.
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url === "/api/config") {
       return { ok: true, status: 200, json: async () => ({
@@ -418,14 +488,30 @@ test("removing a streamer promotes the next one into the watching set", async ()
         ],
       }) };
     }
-    throw new Error("no live state");
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({
+        streamers: [
+          { username: "aaa", avatarUrl: null, isOnline: true,
+            liveSince: null, lastLive: null, watching: true },
+          { username: "bbb", avatarUrl: null, isOnline: false,
+            liveSince: null, lastLive: null, watching: false },
+          { username: "ccc", avatarUrl: null, isOnline: false,
+            liveSince: null, lastLive: null, watching: false },
+        ],
+      }) };
+    }
+    throw new Error("unexpected request");
   }));
   view();
-  await screen.findAllByTestId("streamer-row");
+  await waitFor(() =>
+    expect(screen.getAllByTestId("watching-tag")).toHaveLength(1),
+  );
 
   await userEvent.click(screen.getByRole("button", { name: /remove aaa/i }));
 
+  // aaa is gone from the draft, and with it the only tag: bbb does not
+  // inherit a watch slot by moving up.
   const rows = screen.getAllByTestId("streamer-row");
-  expect(rows.map((r) => r.textContent?.includes("watching"))).toEqual([true, true]);
-  expect(rows[1].textContent).toContain("ccc");
+  expect(rows[0].textContent).toContain("bbb");
+  expect(screen.queryAllByTestId("watching-tag")).toHaveLength(0);
 });

@@ -106,6 +106,27 @@ export class History {
   }
 
   /**
+   * When this streamer last earned points *for watching*, or null.
+   *
+   * The miner's watch loop lives in the `run.py` process and never
+   * publishes which channels hold its two watch slots, so this is the
+   * only evidence on this side that a channel is actually being mined:
+   * PubSub reports a `WATCH` reason code and the doorbell records it as
+   * `GAIN_FOR_WATCH` (see vendor Twitch PubSub.py). Distinct from
+   * lastActivity, which is any event -- a claim or a raid says nothing
+   * about whether the miner is watching *now*.
+   */
+  lastWatchGain(streamer: string): number | null {
+    const row = this.db
+      .prepare(
+        "SELECT ts FROM events WHERE streamer = ? AND type = 'GAIN_FOR_WATCH' " +
+          "ORDER BY ts DESC, id DESC LIMIT 1",
+      )
+      .get(streamer) as { ts: number } | undefined;
+    return row?.ts ?? null;
+  }
+
+  /**
    * Records the first sighting of a stream. Idempotent per stream.
    *
    * `ON CONFLICT DO NOTHING` is what makes this restart-proof. It is

@@ -94,6 +94,32 @@ test("adds the message column to a database created without it", () => {
   }
 });
 
+test("lastWatchGain reports the newest watch gain for the streamer", () => {
+  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> forsen", "forsen");
+  history.recordEvent("GAIN_FOR_WATCH", 3000, "+10 -> forsen", "forsen");
+  expect(history.lastWatchGain("forsen")).toBe(3000);
+});
+
+test("lastWatchGain ignores gains that are not for watching", () => {
+  // A claim or a raid says points arrived, not that the miner holds a
+  // watch slot -- which is the only thing this answers.
+  history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen", "forsen");
+  history.recordEvent("GAIN_FOR_RAID", 2500, "+50 -> forsen", "forsen");
+  expect(history.lastWatchGain("forsen")).toBeNull();
+});
+
+test("lastWatchGain does not read another streamer's watch gain", () => {
+  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> forsen", "forsen");
+  expect(history.lastWatchGain("alpha")).toBeNull();
+});
+
+test("lastWatchGain is null when an event could not be attributed", () => {
+  // An ambiguous line is stored with a null streamer; it must not count
+  // toward any channel.
+  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> someone", null);
+  expect(history.lastWatchGain("someone")).toBeNull();
+});
+
 test("recentEvents respects the limit and returns newest first", () => {
   for (let i = 1; i <= 5; i++) history.recordEvent("BONUS_CLAIM", i * 1000);
   expect(history.recentEvents(2).map((e) => e.ts)).toEqual([5000, 4000]);
