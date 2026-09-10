@@ -13,13 +13,29 @@ import { Logs } from "./routes/Logs.js";
 import { Settings } from "./routes/Settings.js";
 import { Streamers } from "./routes/Streamers.js";
 
+/**
+ * `element` is a function rather than a built element so a screen can be
+ * handed props from App's own state -- the dashboard needs the Twitch
+ * login status and a way to navigate. It also stops every screen being
+ * constructed on each render when only one of them is shown.
+ */
 const SCREENS = {
-  dashboard: { label: "Dashboard", element: <Dashboard /> },
-  streamers: { label: "Streamers", element: <Streamers /> },
-  logs: { label: "Logs", element: <Logs /> },
-  settings: { label: "Settings", element: <Settings /> },
-  account: { label: "Twitch account", element: <TwitchLogin /> },
+  dashboard: {
+    label: "Dashboard",
+    element: (p: ScreenProps) => (
+      <Dashboard loginRequired={p.loginRequired} onSignIn={() => p.navigate("account")} />
+    ),
+  },
+  streamers: { label: "Streamers", element: () => <Streamers /> },
+  logs: { label: "Logs", element: () => <Logs /> },
+  settings: { label: "Settings", element: () => <Settings /> },
+  account: { label: "Twitch account", element: () => <TwitchLogin /> },
 } as const;
+
+interface ScreenProps {
+  loginRequired: boolean;
+  navigate: (key: ScreenKey) => void;
+}
 
 export type ScreenKey = keyof typeof SCREENS;
 
@@ -32,6 +48,13 @@ export function App() {
   // true until the first poll answers, matching the server's own
   // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);
+  // Whether that default has actually been confirmed by the server yet.
+  // The dashboard notice is keyed on this as well as on `loginRequired`:
+  // acting on the unproven default alone would flash "Twitch sign-in
+  // needed" at every signed-in user on every load. The sidebar dot can
+  // live with it -- a two-pixel circle blinking is not a false alarm the
+  // way a titled alert is.
+  const [loginKnown, setLoginKnown] = useState(false);
   // The newest process-stats reading. The rolling window it feeds lives
   // in a ref (see useRollingHistory), so only this one value is state.
   const [stats, setStats] = useState<ProcSample | null>(null);
@@ -53,6 +76,7 @@ export function App() {
         .then((s) => {
           setMiner({ state: s.miner, startedAt: s.startedAt });
           setLoginRequired(s.loginRequired);
+          setLoginKnown(true);
           // Stamped on arrival: the history uses this to tell a fresh
           // reading from a re-render carrying the same one.
           setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
@@ -116,7 +140,12 @@ export function App() {
             onMinerChange={setMiner}
           />
         </AppShell.Navbar>
-        <AppShell.Main>{SCREENS[screen].element}</AppShell.Main>
+        <AppShell.Main>
+          {SCREENS[screen].element({
+            loginRequired: loginRequired && loginKnown,
+            navigate,
+          })}
+        </AppShell.Main>
       </AppShell>
     </PasswordGate>
   );

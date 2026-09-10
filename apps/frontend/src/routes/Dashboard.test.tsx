@@ -40,7 +40,8 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const view = () => renderApp(<Dashboard />);
+const view = (loginRequired = false) =>
+  renderApp(<Dashboard loginRequired={loginRequired} onSignIn={() => {}} />);
 
 test("shows who is live", async () => {
   view();
@@ -286,5 +287,32 @@ describe("sorting", () => {
     view();
     expect(await screen.findByTestId("streamer-alice")).toBeInTheDocument();
     expect(cardOrder()).toEqual(["alice", "bob", "carol", "yuri", "zed"]);
+  });
+});
+
+describe("the Twitch sign-in notice", () => {
+  // The miner cannot collect a single point without a working Twitch
+  // cookie, so this is a blocking condition, not advice. The sidebar dot
+  // alone says it too quietly for someone opening the app for the first
+  // time -- and for a returning user whose long-lived cookie has finally
+  // gone bad, the dashboard is where they notice the numbers stopped.
+  test("tells the user to sign in when Twitch login is required", async () => {
+    view(true);
+    expect(await screen.findByTestId("login-required-notice")).toBeInTheDocument();
+  });
+
+  test("stays out of the way once Twitch login is established", async () => {
+    view(false);
+    // Wait for the dashboard proper, so this is not trivially true of a
+    // tree that has not rendered yet.
+    await screen.findByTestId("live-heading");
+    expect(screen.queryByTestId("login-required-notice")).not.toBeInTheDocument();
+  });
+
+  test("its button asks the app to open the Twitch account screen", async () => {
+    const onSignIn = vi.fn();
+    renderApp(<Dashboard loginRequired onSignIn={onSignIn} />);
+    await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
+    expect(onSignIn).toHaveBeenCalledTimes(1);
   });
 });

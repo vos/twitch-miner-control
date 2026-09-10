@@ -1,4 +1,7 @@
-import { Alert, Group, NativeSelect, SimpleGrid, Stack, Switch, Text, UnstyledButton } from "@mantine/core";
+import {
+  Alert, Button, Group, NativeSelect, SimpleGrid, Stack, Switch, Text, UnstyledButton,
+} from "@mantine/core";
+import type { ReactNode } from "react";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
@@ -75,7 +78,10 @@ function SectionHeading({ children, testId, collapsed, onToggle }: {
   );
 }
 
-export function Dashboard() {
+export function Dashboard({ loginRequired = false, onSignIn }: {
+  loginRequired?: boolean;
+  onSignIn?: () => void;
+} = {}) {
   const { snapshot, loadError } = useLiveState();
   const [feedOn, toggleFeed] = useLocalToggle("dashboard.feed", true);
   // Offline streamers are the bulk of a big roster and the least
@@ -86,15 +92,55 @@ export function Dashboard() {
   // nesting a menu inside it is both an a11y problem and an easy misclick.
   const [sort, setSort] = useLocalChoice<SortKey>("dashboard.sort", "default", SORT_KEYS);
 
+  /**
+   * Without a working Twitch cookie the miner collects nothing, so this
+   * is a blocking condition rather than advice -- hence no dismiss
+   * control: hiding it would hide the reason the numbers stopped moving.
+   *
+   * The sidebar's dot on the account row says the same thing, but it is
+   * an unlabelled circle: fine as a reminder for someone who knows what
+   * it means, useless to a first-time user staring at an empty dashboard.
+   */
+  const notice = loginRequired && (
+    <Alert
+      role="alert"
+      color="twitch"
+      title="Twitch sign-in needed"
+      data-testid="login-required-notice"
+    >
+      <Group justify="space-between" wrap="wrap" gap="sm">
+        <Text size="sm">
+          The miner cannot collect channel points until you connect a Twitch account.
+        </Text>
+        {onSignIn && (
+          <Button size="xs" onClick={onSignIn}>Sign in to Twitch</Button>
+        )}
+      </Group>
+    </Alert>
+  );
+
+  // Every return below wraps its body in the same <Stack>, notice first.
+  // Not cosmetic: returning the notice bare here and nested once the
+  // snapshot lands puts it at a different position in the element tree,
+  // so React unmounts and remounts it instead of leaving it alone --
+  // which flickers the alert the moment the first snapshot arrives.
+  const frame = (children: ReactNode) => (
+    <Stack gap="md">
+      {notice}
+      {children}
+    </Stack>
+  );
+
+  // Guarded after the notice is built, not before: on a fresh install
+  // there is no snapshot to show, and a user who has never signed in
+  // would otherwise get a blank screen -- exactly the person this notice
+  // exists for.
   if (!snapshot) {
-    if (loadError) {
-      return (
-        <Alert role="alert" color="red">
-          Failed to load dashboard: {loadError}
-        </Alert>
-      );
-    }
-    return null;
+    return frame(loadError && (
+      <Alert role="alert" color="red">
+        Failed to load dashboard: {loadError}
+      </Alert>
+    ));
   }
 
   const total = snapshot.streamers.reduce((sum, s) => sum + (s.points ?? 0), 0);
@@ -154,8 +200,8 @@ export function Dashboard() {
     </>
   );
 
-  return (
-    <Stack gap="md">
+  return frame(
+    <>
       <Group justify="space-between" wrap="wrap">
         <StalenessBadge lastUpdated={snapshot.lastUpdated} stale={snapshot.stale} />
         <Group gap="md" wrap="nowrap">
@@ -205,6 +251,6 @@ export function Dashboard() {
           miner's own log lines are long, and a narrow column truncated
           almost every one of them. */}
       <EventsFeed enabled={feedOn} />
-    </Stack>
+    </>,
   );
 }

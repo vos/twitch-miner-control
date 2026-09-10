@@ -86,3 +86,51 @@ test("the header shows how long the miner has been up", async () => {
   view();
   expect(await screen.findByTestId("miner-uptime")).toHaveTextContent("1m 30s");
 });
+
+test("the dashboard carries the sign-in notice when Twitch login is required", async () => {
+  // The sidebar dot is a two-pixel hint with no label; someone who has
+  // never used the app has no way to read it as "you must sign in first".
+  stub(true);
+  view();
+  expect(await screen.findByTestId("login-required-notice")).toBeInTheDocument();
+});
+
+test("holds the notice back until /api/status has actually answered", async () => {
+  // `loginRequired` starts true to match the server's default-to-required
+  // stance, so rendering straight off that state would flash the notice at
+  // every signed-in user on every load.
+  // PasswordGate probes /api/status too, and it has to succeed or the
+  // gate never unlocks and there is no dashboard to assert about. So the
+  // first probe answers and every later one -- App's own poll -- hangs,
+  // leaving `loginRequired` on its unproven initial value.
+  let probed = false;
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/status") {
+      if (probed) return await new Promise(() => {});
+      probed = true;
+      return {
+        ok: true, status: 200,
+        json: async () => ({ miner: "RUNNING", loginRequired: true, login: null,
+          startedAt: null, stats: null }),
+      };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({ streamers: [], lastUpdated: null, stale: true, error: null }),
+    };
+  }));
+  vi.stubGlobal("EventSource", class {
+    addEventListener() {}
+    close() {}
+  });
+  view();
+  await screen.findByRole("button", { name: /dashboard/i });
+  expect(screen.queryByTestId("login-required-notice")).not.toBeInTheDocument();
+});
+
+test("the notice leads to the Twitch account screen", async () => {
+  stub(true);
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
+  expect(await screen.findByLabelText("Twitch username")).toBeInTheDocument();
+});
