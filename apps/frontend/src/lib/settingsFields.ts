@@ -130,6 +130,56 @@ export const BET_FIELDS: SettingsField[] = [
   },
 ];
 
+/**
+ * The three parts of a bet filter condition: "only bet when <by> <where>
+ * <value>". Kept here rather than inline in the dialog so the option lists
+ * have one frontend-side definition -- they mirror OUTCOME_KEYS and the
+ * Condition enum in apps/backend/src/config/schema.ts, which the frontend
+ * cannot import across the package boundary.
+ *
+ * Upstream marks DECISION_USERS/DECISION_POINTS as keys that do not exist,
+ * so only the six real outcome keys are offered.
+ */
+export const FILTER_FIELDS: SettingsField[] = [
+  {
+    key: "by", label: "Measure", tab: "predictions",
+    help: "Which property of the outcome to test.",
+    kind: {
+      kind: "enum",
+      options: ["percentage_users", "odds_percentage", "odds",
+        "top_points", "total_users", "total_points"],
+      labels: {
+        percentage_users: "Share of predictors (%)",
+        odds_percentage: "Implied probability (%)",
+        odds: "Odds",
+        top_points: "Largest single bet",
+        total_users: "Number of predictors",
+        total_points: "Total points bet",
+      },
+    },
+    defaultValue: "total_users",
+  },
+  {
+    key: "where", label: "Comparison", tab: "predictions",
+    help: "How the measure must compare to the value.",
+    kind: {
+      kind: "enum",
+      options: ["GT", "LT", "GTE", "LTE"],
+      labels: {
+        GT: "is greater than", LT: "is less than",
+        GTE: "is at least", LTE: "is at most",
+      },
+    },
+    defaultValue: "LTE",
+  },
+  {
+    key: "value", label: "Value", tab: "predictions",
+    help: "The number the measure is compared against.",
+    kind: { kind: "number", min: 0 },
+    defaultValue: 800,
+  },
+];
+
 /** Renders a field's upstream default as display text. */
 export function describeDefault(field: SettingsField): string {
   const value = field.defaultValue;

@@ -1,5 +1,7 @@
 import { Alert, Modal, Stack, Switch, Tabs, Text } from "@mantine/core";
-import { BET_FIELDS, SETTINGS_FIELDS, type TabId } from "../lib/settingsFields.js";
+import {
+  BET_FIELDS, FILTER_FIELDS, SETTINGS_FIELDS, type TabId,
+} from "../lib/settingsFields.js";
 import { SettingsFieldRow } from "./SettingsFieldRow.js";
 
 export interface StreamerSettingsModalProps {
@@ -56,7 +58,9 @@ export function StreamerSettingsModal(props: StreamerSettingsModalProps) {
 
   return (
     <Modal opened={opened} onClose={onClose} title={`Settings — ${username}`} size="lg">
-      <Tabs defaultValue="general">
+      {/* The modal header sits directly on the tab row otherwise -- the
+          title and the tabs read as one block. */}
+      <Tabs defaultValue="general" mt="md">
         <Tabs.List>
           <Tabs.Tab value="general">General</Tabs.Tab>
           <Tabs.Tab value="points">Points &amp; chat</Tabs.Tab>
@@ -99,10 +103,23 @@ export function StreamerSettingsModal(props: StreamerSettingsModalProps) {
                 setBet("filterCondition",
                   e.currentTarget.checked ? DEFAULT_FILTER : undefined)}
             />
+            {/* The condition is all-or-nothing -- it exists or it does not
+                -- so its three parts are plain controls rather than
+                inherit-capable rows. */}
             {filter && (
-              <Text size="xs" c="dimmed" mt="xs">
-                {String(filter.by)} {String(filter.where)} {String(filter.value)}
-              </Text>
+              <Stack gap={0} pl="xl">
+                {FILTER_FIELDS.map((field) => (
+                  <SettingsFieldRow
+                    key={field.key}
+                    field={field}
+                    value={filter[field.key] ?? field.defaultValue}
+                    canInherit={false}
+                    disabled={!bets}
+                    onChange={(v) => setBet("filterCondition",
+                      { ...filter, [field.key]: v })}
+                  />
+                ))}
+              </Stack>
             )}
           </Stack>
         </Tabs.Panel>
