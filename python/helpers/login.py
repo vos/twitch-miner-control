@@ -50,6 +50,13 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
     # to a Node process that renders a countdown from it, so it must be a
     # wall-clock epoch value -- time.monotonic()'s epoch is unspecified
     # (typically time-since-boot) and meaningless outside this process.
+    #
+    # It must also be in *milliseconds*: the UI computes
+    # `expiresAt - Date.now()`, and time.time()'s seconds made that about
+    # -1.79e9, which the UI clamps to zero -- so every code was labelled
+    # "Code expired -- start again" the moment it appeared, while still
+    # working fine. Epoch ms is what every other timestamp on this wire
+    # uses (lastUpdated, liveSince, startedAt).
     deadline = now() + expires_in
     # Carried on every later frame: the UI replaces its whole progress
     # object with each one, so a frame that omits these erases the code
@@ -58,7 +65,7 @@ def device_login(session, out=sys.stdout, sleep=time.sleep, now=time.monotonic,
         "userCode": body["user_code"],
         "verificationUri": body.get("verification_uri",
                                     "https://www.twitch.tv/activate"),
-        "expiresAt": wall_clock() + expires_in,
+        "expiresAt": round((wall_clock() + expires_in) * 1000),
     }
     _emit(out, {"stage": "code", **code_fields})
 

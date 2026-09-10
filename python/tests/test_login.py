@@ -141,9 +141,10 @@ def test_expires_at_is_wall_clock_not_monotonic():
 
     code_line = lines[0]
     assert code_line["stage"] == "code"
-    assert code_line["expiresAt"] == fixed_wall_clock_epoch + 1800
+    # In epoch ms -- see test_expires_at_is_milliseconds_not_seconds.
+    assert code_line["expiresAt"] == (fixed_wall_clock_epoch + 1800) * 1000
     # Must not be anywhere near the monotonic clock's domain.
-    assert abs(code_line["expiresAt"] - huge_monotonic_offset) > 1_000_000
+    assert abs(code_line["expiresAt"] - huge_monotonic_offset * 1000) > 1_000_000
 
 
 def test_device_request_failure_reports_error():
@@ -223,3 +224,35 @@ def test_pending_keeps_the_code_visible():
         assert frame["userCode"] == "ABCD1234"
         assert frame["verificationUri"] == "https://www.twitch.tv/activate"
         assert "expiresAt" in frame
+
+
+def test_expires_at_is_milliseconds_not_seconds():
+    """The Node side renders the countdown as `expiresAt - Date.now()`, and
+    Date.now() is epoch *milliseconds*. Emitting `time.time() + expires_in`
+    sent seconds, so the subtraction came out around -1.79e9, clamped to
+    zero by the UI's Math.max -- every device code was labelled "Code
+    expired -- start again" the instant it appeared, while still working
+    perfectly for the next half hour.
+
+    Every other timestamp crossing this wire is epoch ms (lastUpdated,
+    liveSince, startedAt all compare against Date.now()), so ms is the
+    convention this one was breaking.
+    """
+    fixed_wall_clock_epoch = 1_700_000_000.0
+
+    login = FakeLogin([DEVICE_OK, FakeResponse(200, {"access_token": "tok"})])
+    session = SimpleNamespace(login=login, cookies_file="/tmp/alex.pkl")
+    out = io.StringIO()
+    device_login(
+        session,
+        out=out,
+        sleep=lambda _s: None,
+        now=iter_now(start=0.0),
+        wall_clock=lambda: fixed_wall_clock_epoch,
+    )
+    code_line = json.loads(out.getvalue().strip().split("\n")[0])
+
+    assert code_line["expiresAt"] == (fixed_wall_clock_epoch + 1800) * 1000
+    # A countdown built from this must be positive and in the right ballpark.
+    now_ms = fixed_wall_clock_epoch * 1000
+    assert round((code_line["expiresAt"] - now_ms) / 1000) == 1800
