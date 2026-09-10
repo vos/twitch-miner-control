@@ -63,7 +63,9 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
             disabled={disabled}
             allowDeselect={false}
             onChange={(v) => v !== null && onChange(v)}
-            w={180}
+            // Wide enough for the longest option label ("Number of
+            // predictors", "Implied probability (%)"), which clipped at 180.
+            w={230}
           />
         );
       case "number":
@@ -112,14 +114,18 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
       <Stack gap={2} style={{ flex: 1 }}>
         <Group gap="xs">
           <Text size="sm" fw={500}>{field.label}</Text>
-          <Badge
-            size="xs" variant="light" data-testid="field-state"
-            color={overridden ? "twitch" : "gray"}
-          >
-            {canInherit
-              ? (overridden ? "Overridden" : `Inherit — ${describeValue(field, current)}`)
-              : describeValue(field, current)}
-          </Badge>
+          {/* Only where a field can inherit: there the badge says something
+              the control cannot -- whether this value is its own or the
+              default's. On a plain row it would just restate the value
+              sitting in the control beside it. */}
+          {canInherit && (
+            <Badge
+              size="xs" variant="light" data-testid="field-state"
+              color={overridden ? "twitch" : "gray"}
+            >
+              {overridden ? "Overridden" : `Inherit — ${describeValue(field, current)}`}
+            </Badge>
+          )}
         </Group>
         <Text size="xs" c="dimmed">{field.help}</Text>
       </Stack>

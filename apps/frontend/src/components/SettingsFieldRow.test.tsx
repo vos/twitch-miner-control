@@ -81,14 +81,19 @@ test("an optional number switches between off and a value", async () => {
   expect(onChange).toHaveBeenCalledWith(1);
 });
 
-test("shows the upstream default as placeholder text when it cannot inherit", () => {
+test("falls back to the upstream default when it cannot inherit", () => {
   renderApp(
     <SettingsFieldRow
       field={field("communityGoals")} value={undefined} canInherit={false}
       onChange={() => {}}
     />,
   );
-  expect(screen.getByTestId("field-state")).toHaveTextContent("Off");
+  // The control carries the value; no badge restates it. A badge here would
+  // only repeat what the switch beside it already shows -- it earns its
+  // place solely on inherit-capable rows, where it says whether the value
+  // is the field's own or the default's.
+  expect(screen.queryByTestId("field-state")).not.toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "Community goals" })).not.toBeChecked();
 });
 
 test("a disabled row cannot be edited", async () => {
