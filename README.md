@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="" width="240">
+</p>
+
 # Twitch Miner Control
 
 A control panel for

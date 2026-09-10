@@ -7,9 +7,11 @@ test("is labelled for assistive tech", () => {
   expect(screen.getByRole("img", { name: /miner control/i })).toBeInTheDocument();
 });
 
+// The inline style, not the width/height attributes, is what actually
+// sizes the image -- CSS wins over the presentational attributes, so
+// asserting only the latter would stay green while the render broke.
 test("scales to the requested size", () => {
-  const { container } = render(<BrandMark size={96} />);
-  const svg = container.querySelector("svg");
-  expect(svg).toHaveAttribute("width", "96");
-  expect(svg).toHaveAttribute("height", "96");
+  render(<BrandMark size={250} />);
+  const img = screen.getByRole("img", { name: /miner control/i });
+  expect(img).toHaveStyle({ width: "250px", height: "250px" });
 });

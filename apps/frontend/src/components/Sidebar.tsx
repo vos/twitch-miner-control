@@ -34,7 +34,7 @@ export function Sidebar({
     <Stack h="100%" gap={0} justify="space-between">
       <Box>
         <Group gap="sm" px="md" py="lg" wrap="nowrap">
-          <BrandMark size={28} />
+          <BrandMark size={40} />
           <Text fw={700} size="sm" style={{ letterSpacing: "0.08em" }}>
             MINER CONTROL
           </Text>

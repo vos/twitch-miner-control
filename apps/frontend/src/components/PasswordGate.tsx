@@ -99,7 +99,12 @@ export function PasswordGate({
     >
       <Stack align="center" gap="xl" w={400} px="md">
         <Stack align="center" gap="xs">
-          <BrandMark size={96} />
+          {/* The stack's own gap keeps the title and its subtitle tight as
+              one block, so the breathing room the mark needs at this size
+              is set here rather than by widening that gap for all three. */}
+          <Box mb="md">
+            <BrandMark size={250} />
+          </Box>
           <Text fw={700} size="xl" style={{ letterSpacing: "0.1em" }}>
             TWITCH MINER CONTROL
           </Text>
