@@ -1,4 +1,4 @@
-import { ActionIcon, Alert, Group, Stack, Text, Title } from "@mantine/core";
+import { ActionIcon, Alert, Group, Stack, Text, Title, Tooltip } from "@mantine/core";
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCenter,
   type DragEndEvent, useSensor, useSensors,
@@ -12,6 +12,7 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { AddStreamer } from "../components/AddStreamer.js";
+import { StreamerSettingsModal } from "../components/StreamerSettingsModal.js";
 import { PendingBar } from "../components/PendingBar.js";
 import { StreamerRow } from "../components/StreamerRow.js";
 
@@ -50,6 +51,8 @@ export function Streamers() {
 
   const [status, setStatus] = useState<Map<string, StreamerStatus>>(new Map());
   const [refreshing, setRefreshing] = useState(false);
+  /** Index of the streamer whose settings dialog is open, if any. */
+  const [editing, setEditing] = useState<number | null>(null);
 
   // An activation distance keeps a click on the grip from being read as a
   // drag; the keyboard sensor is the only reorder path for a keyboard user
@@ -175,17 +178,16 @@ export function Streamers() {
           streak or drop can jump the queue. The “watching” tag marks what is
           actually being mined right now.
         </Text>
-          {/* No Mantine <Tooltip> here: its hover transition never settles
-              under userEvent, which hangs the whole vitest worker for 30s.
-              `title` gives the same hint natively, and the aria-label already
-              names the control. */}
-          <ActionIcon
-            variant="subtle" color="gray"
-            aria-label="Refresh live status" title="Refresh live status"
-            onClick={() => void loadStatus()} loading={refreshing}
-          >
-            <IconRefresh size={16} />
-          </ActionIcon>
+          {/* Refreshes the live snapshot without touching the staged draft. */}
+          <Tooltip label="Refresh live status">
+            <ActionIcon
+              variant="subtle" color="gray"
+              aria-label="Refresh live status"
+              onClick={() => void loadStatus()} loading={refreshing}
+            >
+              <IconRefresh size={16} />
+            </ActionIcon>
+          </Tooltip>
       </Group>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       <AddStreamer onAdd={add} />
@@ -210,11 +212,26 @@ export function Streamers() {
                 watching={status.get(streamer.username.toLowerCase())?.watching === true}
                 onToggle={() => toggle(index)}
                 onRemove={() => remove(index)}
+                onOpenSettings={() => setEditing(index)}
               />
             ))}
           </Stack>
         </SortableContext>
       </DndContext>
+      {editing !== null && draft.streamers[editing] && (
+        <StreamerSettingsModal
+          opened
+          username={draft.streamers[editing].username}
+          settings={draft.streamers[editing].settings}
+          defaults={draft.defaults}
+          onClose={() => setEditing(null)}
+          onChange={(settings) => setDraft({
+            ...draft,
+            streamers: draft.streamers.map((s, i) =>
+              i === editing ? { ...s, settings } : s),
+          })}
+        />
+      )}
       <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );
