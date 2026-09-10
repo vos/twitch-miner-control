@@ -1,6 +1,7 @@
 import pytest
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
+from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.entities.Bet import Condition, DelayMode, Strategy
 from TwitchChannelPointsMiner.classes.entities.Streamer import HLSSettings
 from miner_config import build_mine_kwargs, build_streamers
@@ -134,4 +135,36 @@ def test_per_streamer_bet_replaces_the_default_bet_wholesale():
 
 
 def test_mine_kwargs_carry_follower_options():
-    assert build_mine_kwargs(cfg()) == {"followers": True, "followers_order": "ASC"}
+    kwargs = build_mine_kwargs(cfg())
+    assert kwargs["followers"] is True
+    assert kwargs["followers_order"] == "ASC"
+
+
+def test_mine_kwargs_default_the_miner_wide_options():
+    kwargs = build_mine_kwargs(cfg())
+    assert kwargs["followers"] is True
+    assert kwargs["priority"] is None
+    assert kwargs["claim_drops_startup"] is False
+    assert kwargs["gql"] is None
+    assert kwargs["weekly_rewards"] is None
+
+
+def test_mine_kwargs_carry_priority_and_startup_claim():
+    kwargs = build_mine_kwargs(cfg(miner={
+        "priority": ["STREAK", "ORDER"],
+        "claim_drops_startup": True,
+        "gql": {"attempts": 5, "attempt_interval_seconds": 2},
+    }))
+    assert kwargs["priority"] == [Priority.STREAK, Priority.ORDER]
+    assert kwargs["claim_drops_startup"] is True
+    assert kwargs["gql"].attempts == 5
+    assert kwargs["gql"].attempt_interval_seconds == 2
+
+
+def test_weekly_rewards_false_disables_rather_than_configuring():
+    assert build_mine_kwargs(cfg(miner={"weekly_rewards": False}))["weekly_rewards"] is False
+
+
+def test_weekly_rewards_dict_becomes_basic_configuration():
+    kwargs = build_mine_kwargs(cfg(miner={"weekly_rewards": {"max_concurrent": 4}}))
+    assert kwargs["weekly_rewards"].max_concurrent == 4

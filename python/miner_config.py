@@ -5,6 +5,8 @@ The accepted shape here IS the contract; apps/backend/src/config/schema.ts
 mirrors it in Zod.
 """
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
+from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
+from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     BetSettings,
     Condition,
@@ -17,6 +19,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
+from TwitchChannelPointsMiner.utils.AttemptStrategy import AttemptStrategy
 
 BOOL_SETTINGS = (
     "make_predictions",
@@ -92,7 +95,22 @@ def build_streamers(cfg: dict) -> list[Streamer]:
 
 
 def build_mine_kwargs(cfg: dict) -> dict:
+    """Miner-wide options. `None` means "let upstream pick its default",
+    which is not the same as False -- weekly_rewards=False disables the
+    feature, weekly_rewards=None takes upstream's BasicConfiguration."""
+    miner = cfg.get("miner") or {}
+
+    priority = miner.get("priority")
+    gql = miner.get("gql")
+    weekly = miner.get("weekly_rewards")
+
     return {
         "followers": bool(cfg.get("followers", False)),
         "followers_order": cfg.get("followersOrder", "ASC"),
+        "priority": [Priority[p] for p in priority] if priority else None,
+        "claim_drops_startup": bool(miner.get("claim_drops_startup", False)),
+        "gql": AttemptStrategy(**gql) if gql else None,
+        "weekly_rewards": (
+            BasicConfiguration(**weekly) if isinstance(weekly, dict) else weekly
+        ),
     }

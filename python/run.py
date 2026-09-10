@@ -65,11 +65,20 @@ with open(CONFIG_PATH, encoding="utf-8") as fh:
 # "write-your-secure-psw" as an unedited example value.
 COOKIE_AUTH_PLACEHOLDER = "unused-cookie-auth"
 
+kwargs = build_mine_kwargs(cfg)
+
 twitch_miner = TwitchChannelPointsMiner(
     username=cfg["username"],
     password=COOKIE_AUTH_PLACEHOLDER,
     enable_analytics=False,
     use_hermes=True,
+    # `None` for any of these means "use upstream's own default", which is
+    # what an unconfigured config.json yields -- so passing them through
+    # unset is identical to not passing them at all.
+    priority=kwargs["priority"],
+    claim_drops_startup=kwargs["claim_drops_startup"],
+    gql=kwargs["gql"],
+    weekly_rewards=kwargs["weekly_rewards"],
     logger_settings=LoggerSettings(
         save=True,
         console_level=20,
@@ -81,7 +90,6 @@ twitch_miner = TwitchChannelPointsMiner(
     ),
 )
 
-kwargs = build_mine_kwargs(cfg)
 twitch_miner.mine(
     streamers=build_streamers(cfg),
     followers=kwargs["followers"],

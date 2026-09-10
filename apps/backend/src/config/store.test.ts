@@ -29,6 +29,7 @@ const valid = {
   followers: true,
   followersOrder: "ASC",
   defaults: { makePredictions: false },
+  miner: {},
   streamers: [{ username: "alpha", enabled: true, settings: {} }],
 };
 
@@ -93,6 +94,21 @@ describe("schema", () => {
     expect(configSchema.safeParse(mk({
       filterCondition: { by: "decision_users", where: "LTE", value: 1 },
     })).success).toBe(false);
+  });
+
+  test("accepts miner-wide options and rejects unknown priorities", () => {
+    const mk = (miner: unknown) => ({ ...valid, miner });
+    expect(configSchema.safeParse(mk({
+      priority: ["STREAK", "DROPS", "ORDER"],
+      claimDropsStartup: true,
+      gql: { attempts: 3, attemptIntervalSeconds: 1 },
+      weeklyRewards: { maxConcurrent: 2, maxClipWatchSeconds: 30,
+                       maxVodWatchSeconds: 480, intervalSeconds: 20,
+                       maxFailuresPerStreamer: 1, failureCooldownSeconds: 3600 },
+    })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ weeklyRewards: false })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ priority: ["NOPE"] })).success).toBe(false);
+    expect(configSchema.safeParse(mk({ evil: 1 })).success).toBe(false);
   });
 
   test("accepts simulateHlsPlayback as false or a refresh window", () => {

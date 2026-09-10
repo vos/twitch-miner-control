@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import {
-  type AppConfig, configSchema, settingsFromPython, settingsToPython,
+  type AppConfig, configSchema, minerFromPython, minerToPython,
+  settingsFromPython, settingsToPython,
 } from "./schema.js";
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -9,6 +10,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   followers: false,
   followersOrder: "ASC",
   defaults: {},
+  miner: {},
   streamers: [],
 };
 
@@ -25,6 +27,7 @@ export function loadConfig(path: string): AppConfig {
   const camel = {
     ...r,
     defaults: settingsFromPython((r.defaults as Record<string, unknown>) ?? {}),
+    miner: minerFromPython((r.miner as Record<string, unknown>) ?? {}),
     streamers: rawStreamers.map((s: Record<string, unknown>) => ({
       ...s,
       settings: settingsFromPython((s.settings as Record<string, unknown>) ?? {}),
@@ -42,6 +45,7 @@ export function saveConfig(path: string, config: AppConfig): void {
   const onDisk = {
     ...valid,
     defaults: settingsToPython(valid.defaults),
+    miner: minerToPython(valid.miner),
     streamers: valid.streamers.map((s) => ({
       ...s,
       settings: settingsToPython(s.settings),

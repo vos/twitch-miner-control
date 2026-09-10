@@ -43,6 +43,18 @@ def test_event_hook_surface():
     assert params(EventHook.validate_and_send) == ["self", "record"]
 
 
+def test_weekly_rewards_basic_configuration_field_names():
+    """example.py documents max_concurrent_watch/max_seconds_clips/
+    max_seconds_vods/loop_interval_seconds, none of which exist on the
+    dataclass -- passing them raises TypeError. Pin the real names so an
+    upstream rename fails here by name instead of at miner startup."""
+    from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
+    assert set(BasicConfiguration.__dataclass_fields__) == {
+        "max_concurrent", "max_clip_watch_seconds", "max_vod_watch_seconds",
+        "interval_seconds", "max_failures_per_streamer", "failure_cooldown_seconds",
+    }
+
+
 def test_events_we_rely_on_exist():
     for name in [
         "STREAMER_ONLINE",

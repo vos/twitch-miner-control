@@ -111,9 +111,71 @@ export const usernameSchema = z.string().regex(/^[a-zA-Z0-9_]{4,25}$/);
  */
 export const accountUsernameSchema = z.union([z.literal(""), usernameSchema]);
 
+export const PRIORITIES = [
+  "ORDER", "STREAK", "DROPS", "SUBSCRIBED",
+  "POINTS_ASCENDING", "POINTS_DESCENDING", "WATCH_SESSION", "WEEKLY_REWARDS",
+] as const;
+
+/** Field names are upstream's dataclass, not example.py's (which are wrong). */
+const weeklyRewardsSchema = z.union([
+  z.literal(false),
+  z.object({
+    maxConcurrent: z.number().int().positive().optional(),
+    maxClipWatchSeconds: z.number().positive().optional(),
+    maxVodWatchSeconds: z.number().positive().optional(),
+    intervalSeconds: z.number().positive().optional(),
+    maxFailuresPerStreamer: z.number().int().nonnegative().optional(),
+    failureCooldownSeconds: z.number().nonnegative().optional(),
+  }).strict(),
+]);
+
+const minerSchema = z
+  .object({
+    priority: z.array(z.enum(PRIORITIES)).optional(),
+    claimDropsStartup: z.boolean().optional(),
+    gql: z.object({
+      attempts: z.number().int().positive(),
+      attemptIntervalSeconds: z.number().nonnegative(),
+    }).strict().optional(),
+    weeklyRewards: weeklyRewardsSchema.optional(),
+  })
+  .strict();
+
+export const MINER_TO_PYTHON: Record<string, string> = {
+  priority: "priority",
+  claimDropsStartup: "claim_drops_startup",
+  gql: "gql",
+  weeklyRewards: "weekly_rewards",
+};
+
+const MINER_NESTED_TO_PYTHON: Record<string, Record<string, string>> = {
+  gql: { attempts: "attempts", attemptIntervalSeconds: "attempt_interval_seconds" },
+  weeklyRewards: {
+    maxConcurrent: "max_concurrent",
+    maxClipWatchSeconds: "max_clip_watch_seconds",
+    maxVodWatchSeconds: "max_vod_watch_seconds",
+    intervalSeconds: "interval_seconds",
+    maxFailuresPerStreamer: "max_failures_per_streamer",
+    failureCooldownSeconds: "failure_cooldown_seconds",
+  },
+};
+
+export function minerToPython(miner: Record<string, unknown>) {
+  return renameKeys(miner, MINER_TO_PYTHON, MINER_NESTED_TO_PYTHON, (k) => k);
+}
+
+export function minerFromPython(raw: Record<string, unknown>) {
+  const back = invert(MINER_TO_PYTHON);
+  const nestedBack = Object.fromEntries(
+    Object.entries(MINER_NESTED_TO_PYTHON).map(([k, v]) => [k, invert(v)]),
+  );
+  return renameKeys(raw, back, nestedBack, (k) => back[k] ?? k);
+}
+
 export const configSchema = z
   .object({
     version: z.literal(1),
+    miner: minerSchema,
     username: accountUsernameSchema,
     followers: z.boolean(),
     followersOrder: z.enum(["ASC", "DESC"]),

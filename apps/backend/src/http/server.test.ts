@@ -22,7 +22,8 @@ const PUBLIC_ROOT = join(
 );
 const validConfig = {
   version: 1, username: "alex", followers: true, followersOrder: "ASC",
-  defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+  defaults: {}, miner: {},
+  streamers: [{ username: "alpha", enabled: true, settings: {} }],
 };
 
 let ctx: Awaited<ReturnType<typeof make>>;
@@ -855,7 +856,8 @@ test("GET /api/events returns recent events newest first", async () => {
 function seedCookie(username = "alex"): string {
   saveConfig(ctx.configPath, {
     version: 1, username, followers: true, followersOrder: "ASC",
-    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+    defaults: {}, miner: {},
+    streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   const file = join(ctx.cookiesDir, `${username}.pkl`);
   writeFileSync(file, "pickled-session");
@@ -930,7 +932,8 @@ test("a successful login clears a stale error from the signed-out session", asyn
   );
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+    defaults: {}, miner: {},
+    streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   await ctx.state.refresh();
   expect(ctx.state.snapshot().error).not.toBeNull();
@@ -954,7 +957,8 @@ test("a successful login starts the miner", async () => {
   // logout/login round trip left it stopped with no hint why.
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+    defaults: {}, miner: {},
+    streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
 
   ctx.loginRunner.emit("progress", { stage: "ok", username: "alex" });
