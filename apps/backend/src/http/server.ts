@@ -5,6 +5,7 @@ import fastifyStatic from "@fastify/static";
 import type { ZodError } from "zod";
 import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
+import { resolveVersion } from "../config/version.js";
 import type { History } from "../db/history.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
 import type { LoginStatus } from "../helpers/loginStatus.js";
@@ -14,6 +15,12 @@ import type { Supervisor } from "../miner/supervisor.js";
 import type { StateService } from "../state/service.js";
 import { registerAuth } from "./auth.js";
 import { SseHub } from "./sse.js";
+
+/**
+ * Resolved once at module load rather than per request: it cannot change
+ * while the process runs, and the manifest fallback touches the disk.
+ */
+const APP_VERSION = resolveVersion(process.env.APP_VERSION);
 
 /**
  * Shape of a doorbell event name. `python/helpers/doorbell.py` posts
@@ -304,6 +311,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         stale: snapshot.stale,
         error: snapshot.error,
         pendingChanges: staged !== null,
+        version: APP_VERSION,
       };
     });
 

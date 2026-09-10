@@ -78,7 +78,15 @@ COPY --from=web /build/apps/frontend/dist public
 # PYTHONPATH at a directory this image never populated, and the miner
 # would fail to import only once someone pressed Start. Naming the path
 # the COPY above actually wrote keeps the two independent.
-ENV DATA_DIR=/data \
+# The version the running app reports. The root package.json is the source
+# of truth, but it is never copied into this image -- only the backend's
+# dist/node_modules and the frontend build are -- so the value has to come
+# in as a build arg. The release workflow reads it out of the manifest and
+# passes it here; a plain `docker build` gets the "dev" default.
+ARG APP_VERSION=dev
+
+ENV APP_VERSION=${APP_VERSION} \
+    DATA_DIR=/data \
     PYTHON_DIR=/app/python \
     PYTHON_BIN=/app/.venv/bin/python \
     MINER_DIR=/app/vendor/miner \

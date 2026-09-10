@@ -1,4 +1,4 @@
-import { Badge, Box, Divider, Group, Stack, Text } from "@mantine/core";
+import { Anchor, Badge, Box, Divider, Group, Stack, Text } from "@mantine/core";
 import {
   IconChartBar, IconDeviceTv, IconSettings, IconTerminal2, IconUserCircle,
 } from "@tabler/icons-react";
@@ -20,8 +20,11 @@ const ITEMS: Array<{ key: ScreenKey; label: string; icon: ReactNode }> = [
   { key: "account", label: "Twitch account", icon: <IconUserCircle {...ICON} /> },
 ];
 
+/** Where the version readout links. No manifest field carries this. */
+const REPO_URL = "https://github.com/vos/twitch-miner-control";
+
 export function Sidebar({
-  screen, onNavigate, liveCount, loginRequired, miner, onMinerChange,
+  screen, onNavigate, liveCount, loginRequired, miner, onMinerChange, version,
 }: {
   screen: ScreenKey;
   onNavigate: (key: ScreenKey) => void;
@@ -29,15 +32,37 @@ export function Sidebar({
   loginRequired: boolean;
   miner: MinerStatus;
   onMinerChange: (status: MinerStatus) => void;
+  /**
+   * Reported by the backend, so it names what is actually running rather
+   * than what this bundle was built from. Null until the first status
+   * poll answers, and from a backend that predates the field -- either
+   * way the readout is simply absent rather than showing a placeholder.
+   */
+  version: string | null;
 }) {
   return (
     <Stack h="100%" gap={0} justify="space-between">
       <Box>
-        <Group gap="sm" px="md" py="lg" wrap="nowrap">
-          <BrandMark size={40} />
-          <Text fw={700} size="sm" style={{ letterSpacing: "0.08em" }}>
-            MINER CONTROL
-          </Text>
+        <Group gap="sm" px="md" py="lg" wrap="nowrap" align="center">
+          <BrandMark size={48} />
+          {/* Sized to its text, so the pair centres against the logo. */}
+          <Stack gap={0}>
+            <Text fw={700} size="sm" style={{ letterSpacing: "0.08em" }}>
+              MINER CONTROL
+            </Text>
+            {version && (
+              <Anchor
+                href={REPO_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                size="xs"
+                c="dimmed"
+                data-testid="app-version"
+              >
+                {version === "dev" ? "dev build" : `v${version}`}
+              </Anchor>
+            )}
+          </Stack>
         </Group>
         <Stack gap={2} pr="xs">
           {ITEMS.map((item) => (

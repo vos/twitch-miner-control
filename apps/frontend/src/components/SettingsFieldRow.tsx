@@ -63,8 +63,7 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
             disabled={disabled}
             allowDeselect={false}
             onChange={(v) => v !== null && onChange(v)}
-            // Wide enough for the longest option label ("Number of
-            // predictors", "Implied probability (%)"), which clipped at 180.
+            // Fits the longest option label ("Implied probability (%)").
             w={230}
           />
         );

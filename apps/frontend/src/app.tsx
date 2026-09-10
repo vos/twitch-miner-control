@@ -58,6 +58,11 @@ export function App() {
   // The newest process-stats reading. The rolling window it feeds lives
   // in a ref (see useRollingHistory), so only this one value is state.
   const [stats, setStats] = useState<ProcSample | null>(null);
+  // Fixed for the life of the server process, but it arrives with the
+  // status poll rather than from a build-time constant: the frontend is
+  // served by that same backend, so this reports what is actually
+  // running rather than what the bundle was built from.
+  const [version, setVersion] = useState<string | null>(null);
   const [opened, { toggle, close }] = useDisclosure(false);
   // Drives the live-count badge in the nav and the header's connection
   // dot. `connected` is computed by the hook from EventSource's own
@@ -72,11 +77,15 @@ export function App() {
         loginRequired: boolean;
         startedAt: number | null;
         stats: { cpu: number | null; rssBytes: number } | null;
+        version?: string;
       }>("/api/status")
         .then((s) => {
           setMiner({ state: s.miner, startedAt: s.startedAt });
           setLoginRequired(s.loginRequired);
           setLoginKnown(true);
+          // Optional, so a backend that predates the field renders no
+          // readout rather than the string "undefined".
+          setVersion(s.version ?? null);
           // Stamped on arrival: the history uses this to tell a fresh
           // reading from a re-render carrying the same one.
           setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
@@ -138,6 +147,7 @@ export function App() {
             loginRequired={loginRequired}
             miner={miner}
             onMinerChange={setMiner}
+            version={version}
           />
         </AppShell.Navbar>
         <AppShell.Main>

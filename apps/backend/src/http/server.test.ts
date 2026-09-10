@@ -207,6 +207,15 @@ test("GET /api/status carries process stats for the live miner", async () => {
   expect(res.json().stats.rssBytes).toBeGreaterThan(0);
 });
 
+test("GET /api/status reports the app version for the sidebar readout", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  // Resolved from APP_VERSION or the workspace manifest; either way it is
+  // a non-empty string, never undefined -- the sidebar hides the readout
+  // on a missing value, so an absent field would fail silently.
+  expect(typeof res.json().version).toBe("string");
+  expect(res.json().version).not.toBe("");
+});
+
 test("GET /api/status reports no stats when no miner is running", async () => {
   ctx.supervisor.livePids = () => [];
   const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });

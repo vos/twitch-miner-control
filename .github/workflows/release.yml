@@ -67,6 +67,26 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ghcr.io wants a lowercase name; github.repository preserves the
+      # package.json is the version's source of truth, but the git tag is
+      # what triggers this workflow and what metadata-action derives every
+      # published image tag from. Nothing enforces that the two agree, and
+      # a mismatch would publish :1.2.0 from an app reporting 1.1.0 --
+      # silent, and baked into an image that is far harder to take back
+      # than a tag. Fail the release before anything is pushed instead.
+      - name: Version matches the tag
+        id: version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          manifest=$(jq -r .version package.json)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$manifest" != "$tag" ]; then
+            echo "package.json says $manifest but the tag is $tag." >&2
+            echo "Bump the manifest to match, or retag." >&2
+            exit 1
+          fi
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+
+      # ghcr.io wants a lowercase name; github.repository preserves the
       # case of the owner and repo as they were typed. `vos` is already
       # lowercase today, but a rename or a fork under a capitalised
       # account would push to a path the registry rejects.
@@ -110,6 +130,14 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Read out of package.json by the guard above, not off the ref:
+          # the manifest is the source of truth, and on a tagged build the
+          # guard has already proved the two agree. The guard does not run
+          # on main, so an untagged build passes an empty value here and
+          # the app reports "dev" -- correct, since an unreleased image
+          # should not claim a release number.
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
           # better-sqlite3 compiles a native addon and the frontend build
           # is a full Vite run, both of which are wasted work when the
           # layer inputs have not changed. GitHub's cache is scoped per
