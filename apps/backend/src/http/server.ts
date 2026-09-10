@@ -1,3 +1,5 @@
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { ZodError } from "zod";
@@ -122,6 +124,13 @@ export interface ServerDeps {
    * requests (a helper reporting AUTH, a login completing).
    */
   loginStatus: LoginStatus;
+  /**
+   * Directory holding the Twitch cookie pickles, one per account
+   * (`{username}.pkl` -- see python/helpers/_session.py). Needed so a
+   * logout can delete the stored session; the login path never touches it
+   * from here, the Python helper writes it directly.
+   */
+  cookiesDir: string;
   /**
    * Absolute path to the built frontend (`apps/frontend/dist`). When set,
    * the static build is mounted at `/*` and unmatched non-API paths fall
@@ -354,6 +363,46 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       deps.loginRunner.start();
       return { started: true };
     });
+
+    /**
+     * Drops the stored Twitch session.
+     *
+     * The counterpart to the login route above, which until now had none:
+     * the only way to end a session was to delete the pickle on the host by
+     * hand, so an operator who signed in as the wrong account -- or who
+     * wants to see the first-run state again -- was stuck.
+     *
+     * Order matters. The miner is stopped first because it holds the
+     * session in memory and rewrites the pickle whenever it refreshes the
+     * token: deleting the file under a live miner either sees it written
+     * straight back, or leaves the miner mining as the account the user
+     * just signed out of.
+     *
+     * `username` is deliberately left in the config. It is not a
+     * credential, and keeping it means signing back in does not start with
+     * retyping it -- `/api/status` already reports `loginRequired` from
+     * LoginStatus, so the notice appears either way.
+     */
+    instance.post("/api/twitch/logout", async () => {
+      await deps.supervisor.stop();
+      // A login attempt still waiting on a device code would write a fresh
+      // pickle moments after this one is deleted.
+      deps.loginRunner.cancel();
+
+      const { username } = loadConfig(deps.configPath);
+      // `force` makes a missing file a no-op: logging out twice, or before
+      // ever logging in, is the state the caller asked for, not an error.
+      if (username !== "") {
+        await rm(join(deps.cookiesDir, `${username}.pkl`), { force: true });
+      }
+
+      deps.loginStatus.markLoggedOut();
+      // The running helper froze the pickle's path at spawn and would keep
+      // answering from the session it has already loaded, so the dashboard
+      // would go on looking signed in against a cookie that is gone.
+      await recycleHelper();
+      return { loggedOut: true };
+    });
   });
 
   if (deps.staticRoot) {
@@ -425,11 +474,32 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     // out of config.json at spawn time, so a helper started first would
     // keep resolving the old (or empty) cookie pickle path.
     persistUsername(p.username);
+    // A refresh already in flight when the login completed was answered by
+    // the old, signed-out helper. Its 401 arrives after this point and
+    // state.py cannot classify it as AUTH -- the new pickle is on disk by
+    // then, so the session re-reads as healthy -- leaving a raw GQL
+    // traceback on the dashboard of a user who has just successfully
+    // signed in. Any error from before this moment is stale by definition.
+    deps.stateService.clearError();
     // A completed login writes the cookie pickle the state helper reads,
     // under whatever username the config names now -- neither of which the
     // running helper can see. Fire-and-forget: the SSE frame above must not
     // wait on a process restart.
     void recycleHelper();
+    // Start mining now that there is a session to mine with. The config
+    // apply path has always assumed this happens ("the miner is started by
+    // the login flow once a session exists") but nothing here did it, which
+    // went unnoticed while every first login was followed by an apply.
+    // Logging out of Twitch stops the miner, so without this a
+    // logout/login round trip leaves it stopped with nothing saying why.
+    // Same guard the apply path uses: a miner started without an account
+    // to mine as exits immediately and parks in CRASHED.
+    if (loadConfig(deps.configPath).username !== "") {
+      void deps.supervisor.restart().catch(() => {
+        // The dashboard reports miner state on its own and offers a Start
+        // button; a failure here must not take the login flow down with it.
+      });
+    }
   });
 
   // A helper response carrying code "AUTH" means state.py reloaded the

@@ -180,7 +180,7 @@ const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 
 const app = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
-  helper, loginRunner, loginStatus, staticRoot, secureCookie, trustProxy,
+  helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
 });
 
 const loggedIn = await helper

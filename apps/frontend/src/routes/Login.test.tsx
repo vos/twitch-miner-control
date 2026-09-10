@@ -167,3 +167,96 @@ test("says so plainly once the code has expired", async () => {
   view();
   expect(await screen.findByTestId("code-countdown")).toHaveTextContent(/expired/i);
 });
+
+// -- logging out of Twitch --------------------------------------------------
+// The page could start a session but never end one, so an operator signed in
+// as the wrong account had to delete the cookie pickle on the host by hand.
+
+/**
+ * Keyed on `loginRequired`, not on `login`: the latter is the progress of a
+ * login attempt *this backend process* made, so it is null after every
+ * restart even when the stored session is perfectly good -- the button would
+ * vanish for exactly the long-lived sessions most likely to need dropping.
+ */
+function stubSignedIn(loginRequired = false) {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { method?: string }) => {
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/status") {
+      return { ok: true, status: 200,
+        json: async () => ({ login: null, miner: "RUNNING", loginRequired }) };
+    }
+    if (url === "/api/config") {
+      return { ok: true, status: 200,
+        json: async () => ({ version: 1, username: "alex", followers: true,
+          followersOrder: "ASC", defaults: {}, streamers: [] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ loggedOut: true }) };
+  }));
+  vi.stubGlobal("EventSource", class {
+    addEventListener() {}
+    close() {}
+  });
+  return calls;
+}
+
+test("offers to log out of Twitch when a session is stored", async () => {
+  stubSignedIn();
+  view();
+  expect(await screen.findByRole("button", { name: /log out of twitch/i }))
+    .toBeInTheDocument();
+});
+
+test("does not offer to log out when there is no Twitch session", async () => {
+  stubSignedIn(true);
+  view();
+  await screen.findByRole("button", { name: /sign in to twitch/i });
+  expect(screen.queryByRole("button", { name: /log out of twitch/i }))
+    .not.toBeInTheDocument();
+});
+
+test("asks for confirmation before dropping the Twitch session", async () => {
+  // One stray click stops the miner and deletes the credentials, so the
+  // first click only arms the action.
+  const calls = stubSignedIn();
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /log out of twitch/i }));
+  expect(calls.filter((c) => c.includes("/api/twitch/logout"))).toHaveLength(0);
+  expect(await screen.findByRole("button", { name: /confirm/i })).toBeInTheDocument();
+});
+
+test("logs out of Twitch once the action is confirmed", async () => {
+  const calls = stubSignedIn();
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /log out of twitch/i }));
+  await userEvent.click(await screen.findByRole("button", { name: /confirm/i }));
+  expect(calls).toContain("POST /api/twitch/logout");
+});
+
+test("says the miner stops, so the consequence is not a surprise", async () => {
+  stubSignedIn();
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /log out of twitch/i }));
+  expect(await screen.findByTestId("logout-warning")).toHaveTextContent(/miner/i);
+});
+
+test("does not offer to sign in while a Twitch session is already stored", async () => {
+  // `idle` is true whenever no login attempt is in flight, which includes a
+  // signed-in user after a backend restart -- so the sign-in form used to
+  // sit directly under the log-out card, inviting a user who is already
+  // signed in to sign in again.
+  stubSignedIn();
+  view();
+  await screen.findByRole("button", { name: /log out of twitch/i });
+  expect(screen.queryByRole("button", { name: /^sign in to twitch$/i }))
+    .not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Twitch username")).not.toBeInTheDocument();
+});
+
+test("names the signed-in Twitch account", async () => {
+  // Otherwise the page says a session exists but not whose -- and knowing
+  // which account is stored is the usual reason to be on this page at all.
+  stubSignedIn();
+  view();
+  expect(await screen.findByTestId("signed-in-as")).toHaveTextContent("alex");
+});

@@ -1,5 +1,5 @@
 import { EventEmitter, once } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,10 @@ let ctx: Awaited<ReturnType<typeof make>>;
 async function make() {
   const dir = mkdtempSync(join(tmpdir(), "srv-"));
   const configPath = join(dir, "config.json");
+  // Real directory on disk: the logout route deletes a file from it, and a
+  // stub would not prove the pickle actually goes.
+  const cookiesDir = join(dir, "cookies");
+  mkdirSync(cookiesDir, { recursive: true });
   const history = new History(openDb(":memory:"));
   const supervisor = {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
@@ -50,7 +54,12 @@ async function make() {
   const state = new StateService({
     client: client as never, history, getStreamers: () => ["alpha"],
   });
-  const loginRunner = { current: null, start: vi.fn(), on: vi.fn(), cancel: vi.fn() };
+  // A real emitter, not a stub with `on: vi.fn()`: the server subscribes to
+  // "progress" and a test needs to drive that path (a successful login
+  // clears a stale error and recycles the helper).
+  const loginRunner = Object.assign(new EventEmitter(), {
+    current: null, start: vi.fn(), cancel: vi.fn(),
+  });
   const loginStatus = new LoginStatus();
   const app = buildServer({
     configPath,
@@ -62,6 +71,7 @@ async function make() {
     helper: client as never,
     loginRunner: loginRunner as never,
     loginStatus,
+    cookiesDir,
     staticRoot: PUBLIC_ROOT,
   });
   await app.ready();
@@ -70,6 +80,7 @@ async function make() {
   });
   return {
     app, supervisor, client, history, state, loginRunner, loginStatus, configPath,
+    cookiesDir,
     cookie: login.cookies[0].value,
   };
 }
@@ -635,6 +646,7 @@ async function makeLive() {
     configPath, password: PASSWORD, doorbellToken: "doorbell-token",
     supervisor: supervisor as never, stateService: state, history,
     helper, loginRunner: loginRunner as never, loginStatus: new LoginStatus(),
+    cookiesDir: join(dir, "cookies"),
   });
   await app.ready();
   const login = await app.inject({
@@ -832,4 +844,126 @@ test("GET /api/events returns recent events newest first", async () => {
     { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
     { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming" },
   ]);
+});
+
+// -- POST /api/twitch/logout ------------------------------------------------
+// Until this existed there was no way to drop a Twitch session short of
+// deleting the pickle by hand on the host: the UI could start a login but
+// never end one, so a wrong account or a session under test was stuck.
+
+/** Writes the pickle the logout route is expected to delete. */
+function seedCookie(username = "alex"): string {
+  saveConfig(ctx.configPath, {
+    version: 1, username, followers: true, followersOrder: "ASC",
+    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+  });
+  const file = join(ctx.cookiesDir, `${username}.pkl`);
+  writeFileSync(file, "pickled-session");
+  return file;
+}
+
+test("logging out of Twitch deletes the stored cookie pickle", async () => {
+  const file = seedCookie();
+  const response = await ctx.app.inject({
+    method: "POST", url: "/api/twitch/logout", cookies: auth(),
+  });
+  expect(response.statusCode).toBe(200);
+  expect(existsSync(file)).toBe(false);
+});
+
+test("logging out reports the Twitch session as needing sign-in again", async () => {
+  seedCookie();
+  ctx.loginStatus.markLoggedIn();
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  expect(ctx.loginStatus.required).toBe(true);
+});
+
+test("logging out stops the miner first", async () => {
+  // The miner holds the session in memory and rewrites the pickle when it
+  // refreshes the token, so deleting the file under a live miner either
+  // resurrects it or leaves the miner mining as the account just dropped.
+  seedCookie();
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  expect(ctx.supervisor.stop).toHaveBeenCalled();
+});
+
+test("logging out recycles the state helper", async () => {
+  // helpers/_session.py freezes the pickle path at spawn and reload_cookies()
+  // re-reads that same frozen path, so a helper left running keeps answering
+  // from the session it already loaded -- the dashboard would go on looking
+  // signed in against a cookie that no longer exists.
+  seedCookie();
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  expect(ctx.client.restart).toHaveBeenCalled();
+});
+
+test("logging out twice is not an error", async () => {
+  // The pickle is already gone the second time. Reporting that as a failure
+  // would leave the UI showing an error for the state the user asked for.
+  seedCookie();
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  const second = await ctx.app.inject({
+    method: "POST", url: "/api/twitch/logout", cookies: auth(),
+  });
+  expect(second.statusCode).toBe(200);
+});
+
+test("logging out keeps the username, so signing back in needs no retyping", async () => {
+  seedCookie();
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  expect(loadConfig(ctx.configPath).username).toBe("alex");
+});
+
+test("logging out of Twitch requires a session", async () => {
+  seedCookie();
+  const response = await ctx.app.inject({ method: "POST", url: "/api/twitch/logout" });
+  expect(response.statusCode).toBe(401);
+});
+
+test("a successful login clears a stale error from the signed-out session", async () => {
+  // A refresh already in flight when the user signs in is answered by the
+  // old, signed-out helper, so its 401 lands after the login succeeded and
+  // arrives classified GQL rather than AUTH -- the raw traceback then sat
+  // on the dashboard until an unrelated refresh happened to succeed.
+  ctx.client.request.mockRejectedValueOnce(
+    new NdjsonError("GQL Operation 'ChannelPointsContext' failed all 3 attempts", "GQL"),
+  );
+  saveConfig(ctx.configPath, {
+    version: 1, username: "alex", followers: true, followersOrder: "ASC",
+    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+  });
+  await ctx.state.refresh();
+  expect(ctx.state.snapshot().error).not.toBeNull();
+
+  // Every later refresh hangs, so the error can only be cleared by the
+  // login handler itself -- not by a recycle's refresh happening to
+  // succeed, which is the slow path that left the traceback on screen for
+  // seconds in the first place.
+  ctx.client.request.mockImplementation(() => new Promise(() => {}));
+
+  ctx.loginRunner.emit("progress", { stage: "ok", username: "alex" });
+
+  await vi.waitFor(() => expect(ctx.state.snapshot().error).toBeNull());
+});
+
+test("a successful login starts the miner", async () => {
+  // The apply path's comment has always said the miner "is started by the
+  // login flow once a session exists", but nothing there ever started it.
+  // Harmless while a first login was always followed by an apply -- and
+  // then logging out of Twitch was added, which stops the miner, so a
+  // logout/login round trip left it stopped with no hint why.
+  saveConfig(ctx.configPath, {
+    version: 1, username: "alex", followers: true, followersOrder: "ASC",
+    defaults: {}, streamers: [{ username: "alpha", enabled: true, settings: {} }],
+  });
+
+  ctx.loginRunner.emit("progress", { stage: "ok", username: "alex" });
+
+  await vi.waitFor(() => expect(ctx.supervisor.restart).toHaveBeenCalled());
+});
+
+test("a failed login leaves the miner alone", async () => {
+  ctx.loginRunner.emit("progress", { stage: "error", error: "token rejected" });
+  await Promise.resolve();
+  expect(ctx.supervisor.restart).not.toHaveBeenCalled();
 });

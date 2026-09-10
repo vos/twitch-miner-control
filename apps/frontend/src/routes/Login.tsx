@@ -25,14 +25,28 @@ const USERNAME_RE = /^[a-zA-Z0-9_]{4,25}$/;
 export function TwitchLogin() {
   const [progress, setProgress] = useState<Progress>(null);
   const [loaded, setLoaded] = useState(false);
+  /**
+   * Whether a usable Twitch session is stored, straight from the server.
+   *
+   * Kept apart from `progress`, which is the state of a login attempt made
+   * by the running backend process: that is null after every restart, so a
+   * page keyed on it alone cannot tell "never signed in" from "signed in
+   * months ago and still fine".
+   */
+  const [signedIn, setSignedIn] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [username, setUsername] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.get<{ login: Progress }>("/api/status")
-      .then((s) => setProgress(s.login))
+    api.get<{ login: Progress; loginRequired: boolean }>("/api/status")
+      // Defaults to "not signed in" when the field is absent: the page
+      // hides the sign-in form when signedIn is true, and a missing field
+      // must never be the reason a user cannot log in.
+      .then((s) => { setProgress(s.login); setSignedIn(s.loginRequired === false); })
       .finally(() => setLoaded(true));
     api.get<Config>("/api/config")
       .then((c) => { setConfig(c); setUsername(c.username); })
@@ -79,9 +93,40 @@ export function TwitchLogin() {
     }
   };
 
+  /**
+   * Drops the stored Twitch session.
+   *
+   * Two clicks rather than one: this stops the miner and deletes the
+   * credentials, and it sits directly below the sign-in controls where a
+   * misclick is easy. A modal would be the usual answer, but Mantine's
+   * overlay components stall the test runner in this project, and an
+   * in-place confirm costs nothing and stays keyboard-reachable.
+   */
+  const logOut = async () => {
+    setError(null);
+    setLoggingOut(true);
+    try {
+      await api.post("/api/twitch/logout");
+      // The server has dropped the session; reflect it without waiting for
+      // a poll, and clear any stale progress card from an earlier attempt.
+      setSignedIn(false);
+      setProgress(null);
+      setConfirmLogout(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
   if (!loaded) return null;
 
-  const idle = progress === null || progress.stage === "error" || progress.stage === "ok";
+  // `signedIn` excluded: idle only means no attempt is in flight, which is
+  // also true of a user signed in since before the last backend restart.
+  // Without it the sign-in form renders directly beneath the log-out card,
+  // inviting someone already signed in to sign in again.
+  const idle = !signedIn
+    && (progress === null || progress.stage === "error" || progress.stage === "ok");
 
   return (
     <Stack>
@@ -130,6 +175,50 @@ export function TwitchLogin() {
               Copy code
             </Button>
             {progress.expiresAt !== undefined && <Countdown expiresAt={progress.expiresAt} />}
+          </Stack>
+        </Card>
+      )}
+      {signedIn && (
+        <Card withBorder padding="md" mt="md">
+          <Stack gap="xs" align="flex-start">
+            <Text size="sm" fw={600}>Twitch session</Text>
+            {/* Which account is stored is the usual reason to open this
+                page; `progress` only names it right after a login, so the
+                config is the durable source. */}
+            {config?.username && (
+              <Text size="sm" c="dimmed" data-testid="signed-in-as">
+                Signed in as {config.username}
+              </Text>
+            )}
+            {confirmLogout ? (
+              <>
+                <Text size="sm" c="dimmed" data-testid="logout-warning">
+                  This stops the miner and deletes the stored Twitch session.
+                  You will have to sign in again to resume mining.
+                </Text>
+                <Group gap="xs">
+                  <Button
+                    size="xs" color="red" loading={loggingOut}
+                    onClick={() => void logOut()}
+                  >
+                    Confirm log out
+                  </Button>
+                  <Button
+                    size="xs" variant="default"
+                    onClick={() => setConfirmLogout(false)}
+                  >
+                    Cancel
+                  </Button>
+                </Group>
+              </>
+            ) : (
+              <Button
+                size="xs" variant="light" color="red"
+                onClick={() => setConfirmLogout(true)}
+              >
+                Log out of Twitch
+              </Button>
+            )}
           </Stack>
         </Card>
       )}
