@@ -124,6 +124,55 @@ test("a refresh failure carrying code AUTH emits auth-error", async () => {
   expect(seen).toEqual([authError]);
 });
 
+// A dead session is not a failed request: the dashboard has a purpose-built
+// "Twitch sign-in needed" notice for it, so repeating the helper's raw GQL
+// traceback in the error alert is both unreadable and redundant. Reported by
+// the user after logging out of Twitch, which is exactly this state on
+// demand.
+test("a dead session reports no error text, because the sign-in notice covers it", async () => {
+  const authError = Object.assign(
+    new Error("GQL Operation 'ChannelPointsContext' failed all 3 attempts, errors: [Traceback..."),
+    { code: "AUTH" },
+  );
+  const { service } = make([authError]);
+  await service.refresh();
+  expect(service.snapshot().error).toBe(null);
+});
+
+test("a dead session clears the roster instead of leaving stale cards", async () => {
+  // Points read against a session that no longer exists are unverifiable,
+  // and a refresh cannot correct them -- so leaving the cards up shows
+  // numbers nothing will ever update, beside a notice saying we are signed
+  // out. The user saw exactly this: cards that survived a page reload.
+  const { service } = make([
+    alpha(100),
+    Object.assign(new Error("401 Client Error: Unauthorized"), { code: "AUTH" }),
+  ]);
+  await service.refresh();
+  expect(service.snapshot().streamers).toHaveLength(1);
+  await service.refresh();
+  expect(service.snapshot().streamers).toEqual([]);
+});
+
+test("a dead session still marks the snapshot stale", async () => {
+  // Clearing the error must not make a signed-out dashboard look healthy.
+  const authError = Object.assign(new Error("401"), { code: "AUTH" });
+  const { service } = make([authError]);
+  await service.refresh();
+  expect(service.snapshot().stale).toBe(true);
+});
+
+test("an ordinary refresh failure keeps its error text and the last numbers", async () => {
+  // The contrast case: a GQL hiccup is transient, the next refresh may well
+  // succeed, and the numbers on screen are still the best known -- so this
+  // path must keep reporting both.
+  const { service } = make([alpha(100), new Error("gql exploded")]);
+  await service.refresh();
+  await service.refresh();
+  expect(service.snapshot().error).toBe("gql exploded");
+  expect(service.snapshot().streamers).toHaveLength(1);
+});
+
 test("an ordinary refresh failure does not emit auth-error", async () => {
   const { service } = make([new Error("gql exploded")]);
   const seen: unknown[] = [];
@@ -668,4 +717,96 @@ test("emits an event per ring, even while the refresh debounce coalesces", async
   service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
   service.ring("GAIN_FOR_CLAIM", "+60 -> alpha");
   expect(events).toHaveBeenCalledTimes(2);
+});
+
+test("a dead session is stale even right after a successful refresh", async () => {
+  // Guards the interaction between the two: clearing lastError removes one
+  // of the two things snapshot() derives staleness from, so a session that
+  // dies seconds after a good refresh must not read as fresh on the age
+  // check alone.
+  const { service } = make([
+    alpha(100),
+    Object.assign(new Error("401"), { code: "AUTH" }),
+  ]);
+  await service.refresh();
+  expect(service.snapshot().stale).toBe(false);
+  await service.refresh();
+  expect(service.snapshot().stale).toBe(true);
+});
+
+test("signing back in clears the dead-session state", async () => {
+  // The recovery path: without this the dashboard would stay stale forever
+  // after a successful re-login, since nothing else resets the flag.
+  const { service } = make([
+    Object.assign(new Error("401"), { code: "AUTH" }),
+    alpha(100),
+  ]);
+  await service.refresh();
+  expect(service.snapshot().stale).toBe(true);
+  await service.refresh();
+  expect(service.snapshot().stale).toBe(false);
+  expect(service.snapshot().streamers).toHaveLength(1);
+});
+
+test("a fresh login drops an error left over from the signed-out session", async () => {
+  // The race the user hit: a refresh was already in flight against the old
+  // session when the login completed, so its 401 landed *after*
+  // markLoggedIn(). state.py classifies that one as GQL rather than AUTH --
+  // by the time it re-checks, the new pickle is on disk and the session
+  // reads as healthy -- so the AUTH suppression does not apply and the raw
+  // traceback reached the dashboard, clearing only when the next refresh
+  // happened to succeed seconds later.
+  const { service } = make([new Error("GQL Operation 'ChannelPointsContext' failed...")]);
+  await service.refresh();
+  expect(service.snapshot().error).not.toBeNull();
+
+  service.clearError();
+
+  expect(service.snapshot().error).toBeNull();
+});
+
+test("clearing the error announces the change to connected clients", async () => {
+  // The dashboard renders from pushed snapshots; without a frame the stale
+  // traceback would sit on screen until some unrelated refresh redrew it.
+  const { service } = make([new Error("boom")]);
+  await service.refresh();
+  const seen: unknown[] = [];
+  service.on("change", (s) => seen.push(s));
+  service.clearError();
+  expect(seen).toHaveLength(1);
+});
+
+test("clearing the error on a healthy service changes nothing", async () => {
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  const seen: unknown[] = [];
+  service.on("change", (s) => seen.push(s));
+  service.clearError();
+  expect(seen).toEqual([]);
+  expect(service.snapshot().streamers).toHaveLength(1);
+});
+
+test("a 401 answered by the old helper cannot re-post itself after a login", async () => {
+  // The remaining half of the race: clearError() runs at login, but the
+  // in-flight request it was meant to discard may not have rejected yet.
+  // When it does, doRefresh's catch must not write the traceback back.
+  let rejectInFlight!: (e: Error) => void;
+  const request = vi.fn(() => new Promise((_, reject) => { rejectInFlight = reject; }));
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    now: () => clock,
+  });
+
+  const inFlight = service.refresh();
+  await Promise.resolve();
+  // The login lands while that request is still open.
+  service.clearError();
+  // Only now does the old helper's 401 come back.
+  rejectInFlight(new Error("401 Client Error: Unauthorized for url: https://gql.twitch.tv/gql"));
+  await inFlight;
+
+  expect(service.snapshot().error).toBeNull();
 });

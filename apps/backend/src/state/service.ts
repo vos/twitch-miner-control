@@ -137,6 +137,23 @@ export class StateService extends EventEmitter {
   private streamers: StreamerState[] = [];
   private lastUpdated: number | null = null;
   private lastError: string | null = null;
+  /**
+   * Whether the last refresh failed because the Twitch session is dead.
+   *
+   * Tracked separately from `lastError` because an AUTH failure
+   * deliberately reports no error text -- the dashboard's sign-in notice
+   * says it better -- and staleness must not be inferred from the absence
+   * of that text, or a session that dies moments after a good refresh
+   * reads as freshly updated.
+   */
+  private sessionDead = false;
+  /**
+   * Counts calls to clearError(). doRefresh() samples it before its round
+   * trip and compares afterwards: a request that was already in flight when
+   * a login cleared the error belongs to the previous, signed-out session,
+   * so its failure must not be written back over the clean state.
+   */
+  private errorEpoch = 0;
   private debounceTimer: NodeJS.Timeout | null = null;
   private ticker: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
@@ -166,9 +183,34 @@ export class StateService extends EventEmitter {
     return {
       streamers: this.streamers,
       lastUpdated: this.lastUpdated,
-      stale: this.lastError !== null || age > staleAfter,
+      stale: this.lastError !== null || this.sessionDead || age > staleAfter,
       error: this.lastError,
     };
+  }
+
+  /**
+   * Drops a refresh error that a just-completed login has made obsolete.
+   *
+   * A refresh already in flight when the user signs in is answered by the
+   * *old*, signed-out helper, so its 401 lands after the login succeeded.
+   * state.py cannot classify that one as AUTH -- by the time it re-checks,
+   * the new cookie pickle is on disk and the session reads as healthy -- so
+   * it arrives as an ordinary GQL failure and its raw traceback is shown on
+   * the dashboard until some later refresh happens to succeed.
+   *
+   * Only the error text is cleared. `lastUpdated` and the roster are left
+   * alone: the numbers really are as old as the last good refresh, and the
+   * recycle that follows a login issues a fresh one anyway.
+   */
+  clearError(): void {
+    // Bumped even when there is nothing to clear: a request already in
+    // flight must still be disowned, or its failure lands on the fresh
+    // session moments later.
+    this.errorEpoch += 1;
+    if (this.lastError === null && !this.sessionDead) return;
+    this.lastError = null;
+    this.sessionDead = false;
+    this.emit("change", this.snapshot());
   }
 
   async refresh(): Promise<void> {
@@ -249,11 +291,13 @@ export class StateService extends EventEmitter {
       this.streamers = [];
       this.lastUpdated = this.now();
       this.lastError = null;
+      this.sessionDead = false;
       if (hadStreamers) {
         this.emit("change", this.snapshot());
       }
       return;
     }
+    const epoch = this.errorEpoch;
     try {
       const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
@@ -277,6 +321,7 @@ export class StateService extends EventEmitter {
       // one more thing to reconcile when the two disagree.
       this.deps.history.beatMinerSession(at);
       this.lastError = null;
+      this.sessionDead = false;
       const dayAgo = at - DAY_MS;
 
       this.streamers = data.streamers.map((s) => {
@@ -358,8 +403,11 @@ export class StateService extends EventEmitter {
         this.emit("change", this.snapshot());
       }
     } catch (cause) {
-      // Keep the last known numbers; snapshot() will report them as stale.
-      this.lastError = cause instanceof Error ? cause.message : String(cause);
+      // A login (or anything else calling clearError) happened while this
+      // request was open, so it was answered by the session that has since
+      // been replaced. Reporting its failure would put a stale traceback on
+      // a dashboard that has just been signed in.
+      if (epoch !== this.errorEpoch) return;
       // `code: "AUTH"` is state.py's verdict that it reloaded the cookie
       // pickle and still could not authenticate, i.e. the Twitch session is
       // dead rather than the request flaky. Re-emitted as its own event so
@@ -369,6 +417,23 @@ export class StateService extends EventEmitter {
       // helper transport.
       if ((cause as { code?: unknown } | null)?.code === "AUTH") {
         this.emit("auth-error", cause);
+        // A dead session is reported by the dashboard's own "Twitch
+        // sign-in needed" notice, so the helper's raw GQL traceback would
+        // only repeat it -- illegibly -- in the error alert beside it.
+        this.lastError = null;
+        this.sessionDead = true;
+        // The roster goes with it. These points were read against a
+        // session that no longer exists, no refresh can correct them, and
+        // leaving the cards up shows numbers nothing will ever update
+        // next to a notice saying we are signed out. lastUpdated is left
+        // alone, so snapshot() still reports the result as stale.
+        this.streamers = [];
+      } else {
+        // Anything else may well succeed on the next tick, so keep both
+        // the message and the last known numbers; snapshot() reports them
+        // as stale either way.
+        this.lastError = cause instanceof Error ? cause.message : String(cause);
+        this.sessionDead = false;
       }
       this.emit("change", this.snapshot());
     }
