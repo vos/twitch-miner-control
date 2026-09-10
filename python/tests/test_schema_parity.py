@@ -2,32 +2,58 @@
 import pathlib
 import re
 
-from miner_config import ALLOWED_SETTINGS
+from miner_config import ALLOWED_BET, ALLOWED_FILTER, ALLOWED_SETTINGS
+
+SOURCE = pathlib.Path("apps/backend/src/config/schema.ts")
+
+
+def _block(source: str, pattern: str) -> str:
+    match = re.search(pattern, source, re.S)
+    assert match, f"{pattern} not found in schema.ts"
+    return match.group(1)
+
+
+def _entries(block: str) -> list[tuple[str, str]]:
+    return re.findall(r'([a-zA-Z]+):\s*"([a-z_]+)"', block)
 
 
 def test_zod_schema_maps_exactly_our_allowed_settings():
-    source = pathlib.Path("apps/backend/src/config/schema.ts").read_text()
+    source = SOURCE.read_text()
 
-    bool_block = re.search(r"BOOL_SETTINGS = \[(.*?)\] as const", source, re.S)
-    assert bool_block, "BOOL_SETTINGS not found"
-    bool_settings = set(re.findall(r'"([a-zA-Z]+)"', bool_block.group(1)))
-    assert bool_settings, "BOOL_SETTINGS matched but no names captured"
+    bool_settings = set(re.findall(
+        r'"([a-zA-Z]+)"', _block(source, r"BOOL_SETTINGS = \[(.*?)\] as const")))
+    assert bool_settings
 
-    to_python_block = re.search(r"TO_PYTHON: Record<string, string> = \{(.*?)\}", source, re.S)
-    assert to_python_block, "TO_PYTHON map not found"
-    to_python_entries = re.findall(r'([a-zA-Z]+):\s*"([a-z_]+)"', to_python_block.group(1))
-    assert to_python_entries, "TO_PYTHON map matched but no entries captured"
+    entries = _entries(_block(source, r"TO_PYTHON: Record<string, string> = \{(.*?)\n\}"))
+    assert entries
+    keys = {k for k, _ in entries}
+    values = [v for _, v in entries]
 
-    to_python_keys = {k for k, _ in to_python_entries}
-    to_python_values = [v for _, v in to_python_entries]
-
-    # (a) TO_PYTHON's keys must be exactly BOOL_SETTINGS plus the two non-bool settings.
+    # (a) TO_PYTHON's keys are exactly BOOL_SETTINGS plus the non-bool settings.
     # This is the assertion that catches a renamed TS key drifting from BOOL_SETTINGS.
-    assert to_python_keys == bool_settings | {"pointsLimit", "chat"}
+    assert keys == bool_settings | {"pointsLimit", "chat", "bet", "simulateHlsPlayback"}
 
     # (b) No two TS keys may map to the same Python name. Comparing list length to set
     # length (rather than de-duplicating first) is what catches a colliding key.
-    assert len(to_python_values) == len(set(to_python_values))
+    assert len(values) == len(set(values))
 
     # (c) The Python-side value set must exactly match miner_config.ALLOWED_SETTINGS.
-    assert set(to_python_values) == set(ALLOWED_SETTINGS)
+    assert set(values) == set(ALLOWED_SETTINGS)
+
+
+def test_nested_maps_match_the_allowed_nested_keys():
+    """The nested maps are what keep a bet dict's inner keys renamed. A key
+    added to one side only would hand Python a dict StreamerSettings rejects,
+    which is a miner that dies at boot rather than a test that fails here."""
+    source = SOURCE.read_text()
+    nested = _block(
+        source, r"NESTED_TO_PYTHON: Record<string, Record<string, string>> = \{(.*?)\n\};")
+
+    bet = _entries(_block(nested, r"bet: \{(.*?)\},\n"))
+    assert {v for _, v in bet} == set(ALLOWED_BET)
+
+    filt = _entries(_block(nested, r"filterCondition: \{(.*?)\},"))
+    assert {v for _, v in filt} == set(ALLOWED_FILTER)
+
+    hls = _entries(_block(nested, r"simulateHlsPlayback: \{(.*?)\},"))
+    assert {v for _, v in hls} == {"refresh_before"}
