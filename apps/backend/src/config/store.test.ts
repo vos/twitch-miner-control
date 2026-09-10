@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
 import type { AppConfig } from "./schema.js";
-import { configSchema } from "./schema.js";
+import { configSchema, settingsFromPython, settingsToPython } from "./schema.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./store.js";
 
 let dir: string;
@@ -76,6 +76,35 @@ describe("schema", () => {
     expect(configSchema.safeParse(mk("NEVER")).success).toBe(true);
     expect(configSchema.safeParse(mk("SOMETIMES")).success).toBe(false);
   });
+
+  test("accepts a full bet block", () => {
+    const mk = (bet: unknown) => ({
+      ...valid,
+      streamers: [{ username: "alpha", enabled: true, settings: { bet } }],
+    });
+    expect(configSchema.safeParse(mk({
+      strategy: "SMART", percentage: 5, percentageGap: 20, maxPoints: 50000,
+      minimumPoints: 0, stealthMode: false, delay: 6, delayMode: "FROM_END",
+      filterCondition: { by: "total_users", where: "LTE", value: 800 },
+    })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ strategy: "NOPE" })).success).toBe(false);
+    expect(configSchema.safeParse(mk({ percentage: -1 })).success).toBe(false);
+    expect(configSchema.safeParse(mk({ evil: 1 })).success).toBe(false);
+    expect(configSchema.safeParse(mk({
+      filterCondition: { by: "decision_users", where: "LTE", value: 1 },
+    })).success).toBe(false);
+  });
+
+  test("accepts simulateHlsPlayback as false or a refresh window", () => {
+    const mk = (v: unknown) => ({
+      ...valid,
+      streamers: [{ username: "alpha", enabled: true, settings: { simulateHlsPlayback: v } }],
+    });
+    expect(configSchema.safeParse(mk(false)).success).toBe(true);
+    expect(configSchema.safeParse(mk({ refreshBefore: 120 })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ refreshBefore: 0 })).success).toBe(false);
+    expect(configSchema.safeParse(mk(true)).success).toBe(false);
+  });
 });
 
 describe("store", () => {
@@ -107,5 +136,41 @@ describe("store", () => {
   test("leaves no temp files behind after a save", () => {
     saveConfig(path, valid as AppConfig);
     expect(readdirSync(dir)).toEqual(["config.json"]);
+  });
+});
+
+describe("nested snake_case mapping", () => {
+  const camel = {
+    makePredictions: true,
+    simulateHlsPlayback: { refreshBefore: 120 },
+    bet: {
+      strategy: "SMART", percentageGap: 20, maxPoints: 50000,
+      minimumPoints: 0, stealthMode: false, delayMode: "FROM_END",
+      filterCondition: { by: "total_users", where: "LTE", value: 800 },
+    },
+  };
+  const snake = {
+    make_predictions: true,
+    simulate_hls_playback: { refresh_before: 120 },
+    bet: {
+      strategy: "SMART", percentage_gap: 20, max_points: 50000,
+      minimum_points: 0, stealth_mode: false, delay_mode: "FROM_END",
+      filter_condition: { by: "total_users", where: "LTE", value: 800 },
+    },
+  };
+
+  test("renames keys inside bet and filter_condition", () => {
+    expect(settingsToPython(camel)).toEqual(snake);
+  });
+
+  test("round-trips back to camelCase", () => {
+    expect(settingsFromPython(snake)).toEqual(camel);
+  });
+
+  test("leaves a false simulateHlsPlayback as a bare false", () => {
+    expect(settingsToPython({ simulateHlsPlayback: false }))
+      .toEqual({ simulate_hls_playback: false });
+    expect(settingsFromPython({ simulate_hls_playback: false }))
+      .toEqual({ simulateHlsPlayback: false });
   });
 });

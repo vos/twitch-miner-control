@@ -16,13 +16,79 @@ export const TO_PYTHON: Record<string, string> = {
   weeklyRewards: "weekly_rewards",
   pointsLimit: "points_limit",
   chat: "chat",
+  bet: "bet",
+  simulateHlsPlayback: "simulate_hls_playback",
 };
+
+/**
+ * Key renames *inside* the nested settings objects, keyed by the camelCase
+ * name of the object itself. A flat one-level rename would leave these
+ * untouched and hand Python a dict whose inner keys StreamerSettings
+ * rejects -- which is why the mappers below recurse.
+ */
+export const NESTED_TO_PYTHON: Record<string, Record<string, string>> = {
+  bet: {
+    strategy: "strategy",
+    percentage: "percentage",
+    percentageGap: "percentage_gap",
+    maxPoints: "max_points",
+    minimumPoints: "minimum_points",
+    stealthMode: "stealth_mode",
+    delay: "delay",
+    delayMode: "delay_mode",
+    filterCondition: "filter_condition",
+  },
+  filterCondition: { by: "by", where: "where", value: "value" },
+  simulateHlsPlayback: { refreshBefore: "refresh_before" },
+};
+
+/** Upstream marks DECISION_USERS/DECISION_POINTS as keys that do not exist. */
+export const OUTCOME_KEYS = [
+  "percentage_users", "odds_percentage", "odds",
+  "top_points", "total_users", "total_points",
+] as const;
+
+export const STRATEGIES = [
+  "MOST_VOTED", "HIGH_ODDS", "PERCENTAGE", "SMART_MONEY", "SMART",
+  "NUMBER_1", "NUMBER_2", "NUMBER_3", "NUMBER_4",
+  "NUMBER_5", "NUMBER_6", "NUMBER_7", "NUMBER_8",
+] as const;
+
+const filterConditionSchema = z
+  .object({
+    by: z.enum(OUTCOME_KEYS),
+    where: z.enum(["GT", "LT", "GTE", "LTE"]),
+    value: z.number(),
+  })
+  .strict();
+
+const betSchema = z
+  .object({
+    strategy: z.enum(STRATEGIES).optional(),
+    percentage: z.number().int().min(0).max(100).optional(),
+    percentageGap: z.number().int().min(0).max(100).optional(),
+    maxPoints: z.number().int().nonnegative().optional(),
+    minimumPoints: z.number().int().nonnegative().optional(),
+    stealthMode: z.boolean().optional(),
+    delay: z.number().nonnegative().optional(),
+    delayMode: z.enum(["FROM_START", "FROM_END", "PERCENTAGE"]).optional(),
+    filterCondition: filterConditionSchema.optional(),
+  })
+  .strict();
+
+const hlsSchema = z
+  .union([
+    z.literal(false),
+    z.object({ refreshBefore: z.number().int().positive() }).strict(),
+  ]);
 
 const settingsSchema = z
   .object({
     ...Object.fromEntries(BOOL_SETTINGS.map((k) => [k, z.boolean().optional()])),
     pointsLimit: z.union([z.literal(false), z.number().int().positive()]).optional(),
     chat: z.enum(["ALWAYS", "NEVER", "ONLINE", "OFFLINE"]).optional(),
+    bet: betSchema.optional(),
+    simulateHlsPlayback: hlsSchema.optional(),
   })
   .strict();
 
@@ -70,15 +136,43 @@ export const configSchema = z
 export type AppConfig = z.infer<typeof configSchema>;
 export type StreamerSettingsInput = z.infer<typeof settingsSchema>;
 
-export function settingsToPython(settings: StreamerSettingsInput) {
+/**
+ * Renames one level of keys, recursing into the nested settings objects
+ * named in NESTED_TO_PYTHON. `false` is a legal value for
+ * simulateHlsPlayback and must survive as a bare false rather than being
+ * treated as an object to walk.
+ */
+function renameKeys(
+  input: Record<string, unknown>,
+  map: Record<string, string>,
+  nested: Record<string, Record<string, string>>,
+  nestedKeyOf: (camelOrSnake: string) => string,
+): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(settings).map(([k, v]) => [TO_PYTHON[k] ?? k, v]),
+    Object.entries(input).map(([key, value]) => {
+      const renamed = map[key] ?? key;
+      const childMap = nested[nestedKeyOf(key)];
+      if (childMap && value !== null && typeof value === "object") {
+        return [renamed, renameKeys(
+          value as Record<string, unknown>, childMap, nested, nestedKeyOf,
+        )];
+      }
+      return [renamed, value];
+    }),
   );
 }
 
+const invert = (map: Record<string, string>) =>
+  Object.fromEntries(Object.entries(map).map(([a, b]) => [b, a]));
+
+export function settingsToPython(settings: Record<string, unknown>) {
+  return renameKeys(settings, TO_PYTHON, NESTED_TO_PYTHON, (k) => k);
+}
+
 export function settingsFromPython(raw: Record<string, unknown>) {
-  const back = Object.fromEntries(Object.entries(TO_PYTHON).map(([a, b]) => [b, a]));
-  return Object.fromEntries(
-    Object.entries(raw).map(([k, v]) => [back[k] ?? k, v]),
+  const back = invert(TO_PYTHON);
+  const nestedBack = Object.fromEntries(
+    Object.entries(NESTED_TO_PYTHON).map(([k, v]) => [k, invert(v)]),
   );
+  return renameKeys(raw, back, nestedBack, (k) => back[k] ?? k);
 }
