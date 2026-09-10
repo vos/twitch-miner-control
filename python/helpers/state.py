@@ -131,24 +131,22 @@ class Handler:
                 return {"id": req_id, "ok": True,
                         "data": {"loggedIn": self.session.is_logged_in()}}
             if op == "lookup":
+                self._ensure_token()
                 return {"id": req_id, "ok": True, "data": self._lookup(req["username"])}
             if op == "followers":
-                # Load the cookie pickle first. build_session() leaves the
-                # session tokenless (cookies == [], token is None), so a
-                # `followers` request arriving before anything else has
-                # called reload_cookies() -- which is the normal case, since
-                # this is the only op that touches GQL without first going
-                # through is_logged_in() -- would send
-                # `Authorization: OAuth None` and take a 401 through all
-                # three retries. Every other GQL op is reached via a path
-                # that has already reloaded.
+                # Unconditional, unlike _ensure_token() below: `followers`
+                # is a user-initiated action where the pickle may well have
+                # been rewritten since the last poll, and one extra file
+                # read is free next to the GQL round trip that follows.
                 self.session.reload_cookies()
                 return {"id": req_id, "ok": True,
                         "data": {"followers": self.session.gql.channel_follows()}}
             if op == "state":
+                self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"streamers": self._state(req["streamers"])}}
             if op == "avatars":
+                self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"avatars": self._avatars(req["streamers"])}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
@@ -163,6 +161,30 @@ class Handler:
                     return {"id": req_id, "ok": False, "error": str(exc),
                             "code": "AUTH"}
             return {"id": req_id, "ok": False, "error": str(exc), "code": "GQL"}
+
+    def _ensure_token(self) -> None:
+        """Loads the cookie pickle when the session is holding no token.
+
+        build_session() leaves the session tokenless, and the GQL ops below
+        reach Twitch without going through is_logged_in(). That was harmless
+        while the only tokenless helper was one spawned before the very
+        first login -- but logging out of Twitch deletes the pickle and
+        recycles the helper, so its replacement now routinely starts
+        tokenless while the user is midway through signing back in. The
+        login writes a good pickle, and without this nothing on these paths
+        ever re-read it: every request sent `Authorization: OAuth None` and
+        took a 401 through all three retries, permanently.
+
+        Guarded on the token rather than called unconditionally so the
+        steady state stays one GQL round trip per poll instead of a pickle
+        read every 60 seconds. A token that is present but *expired* is a
+        different failure and still handled where it always was -- by the
+        AUTH classification in handle()'s except block.
+        """
+        if getattr(self.session, "login", None) is None:
+            return
+        if self.session.login.get_auth_token() is None:
+            self.session.reload_cookies()
 
     def _lookup(self, username: str) -> dict:
         try:

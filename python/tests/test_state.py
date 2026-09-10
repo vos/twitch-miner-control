@@ -589,3 +589,68 @@ def test_unknown_channel_returns_the_same_keys():
     out = h._one("ghost")
     assert out["streamId"] is None
     assert out["streamStartedAt"] is None
+
+
+def test_state_loads_cookies_when_the_session_has_no_token():
+    """A helper spawned while no cookie pickle existed holds no token, and
+    `state` reaches GQL without going through is_logged_in() -- so it sent
+    `Authorization: OAuth None` and took a 401 on every attempt, forever.
+
+    This became reachable when logging out of Twitch was added: logout
+    deletes the pickle and recycles the helper, so the replacement spawns
+    tokenless. The later login writes a perfectly good pickle, but nothing
+    on the `state` path ever re-read it, leaving a permanent GQL traceback
+    on the dashboard of a user who had just signed in successfully.
+    """
+    calls = []
+
+    class NeedsCookies:
+        def __init__(self):
+            self.loaded = False
+
+        def get_channel_points_context(self, username):
+            calls.append("gql")
+            if not self.loaded:
+                raise AssertionError("GQL called before reload_cookies")
+            return SimpleNamespace(community=None)
+
+    gql = NeedsCookies()
+
+    def reload():
+        calls.append("reload_cookies")
+        gql.loaded = True
+        return True
+
+    session = SimpleNamespace(
+        gql=gql, reload_cookies=reload, is_logged_in=lambda: True,
+        # Mirrors TwitchLogin before any pickle is loaded.
+        login=SimpleNamespace(get_auth_token=lambda: None),
+    )
+    out = Handler(session).handle(
+        {"id": 1, "op": "state", "streamers": ["alpha"]},
+    )
+
+    assert out["ok"] is True
+    assert calls[0] == "reload_cookies"
+
+
+def test_state_does_not_reload_when_a_token_is_already_held():
+    """The common case must stay a single GQL round trip: re-reading the
+    pickle on every poll would be pointless file I/O every 60 seconds.
+    """
+    calls = []
+
+    class Gql:
+        def get_channel_points_context(self, username):
+            calls.append("gql")
+            return SimpleNamespace(community=None)
+
+    session = SimpleNamespace(
+        gql=Gql(),
+        reload_cookies=lambda: calls.append("reload_cookies"),
+        is_logged_in=lambda: True,
+        login=SimpleNamespace(get_auth_token=lambda: "a-live-token"),
+    )
+    Handler(session).handle({"id": 1, "op": "state", "streamers": ["alpha"]})
+
+    assert calls == ["gql"]
