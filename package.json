@@ -1,7 +1,14 @@
 {
   "name": "twitch-miner-control",
+  "version": "1.1.0",
   "private": true,
   "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vos/twitch-miner-control.git"
+  },
+  "homepage": "https://github.com/vos/twitch-miner-control#readme",
+  "bugs": "https://github.com/vos/twitch-miner-control/issues",
   "type": "module",
   "engines": {
     "node": ">=24"
