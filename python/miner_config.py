@@ -5,7 +5,15 @@ The accepted shape here IS the contract; apps/backend/src/config/schema.ts
 mirrors it in Zod.
 """
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
+from TwitchChannelPointsMiner.classes.entities.Bet import (
+    BetSettings,
+    Condition,
+    DelayMode,
+    FilterCondition,
+    Strategy,
+)
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    HLSSettings,
     Streamer,
     StreamerSettings,
 )
@@ -19,16 +27,57 @@ BOOL_SETTINGS = (
     "community_goals",
     "weekly_rewards",
 )
-ALLOWED_SETTINGS = frozenset(BOOL_SETTINGS + ("points_limit", "chat"))
+ALLOWED_SETTINGS = frozenset(
+    BOOL_SETTINGS + ("points_limit", "chat", "bet", "simulate_hls_playback")
+)
+
+BET_ENUMS = {"strategy": Strategy, "delay_mode": DelayMode}
+ALLOWED_BET = frozenset(
+    ("strategy", "percentage", "percentage_gap", "max_points", "minimum_points",
+     "stealth_mode", "delay", "delay_mode", "filter_condition")
+)
+ALLOWED_FILTER = frozenset(("by", "where", "value"))
+
+
+def _reject_unknown(merged, allowed, what):
+    unknown = set(merged) - allowed
+    if unknown:
+        raise ValueError(f"unknown {what}: {sorted(unknown)}")
+
+
+def _filter_condition(raw: dict) -> FilterCondition:
+    _reject_unknown(raw, ALLOWED_FILTER, "bet filter_condition keys")
+    return FilterCondition(
+        by=raw.get("by"),
+        where=Condition[raw["where"]] if raw.get("where") else None,
+        value=raw.get("value"),
+    )
+
+
+def _bet(raw: dict) -> BetSettings:
+    _reject_unknown(raw, ALLOWED_BET, "bet settings")
+    kwargs = {k: v for k, v in raw.items() if k != "filter_condition"}
+    for name, enum in BET_ENUMS.items():
+        if kwargs.get(name) is not None:
+            kwargs[name] = enum[kwargs[name]]
+    if raw.get("filter_condition") is not None:
+        kwargs["filter_condition"] = _filter_condition(raw["filter_condition"])
+    return BetSettings(**kwargs)
 
 
 def _settings(defaults: dict, overrides: dict) -> StreamerSettings:
     merged = {**defaults, **overrides}
-    unknown = set(merged) - ALLOWED_SETTINGS
-    if unknown:
-        raise ValueError(f"unknown streamer settings: {sorted(unknown)}")
-    if "chat" in merged and merged["chat"] is not None:
+    _reject_unknown(merged, ALLOWED_SETTINGS, "streamer settings")
+    if merged.get("chat") is not None:
         merged["chat"] = ChatPresence[merged["chat"]]
+    if merged.get("bet") is not None:
+        merged["bet"] = _bet(merged["bet"])
+    # `False` disables HLS playback and must reach StreamerSettings as a
+    # bare False; only a dict describes a refresh window.
+    hls = merged.get("simulate_hls_playback")
+    if isinstance(hls, dict):
+        _reject_unknown(hls, frozenset(("refresh_before",)), "simulate_hls_playback keys")
+        merged["simulate_hls_playback"] = HLSSettings(**hls)
     return StreamerSettings(**merged)
 
 
