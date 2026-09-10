@@ -165,6 +165,18 @@ Dev mode reads its configuration from `.env` (see `.env.example` for
 what each variable does) and keeps its data in `./.devdata`, so it never
 touches the `./data` volume Docker mounts.
 
+### Miner logs
+
+The miner writes its own log file to `<data dir>/logs`, rotated daily
+with seven days kept. `MINER_LOG_LEVEL` sets how much goes into it
+(`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO`) —
+upstream's own default is `DEBUG`, which is mostly websocket keepalives
+and connection chatter and reached 267MB in a day. Set it to `DEBUG`
+while diagnosing a miner problem, then put it back.
+
+This is separate from the **Logs** page in the UI, which shows the
+miner's console output and is not affected by this setting.
+
 ### Using the dev container
 
 `.devcontainer/` describes a ready-made environment, so you do not have to

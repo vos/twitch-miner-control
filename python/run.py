@@ -6,6 +6,7 @@ notifications and logger settings. The web UI only ever rewrites
 config.json, never this file.
 """
 import json
+import logging
 import os
 import sys
 
@@ -21,6 +22,27 @@ from miner_config import build_mine_kwargs, build_streamers
 CONFIG_PATH = os.environ.get("MINER_CONFIG", "config.json")
 DOORBELL_URL = os.environ.get("DOORBELL_URL", "http://127.0.0.1:8080/internal/doorbell")
 DOORBELL_TOKEN = os.environ["DOORBELL_TOKEN"]
+
+
+def _file_level() -> int:
+    """Level for the miner's own log file, from MINER_LOG_LEVEL.
+
+    Upstream defaults LoggerSettings.file_level to DEBUG while this app
+    runs the console at INFO, so the file recorded every websocket
+    keepalive, StreamerSelector pass and urllib3 connection -- 99.7% of a
+    measured sample, and 267MB in one day. The backend resolves and
+    validates the value (apps/backend/src/config/logLevel.ts); this
+    fallback matches its default so running run.py by hand, outside the
+    supervisor, still gets a sane level rather than upstream's DEBUG.
+
+    getLevelName() returns the string back unchanged for an unknown name
+    rather than raising, so the isinstance check is what actually rejects
+    a bad value -- without it a typo would reach setLevel() and raise
+    there, crashing the miner at boot over a log setting.
+    """
+    level = logging.getLevelName(os.environ.get("MINER_LOG_LEVEL", "INFO").upper())
+    return level if isinstance(level, int) else logging.INFO
+
 
 with open(CONFIG_PATH, encoding="utf-8") as fh:
     cfg = json.load(fh)
@@ -51,6 +73,10 @@ twitch_miner = TwitchChannelPointsMiner(
     logger_settings=LoggerSettings(
         save=True,
         console_level=20,
+        # Without this, upstream defaults the file handler to DEBUG. Its
+        # TimedRotatingFileHandler keeps 7 days, so growth was bounded --
+        # but bounded at ~1.9GB of keepalives and connection chatter.
+        file_level=_file_level(),
         hooks=[DoorbellHook(DOORBELL_URL, DOORBELL_TOKEN)],
     ),
 )

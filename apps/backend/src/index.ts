@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { resolvePythonBin } from "./config/pythonBin.js";
 import { resolveStopGraceMs } from "./config/stopGrace.js";
 import { resolveEnvFlag } from "./config/envFlag.js";
+import { resolveMinerLogLevel } from "./config/logLevel.js";
 import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
@@ -123,6 +124,12 @@ const supervisor = new Supervisor({
     MINER_CONFIG: configPath,
     DOORBELL_TOKEN: doorbellToken,
     DOORBELL_URL: `http://127.0.0.1:${port}/internal/doorbell`,
+    // Upstream writes its log file at DEBUG by default, which is almost
+    // entirely websocket keepalives and connection-pool chatter; see
+    // config/logLevel.ts. Only the file level is configurable -- the
+    // console stays at INFO because that is what the supervisor captures
+    // for the Logs page.
+    MINER_LOG_LEVEL: resolveMinerLogLevel(process.env.MINER_LOG_LEVEL),
   },
   graceMs: resolveStopGraceMs(process.env.MINER_STOP_GRACE_MS),
   // Uptime spans, so "the channel was live" and "we were mining it" stay
