@@ -83,6 +83,12 @@ export function Sidebar({
                     title={`Version ${latestVersion} is available`}
                     data-testid="update-available"
                     underline="never"
+                    // display:flex, or the badge sits on the baseline of
+                    // this anchor's own line box -- which inherits the
+                    // row's 16px line-height and is taller than the 16px
+                    // badge, leaving it a couple of pixels off centre
+                    // against the version text beside it.
+                    display="flex"
                   >
                     <Badge size="xs" variant="filled" color="twitch" style={{ cursor: "pointer" }}>
                       {latestVersion}
