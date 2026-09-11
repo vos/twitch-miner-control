@@ -1,14 +1,23 @@
-import { Badge, Group, Text, Tooltip } from "@mantine/core";
+import { Badge, Group, Skeleton, Text, Tooltip } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { averageLabel } from "../lib/averageLabel.js";
 import { formatBytes } from "../lib/formatBytes.js";
 import { formatUptime } from "../lib/formatUptime.js";
-import { TRANSITIONAL, isUp } from "../lib/minerState.js";
+import { TRANSITIONAL, isKnown, isUp } from "../lib/minerState.js";
 import { type ProcSample, averageOf } from "../lib/rollingHistory.js";
 import { Sparkline } from "./Sparkline.js";
 
 export interface MinerStatus {
-  state: string;
+  /**
+   * Null until the first status poll answers.
+   *
+   * Deliberately not a sentinel string: a placeholder like "…" is neither
+   * RUNNING nor transitional, so it falls through every check and leaves
+   * an enabled Start button pointing at a miner that may already be up.
+   * Null makes the unknown case one the type checker forces callers to
+   * handle.
+   */
+  state: string | null;
   /** When the live miner started, or null if none is running. */
   startedAt: number | null;
 }
@@ -33,7 +42,8 @@ export function MinerStatusBadge(
   }, [startedAt]);
 
   const up = isUp(state);
-  const transitional = TRANSITIONAL.has(state);
+  const known = isKnown(state);
+  const transitional = known && TRANSITIONAL.has(state);
   const latest = history[history.length - 1];
   const average = averageOf(history);
   // The graph plots raw samples while the number beside it is smoothed:
@@ -43,13 +53,20 @@ export function MinerStatusBadge(
 
   return (
     <Group gap="xs" wrap="nowrap">
-      <Badge
-        variant="light"
-        color={up ? "teal" : transitional ? "twitch" : "orange"}
-        data-testid="miner-state"
-      >
-        {state}
-      </Badge>
+      {known ? (
+        <Badge
+          variant="light"
+          color={up ? "teal" : transitional ? "twitch" : "orange"}
+          data-testid="miner-state"
+        >
+          {state}
+        </Badge>
+      ) : (
+        // Sized to a badge rather than to its text: an orange badge
+        // reading "…" claims the miner is down before anything has said
+        // so, and the header must not reflow when the real state lands.
+        <Skeleton height={20} width={74} radius="xl" data-testid="miner-state-loading" />
+      )}
       {startedAt !== null && (
         <Text size="sm" c="dimmed" ff="monospace" data-testid="miner-uptime">
           {formatUptime(Date.now() - startedAt)}

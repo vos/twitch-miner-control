@@ -26,6 +26,18 @@ test("offers Start when the miner is down", () => {
   expect(screen.getByTestId("miner-toggle")).toHaveTextContent("Start");
 });
 
+test("disables both actions until the miner's state is known", () => {
+  // Before the first status poll answers there is no state to act on.
+  // An enabled Start here is not just untidy: the miner may well already
+  // be running, and the button asserts it is not.
+  stubPost({});
+  renderApp(<MinerDock state={null} onChange={() => {}} />);
+  expect(screen.getByTestId("miner-toggle")).toBeDisabled();
+  expect(screen.getByTestId("miner-restart")).toBeDisabled();
+  expect(screen.getByTestId("miner-toggle")).not.toHaveTextContent("Start");
+  expect(screen.getByTestId("miner-toggle")).not.toHaveTextContent("Stop");
+});
+
 test("disables both actions while the miner is between lives", () => {
   stubPost({});
   renderApp(<MinerDock state="STARTING" onChange={() => {}} />);

@@ -8,6 +8,14 @@ test("shows the miner state", () => {
   expect(screen.getByTestId("miner-state")).toHaveTextContent("RUNNING");
 });
 
+test("shows a placeholder, not a state, until the first poll answers", () => {
+  // An orange badge reading "…" claims the miner is down before anything
+  // has said so.
+  renderApp(<MinerStatusBadge state={null} startedAt={null} />);
+  expect(screen.queryByTestId("miner-state")).not.toBeInTheDocument();
+  expect(screen.getByTestId("miner-state-loading")).toBeInTheDocument();
+});
+
 test("shows uptime when the miner is up", () => {
   renderApp(<MinerStatusBadge state="RUNNING" startedAt={Date.now() - 90_000} />);
   expect(screen.getByTestId("miner-uptime")).toHaveTextContent("1m 30s");

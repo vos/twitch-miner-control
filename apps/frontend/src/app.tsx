@@ -44,7 +44,10 @@ export function App() {
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
   // render a STOPPED badge next to a still-ticking uptime.
-  const [miner, setMiner] = useState<MinerStatus>({ state: "…", startedAt: null });
+  // state: null until the first poll answers -- see MinerStatus. A
+  // placeholder string would read as a real state to every control that
+  // checks one.
+  const [miner, setMiner] = useState<MinerStatus>({ state: null, startedAt: null });
   // true until the first poll answers, matching the server's own
   // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);

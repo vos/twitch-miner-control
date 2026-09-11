@@ -38,9 +38,13 @@ test("names a dev build rather than pretending to a release number", () => {
   expect(screen.getByTestId("app-version")).toHaveTextContent("dev build");
 });
 
-test("renders nothing before the first status poll answers", () => {
+test("holds the readout's space before the first status poll answers", () => {
+  // A placeholder rather than nothing: an empty line that fills in a
+  // moment later shifts the brand block, and the update badge beside it
+  // jumps in after that.
   view(null);
   expect(screen.queryByTestId("app-version")).not.toBeInTheDocument();
+  expect(screen.getByTestId("app-version-loading")).toBeInTheDocument();
 });
 
 test("flags a newer release beside the running version", () => {

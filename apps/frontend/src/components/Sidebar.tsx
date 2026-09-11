@@ -1,4 +1,4 @@
-import { Anchor, Badge, Box, Divider, Group, Stack, Text } from "@mantine/core";
+import { Anchor, Badge, Box, Divider, Group, Skeleton, Stack, Text } from "@mantine/core";
 import {
   IconChartBar, IconDeviceTv, IconSettings, IconTerminal2, IconUserCircle,
 } from "@tabler/icons-react";
@@ -60,7 +60,12 @@ export function Sidebar({
             <Text fw={700} size="sm" style={{ letterSpacing: "0.08em" }}>
               MINER CONTROL
             </Text>
-            {version && (
+            {version === null ? (
+              // Holds the readout's line so the brand block does not
+              // shift when the version lands -- and so the update badge
+              // beside it does not jump in after it.
+              <Skeleton height={9} width={46} radius="xl" my={4} data-testid="app-version-loading" />
+            ) : (
               <Group gap={6} wrap="nowrap" align="center">
                 <Anchor
                   href={REPO_URL}

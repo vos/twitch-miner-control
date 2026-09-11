@@ -136,11 +136,24 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
   // would otherwise get a blank screen -- exactly the person this notice
   // exists for.
   if (!snapshot) {
-    return frame(loadError && (
-      <Alert role="alert" color="red">
-        Failed to load dashboard: {loadError}
-      </Alert>
-    ));
+    return frame(
+      <>
+        {loadError && (
+          <Alert role="alert" color="red">
+            Failed to load dashboard: {loadError}
+          </Alert>
+        )}
+        {/* The tiles' own labels are fixed text, so the row can show what
+            the page will hold while only the figures wait. A blank screen
+            for the first seconds reads as an app with nothing in it. */}
+        <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
+          <StatTile loading label="Total points" value="" testId="total-points" />
+          <StatTile loading label="24h gain" value="" accent="success" testId="stat-24h" />
+          <StatTile loading label="Live now" value="" accent="live" testId="stat-live" />
+          <StatTile loading label="Tracked" value="" testId="stat-tracked" />
+        </SimpleGrid>
+      </>,
+    );
   }
 
   const total = snapshot.streamers.reduce((sum, s) => sum + (s.points ?? 0), 0);

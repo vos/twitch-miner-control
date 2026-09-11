@@ -43,6 +43,20 @@ afterEach(() => {
 const view = (loginRequired = false) =>
   renderApp(<Dashboard loginRequired={loginRequired} onSignIn={() => {}} />);
 
+test("shows the tiles' shape while the first snapshot is still loading", async () => {
+  // A blank page for the first few seconds reads as an app with nothing
+  // in it. The labels are fixed text, so they can say what is coming
+  // while only the figures wait.
+  stub(new Promise(() => {}));
+  view();
+  expect(await screen.findByTestId("total-points-loading")).toBeInTheDocument();
+  expect(screen.getByTestId("stat-24h-loading")).toBeInTheDocument();
+  expect(screen.getByTestId("stat-live-loading")).toBeInTheDocument();
+  expect(screen.getByTestId("stat-tracked-loading")).toBeInTheDocument();
+  // The figures themselves must not be there to be misread as real.
+  expect(screen.queryByTestId("total-points")).not.toBeInTheDocument();
+});
+
 test("shows who is live", async () => {
   view();
   expect(await screen.findByTestId("streamer-alpha")).toBeInTheDocument();

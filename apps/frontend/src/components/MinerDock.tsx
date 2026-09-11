@@ -1,7 +1,7 @@
-import { Button, Stack, Text } from "@mantine/core";
+import { Button, Skeleton, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { api } from "../api/client.js";
-import { TRANSITIONAL, isUp } from "../lib/minerState.js";
+import { TRANSITIONAL, isKnown, isUp } from "../lib/minerState.js";
 import type { MinerStatus } from "./MinerStatusBadge.js";
 
 /**
@@ -12,7 +12,8 @@ import type { MinerStatus } from "./MinerStatusBadge.js";
  * is exactly the text an operator needs when a start fails.
  */
 export function MinerDock({ state, onChange }: {
-  state: string;
+  /** Null until the first status poll answers -- see MinerStatus. */
+  state: string | null;
   onChange: (status: MinerStatus) => void;
 }) {
   // Which action is in flight, so only the pressed button spins -- a
@@ -35,8 +36,18 @@ export function MinerDock({ state, onChange }: {
     }
   }
 
-  const transitional = TRANSITIONAL.has(state);
+  const known = isKnown(state);
+  const transitional = known && TRANSITIONAL.has(state);
   const up = isUp(state);
+  // Until the state is known there is no action to offer: the labels
+  // below would assert a state we have not been told yet, and Start on
+  // an already-running miner is the one misclick this dock must not
+  // allow. Disabled rather than hidden, so the sidebar keeps its height
+  // -- the same reason a transitional state disables instead of hiding.
+  const pending = !known;
+
+  /** A label-shaped placeholder, sized to the text it stands in for. */
+  const placeholder = <Skeleton height={9} width={54} radius="xl" />;
 
   return (
     <Stack gap="xs">
@@ -49,24 +60,24 @@ export function MinerDock({ state, onChange }: {
         fullWidth
         size="sm"
         variant={up ? "default" : "filled"}
-        color={up ? undefined : "teal"}
+        color={pending ? "gray" : up ? undefined : "teal"}
         data-testid="miner-toggle"
-        disabled={transitional}
+        disabled={pending || transitional}
         loading={busy === (up ? "stop" : "start")}
         onClick={() => run(up ? "stop" : "start")}
       >
-        {up ? "Stop" : "Start"}
+        {pending ? placeholder : up ? "Stop" : "Start"}
       </Button>
       <Button
         fullWidth
         size="sm"
         variant="default"
         data-testid="miner-restart"
-        disabled={transitional}
+        disabled={pending || transitional}
         loading={busy === "restart"}
         onClick={() => run("restart")}
       >
-        Restart
+        {pending ? placeholder : "Restart"}
       </Button>
     </Stack>
   );

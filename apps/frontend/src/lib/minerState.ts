@@ -7,4 +7,13 @@
 export const TRANSITIONAL = new Set(["STARTING", "RESTARTING"]);
 
 /** The miner is up: the only sensible toggle is to bring it down. */
-export const isUp = (state: string) => state === "RUNNING";
+export const isUp = (state: string | null) => state === "RUNNING";
+
+/**
+ * Whether the first status poll has answered yet.
+ *
+ * An unknown state is not a stopped one: acting on it would offer Start
+ * for a miner that may already be running. Every control stays inert
+ * until this is true.
+ */
+export const isKnown = (state: string | null): state is string => state !== null;
