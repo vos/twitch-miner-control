@@ -48,8 +48,13 @@ WORKDIR /app
 # Debian bookworm, so the binary's dynamic-library requirements (glibc,
 # libstdc++) are already satisfied; libatomic1 is the one additional runtime
 # dependency the official Node bookworm-slim image installs for itself.
+#
+# tzdata carries the zoneinfo database that makes TZ mean anything. Without
+# it the base image has no /usr/share/zoneinfo, so a TZ like Europe/Berlin
+# does not fail -- it silently resolves to UTC, which is exactly the wrong
+# failure mode for a setting whose only symptom is a wrong number.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libatomic1 \
+ && apt-get install -y --no-install-recommends ca-certificates libatomic1 tzdata \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=web /usr/local/bin/node /usr/local/bin/node
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -85,12 +90,20 @@ COPY --from=web /build/apps/frontend/dist public
 # passes it here; a plain `docker build` gets the "dev" default.
 ARG APP_VERSION=dev
 
+# TZ sets the container's local time, which is what the miner's log
+# timestamps are formatted in: its formatters call
+# datetime.fromtimestamp(record.created) with no tzinfo, so the offset is
+# baked into each line as it is written and cannot be corrected later --
+# the backend buffers those lines as opaque strings and the UI prints them
+# verbatim. UTC is the default so an existing deployment's timestamps do
+# not shift under it on upgrade; compose passes a user's own value through.
 ENV APP_VERSION=${APP_VERSION} \
     DATA_DIR=/data \
     PYTHON_DIR=/app/python \
     PYTHON_BIN=/app/.venv/bin/python \
     MINER_DIR=/app/vendor/miner \
     STATIC_ROOT=/app/public \
+    TZ=UTC \
     PORT=8080
 VOLUME ["/data"]
 EXPOSE 8080

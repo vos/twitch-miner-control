@@ -99,6 +99,16 @@ Config, point history and the Twitch cookies live in `./data`, next to the
 Compose file and mounted into the container — back that up, and keep it out
 of anywhere public, since the cookies are a signed-in Twitch session.
 
+Log timestamps are written in UTC unless you say otherwise. To read them in
+your own time, add a `TZ` line to `.env` with a tz database name and
+recreate the container:
+
+    echo "TZ=Europe/Berlin" >> .env
+    docker compose up -d
+
+This is applied when the miner writes each line, so it changes new lines
+only — the ones already in the log keep the offset they were written with.
+
 ### Updating
 
 `:latest` follows the newest release. Pull it and recreate the container;
