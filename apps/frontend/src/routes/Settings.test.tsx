@@ -98,6 +98,55 @@ test("edits a global default and stages it", async () => {
   });
 });
 
+test("reverting a default streamer setting clears the pending notice", async () => {
+  // The rows write through `withKey`, which deletes and re-appends the key.
+  // A whole-config JSON.stringify comparison reads the new key order as a
+  // change, so the notice used to stick with nothing left to apply.
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+
+  const goals = screen.getByRole("switch", { name: "Community goals" });
+  await userEvent.click(goals);
+  expect(await screen.findByTestId("pending-bar")).toBeInTheDocument();
+
+  await userEvent.click(goals);
+  await waitFor(() => {
+    expect(screen.queryByTestId("pending-bar")).not.toBeInTheDocument();
+  });
+});
+
+test("a default set back to its built-in value is not sent as an override", async () => {
+  // Absent is how the miner is told to use its own default, so a reverted
+  // row has to clear the key rather than pin the same value explicitly.
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+
+  const goals = screen.getByRole("switch", { name: "Community goals" });
+  await userEvent.click(goals);
+  await userEvent.click(goals);
+
+  // Stage an unrelated change so there is something to apply.
+  await userEvent.click(screen.getByLabelText(/mine my followed channels/i));
+  await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
+  await waitFor(() => {
+    expect(sentConfig().defaults).not.toHaveProperty("communityGoals");
+  });
+});
+
+test("counts every staged setting, not just that something changed", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+
+  await userEvent.click(screen.getByRole("switch", { name: "Community goals" }));
+  expect(await screen.findByTestId("pending-bar")).toHaveTextContent("1 pending change");
+
+  await userEvent.click(screen.getByRole("switch", { name: "Claim drops" }));
+  await userEvent.click(screen.getByLabelText(/mine my followed channels/i));
+  await waitFor(() => {
+    expect(screen.getByTestId("pending-bar")).toHaveTextContent("3 pending changes");
+  });
+});
+
 test("global defaults have no inherit control -- they are the defaults", async () => {
   view();
   await screen.findByLabelText(/mine my followed channels/i);

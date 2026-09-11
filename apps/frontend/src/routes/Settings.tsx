@@ -10,6 +10,7 @@ import { PendingBar } from "../components/PendingBar.js";
 import { PriorityList } from "../components/PriorityList.js";
 import { SettingsFieldRow } from "../components/SettingsFieldRow.js";
 import { withKey } from "../components/StreamerSettingsModal.js";
+import { countChanges } from "../lib/countSettingsChanges.js";
 import { SETTINGS_FIELDS } from "../lib/settingsFields.js";
 
 /**
@@ -48,10 +49,11 @@ export function Settings() {
 
   if (!draft || !saved) return null;
 
-  // A deep comparison rather than field-by-field: the defaults and miner
-  // sections hold nested objects, and an edit buried in one of them has to
-  // count as a pending change like any other.
-  const changed = JSON.stringify(draft) !== JSON.stringify(saved);
+  // Walks to the leaves rather than comparing serialisations: the rows
+  // write through `withKey`, which re-appends a key instead of assigning in
+  // place, so a reverted field differs only in key order. It also yields a
+  // real count, which the bar reports.
+  const changes = countChanges(saved, draft);
 
   // The two optional miner-wide objects, read once. `undefined` means the
   // key is absent, which upstream reads as "use my own default" -- for
@@ -112,8 +114,16 @@ export function Settings() {
               field={field}
               value={draft.defaults[field.key]}
               canInherit={false}
+              // A value equal to the built-in default is written as an
+              // absent key, not as itself: `withKey` only deletes on
+              // `undefined`, so setting a row back to its default would
+              // otherwise pin it and leave a pending change that reverting
+              // cannot clear. Absent is also what the miner reads as "use
+              // the built-in", so the two agree.
               onChange={(v) => setDraft({
-                ...draft, defaults: withKey(draft.defaults, field.key, v),
+                ...draft,
+                defaults: withKey(draft.defaults, field.key,
+                  v === field.defaultValue ? undefined : v),
               })}
             />
           ))}
@@ -241,7 +251,7 @@ export function Settings() {
           </>
         )}
       </Card>
-      <PendingBar count={changed ? 1 : 0} onApply={() => void apply()} busy={busy} />
+      <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );
 }
