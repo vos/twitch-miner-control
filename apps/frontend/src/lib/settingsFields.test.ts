@@ -34,6 +34,9 @@ test("describes a default in words a person can read", () => {
   expect(describeDefault(by("communityGoals"))).toBe("Off");
   expect(describeDefault(by("pointsLimit"))).toBe("No limit");
   expect(describeDefault(by("chat"))).toBe("Online");
+  // Upstream's StreamerSettings.default() fills an unset value with
+  // HLSSettings(refresh_before=2 * 60), so the default is 120s on, not off.
+  expect(describeDefault(by("simulateHlsPlayback"))).toBe("120");
 });
 
 test("every field has help text, so no control ships unexplained", () => {

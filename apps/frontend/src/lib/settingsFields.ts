@@ -66,7 +66,10 @@ export const SETTINGS_FIELDS: SettingsField[] = [
     help: "Fetch the stream like a real player, refreshing the access token this "
       + "many seconds before it expires. Off skips HLS simulation entirely.",
     kind: { kind: "optionalNumber", offValue: false, min: 1, offLabel: "Off" },
-    defaultValue: false,
+    // StreamerSettings.default() fills an unset value with
+    // HLSSettings(refresh_before=2 * 60), so upstream's effective default is
+    // 120 seconds *on* -- not off. example.py and the upstream guide agree.
+    defaultValue: 120,
   },
 ];
 
