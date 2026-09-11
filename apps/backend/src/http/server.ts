@@ -5,6 +5,7 @@ import fastifyStatic from "@fastify/static";
 import type { ZodError } from "zod";
 import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
+import { UpdateChecker } from "../config/updateCheck.js";
 import { resolveVersion } from "../config/version.js";
 import type { History } from "../db/history.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
@@ -21,6 +22,17 @@ import { SseHub } from "./sse.js";
  * while the process runs, and the manifest fallback touches the disk.
  */
 const APP_VERSION = resolveVersion(process.env.APP_VERSION);
+
+/**
+ * Polls GitHub for a newer release of this app, so the sidebar can say so
+ * next to the version readout. Module-scoped alongside APP_VERSION, which
+ * it compares against: one checker for the process, holding the last
+ * answer between status polls rather than asking GitHub per request.
+ *
+ * index.ts starts its schedule; until then, and whenever a check fails,
+ * it offers nothing.
+ */
+export const updateChecker = new UpdateChecker({ current: APP_VERSION });
 
 /**
  * Shape of a doorbell event name. `python/helpers/doorbell.py` posts
@@ -312,6 +324,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         error: snapshot.error,
         pendingChanges: staged !== null,
         version: APP_VERSION,
+        // Null unless a strictly newer release exists, so the frontend
+        // renders the notice iff this is set.
+        latestVersion: updateChecker.available,
       };
     });
 

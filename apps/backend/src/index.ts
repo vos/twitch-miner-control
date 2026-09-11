@@ -19,7 +19,7 @@ import { Profiles } from "./db/profiles.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
 import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
-import { buildServer } from "./http/server.js";
+import { buildServer, updateChecker } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { AvatarCache } from "./state/avatars.js";
 import { resolveRoster } from "./state/roster.js";
@@ -114,6 +114,15 @@ if (retentionDays > 0) {
   // unref() so a pending prune never holds the process open at shutdown.
   setInterval(prune, 86_400_000).unref();
 }
+
+// Asked once at boot and daily after, so the sidebar can point at a newer
+// release. Failures are silent by design (see UpdateChecker): this drives
+// a decorative badge and must never be a reason the server misbehaves.
+// A dev build skips the request entirely, so `pnpm dev` stays offline.
+void updateChecker.check();
+// unref() so a pending check never holds the process open at shutdown --
+// the same reason the retention prune above does it.
+setInterval(() => void updateChecker.check(), 86_400_000).unref();
 
 const supervisor = new Supervisor({
   command: python,

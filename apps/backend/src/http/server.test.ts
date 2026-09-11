@@ -216,6 +216,16 @@ test("GET /api/status reports the app version for the sidebar readout", async ()
   expect(res.json().version).not.toBe("");
 });
 
+// Null here is the healthy default: nothing has been checked yet in a
+// test process, and a release no newer than the running one answers the
+// same way. The field must still be present, because its absence is how
+// the frontend detects a backend that predates the notice.
+test("GET /api/status carries the update notice field", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(res.json()).toHaveProperty("latestVersion");
+  expect(res.json().latestVersion).toBeNull();
+});
+
 test("GET /api/status reports no stats when no miner is running", async () => {
   ctx.supervisor.livePids = () => [];
   const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });

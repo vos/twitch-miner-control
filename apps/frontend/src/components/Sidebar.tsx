@@ -23,8 +23,12 @@ const ITEMS: Array<{ key: ScreenKey; label: string; icon: ReactNode }> = [
 /** Where the version readout links. No manifest field carries this. */
 const REPO_URL = "https://github.com/vos/twitch-miner-control";
 
+/** Where the update badge links: the page the upgrade is actually on. */
+const RELEASES_URL = `${REPO_URL}/releases`;
+
 export function Sidebar({
   screen, onNavigate, liveCount, loginRequired, miner, onMinerChange, version,
+  latestVersion,
 }: {
   screen: ScreenKey;
   onNavigate: (key: ScreenKey) => void;
@@ -39,6 +43,12 @@ export function Sidebar({
    * way the readout is simply absent rather than showing a placeholder.
    */
   version: string | null;
+  /**
+   * A published release newer than `version`, or null when there is
+   * nothing to offer -- which is also what a backend predating the field
+   * sends. The server does the comparing, so this renders iff it is set.
+   */
+  latestVersion: string | null;
 }) {
   return (
     <Stack h="100%" gap={0} justify="space-between">
@@ -51,16 +61,35 @@ export function Sidebar({
               MINER CONTROL
             </Text>
             {version && (
-              <Anchor
-                href={REPO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                size="xs"
-                c="dimmed"
-                data-testid="app-version"
-              >
-                {version === "dev" ? "dev build" : `v${version}`}
-              </Anchor>
+              <Group gap={6} wrap="nowrap" align="center">
+                <Anchor
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  size="xs"
+                  c="dimmed"
+                  data-testid="app-version"
+                >
+                  {version === "dev" ? "dev build" : `v${version}`}
+                </Anchor>
+                {latestVersion && (
+                  // A title rather than a Tooltip: the readout is small
+                  // enough to want a hover label, and Mantine's Tooltip
+                  // hangs the jsdom tests.
+                  <Anchor
+                    href={RELEASES_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`Version ${latestVersion} is available`}
+                    data-testid="update-available"
+                    underline="never"
+                  >
+                    <Badge size="xs" variant="filled" color="twitch" style={{ cursor: "pointer" }}>
+                      {latestVersion}
+                    </Badge>
+                  </Anchor>
+                )}
+              </Group>
             )}
           </Stack>
         </Group>
