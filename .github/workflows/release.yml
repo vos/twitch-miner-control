@@ -41,7 +41,10 @@ jobs:
     name: Build image (publish on tags)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # write, not read: the release step below creates a GitHub Release
+      # through this token, which the default read-only contents scope
+      # rejects with a 403. Checkout is happy either way.
+      contents: write
       # Required for GITHUB_TOKEN to push to GHCR. The default token is
       # read-only for packages, and the push fails without this.
       packages: write
@@ -144,3 +147,24 @@ jobs:
           # branch, so main's cache is the one that stays warm.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The tag is what triggers this workflow, but a tag is invisible to
+      # the REST API's releases/latest -- that endpoint only ever sees a
+      # published Release, and answers 404 for a repository that has only
+      # ever tagged. The in-app update notice asks exactly that endpoint,
+      # so without this step it stays silent no matter how many versions
+      # ship: the badge has no way to tell "no release published" apart
+      # from "you are current".
+      #
+      # Last, and only after the image is pushed. A Release is the public
+      # "this is out" signal, and announcing a version whose image failed
+      # to build would point people at a pull that cannot succeed.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          # Notes are generated from the commits since the previous tag.
+          # The alternative is a hand-written changelog file, which is one
+          # more thing to forget in the same commit that bumps the
+          # manifest -- and the commit subjects are already written.
+          generate_release_notes: true

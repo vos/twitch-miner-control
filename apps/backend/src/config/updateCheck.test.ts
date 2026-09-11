@@ -102,6 +102,16 @@ describe("UpdateChecker", () => {
     expect(missing.available).toBeNull();
   });
 
+  test("stays silent when the repository has published no releases", async () => {
+    // Tags alone are invisible to /releases/latest, which answers 404
+    // until a release is actually published. This is what a repo that
+    // tags but never releases looks like, and it must read as "nothing
+    // to offer" rather than as a newer version.
+    const c = checker("1.1.0", vi.fn().mockResolvedValue({ ok: false, status: 404 } as Response));
+    await c.check();
+    expect(c.available).toBeNull();
+  });
+
   test("forgets a previous offer once the running version catches up", async () => {
     // The notice has no dismiss button; upgrading is what clears it. A
     // stale offer surviving the upgrade would leave it stuck on forever.
