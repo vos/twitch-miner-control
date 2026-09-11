@@ -111,6 +111,29 @@ test("unlocks after a login even while the live stream still reports the session
   expect(await screen.findByText("secret content")).toBeInTheDocument();
 });
 
+test("keeps what the user has typed when the stream reports the session gone", async () => {
+  // A fresh load with no cookie: the stream 401s and latches
+  // `authExpired` about three seconds in, while the user is still
+  // typing. Re-locking an already-locked form must not empty the field
+  // under them -- clearing the password belongs to ending a session that
+  // existed, not to news about one that never did.
+  stubSequence(401);
+  const { rerender } = render(
+    <MantineProvider>
+      <PasswordGate><div>secret content</div></PasswordGate>
+    </MantineProvider>,
+  );
+  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
+
+  rerender(
+    <MantineProvider>
+      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
+    </MantineProvider>,
+  );
+
+  expect(screen.getByLabelText("Password")).toHaveValue("hunter2");
+});
+
 test("credits the upstream miner with a link out", async () => {
   // The app only drives mpforce1's miner, so the unlock screen is where
   // that credit belongs -- it is the one screen every user sees.

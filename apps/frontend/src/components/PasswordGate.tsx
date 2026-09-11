@@ -62,9 +62,28 @@ export function PasswordGate({
    * cookie) swallowed the login that followed -- the form appeared to do
    * nothing, and only a manual refresh got the dashboard up. Folding it into
    * state instead lets the newer event win.
+   *
+   * The password is cleared only when a session was actually on screen.
+   * On a fresh load with no cookie the stream 401s and reports an expiry
+   * a few seconds in, while the user is partway through typing -- and
+   * clearing it there wiped the field under them. Dropping the old
+   * password belongs to ending a session that existed, not to news about
+   * one that never did.
+   *
+   * The lock itself still applies unconditionally, including before the
+   * mount probe has answered: that probe defers to a known expiry rather
+   * than overruling it, so leaving `unlocked` alone here would let a
+   * 200 land after this and unlock a cookie already known to be dead.
    */
   useEffect(() => {
-    if (sessionExpired) lock();
+    if (!sessionExpired) return;
+    // Read rather than branch inside the updater: StrictMode invokes
+    // updaters twice, so they have to stay pure.
+    if (unlocked === true) {
+      setPassword("");
+      setError(null);
+    }
+    setUnlocked(false);
   }, [sessionExpired]);
 
   if (unlocked === null) return null;
