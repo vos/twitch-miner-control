@@ -25,6 +25,10 @@ interface Props {
  * A channel we have watched and never caught live is a different case: it
  * gets a bare "OFFLINE", because that IS an observation. The two must not
  * look alike.
+ *
+ * The elapsed span sits in its own element so a caller that is short of
+ * width can hide it and keep the state word -- see StreamerRow, where a
+ * long duration would otherwise squeeze the channel name off the row.
  */
 export function StatusPill({ isOnline, liveSince, lastLive, elapsed }: Props) {
   if (isOnline === null || isOnline === undefined) return null;
@@ -37,16 +41,24 @@ export function StatusPill({ isOnline, liveSince, lastLive, elapsed }: Props) {
     return (
       <span className={classes.pill} data-testid="live-pill">
         <span className={classes.dot} />
-        {ms === null ? "LIVE" : `LIVE ${formatLiveSpan(ms)}`}
+        {"LIVE"}
+        {ms !== null && (
+          <span className={classes.span} data-testid="live-span">
+            {" "}{formatLiveSpan(ms)}
+          </span>
+        )}
       </span>
     );
   }
 
   return (
     <span className={`${classes.pill} ${classes.pillOffline}`} data-testid="offline-pill">
-      {lastLive == null
-        ? "OFFLINE"
-        : `OFFLINE ${formatSpan(Math.max(0, Date.now() - lastLive))}`}
+      {"OFFLINE"}
+      {lastLive != null && (
+        <span className={classes.span} data-testid="offline-span">
+          {" "}{formatSpan(Math.max(0, Date.now() - lastLive))}
+        </span>
+      )}
     </span>
   );
 }

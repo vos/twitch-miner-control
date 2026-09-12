@@ -40,3 +40,10 @@
   background: currentColor;
   animation: tw-pulse 2s ease-in-out infinite;
 }
+
+/* The elapsed time, as its own element so a cramped caller can drop it
+   and keep the state word. It carries its own leading space, so hiding
+   it leaves no trailing gap inside the pill. */
+.span {
+  white-space: nowrap;
+}

@@ -1,9 +1,10 @@
-import { ActionIcon, Badge, Card, Group, Switch, Text, Tooltip } from "@mantine/core";
+import { ActionIcon, Badge, Card, Switch, Text, Tooltip } from "@mantine/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { IconGripVertical, IconSettings, IconX } from "@tabler/icons-react";
 import { StatusPill } from "./StatusPill.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
+import classes from "./StreamerRow.module.css";
 
 /** What the live snapshot knows about this channel; null when unreachable. */
 export interface RowStatus {
@@ -48,6 +49,9 @@ interface Props {
  * The drag listeners sit on the grip, not the card: the row also holds a
  * channel link (natively draggable) and a switch, and a whole-card handle
  * makes those fight the reorder.
+ *
+ * Laid out as a grid rather than nested rows -- see StreamerRow.module.css
+ * for why the controls have to be the side that keeps its width.
  */
 export function StreamerRow(
   {
@@ -81,11 +85,12 @@ export function StreamerRow(
           : {}),
       }}
     >
-      <Group justify="space-between" wrap="nowrap">
-        <Group gap="sm" wrap="nowrap">
+      <div className={classes.row}>
+        <div className={classes.identity}>
           <ActionIcon
             variant="subtle"
             color="gray"
+            className={classes.grip}
             ref={setActivatorNodeRef}
             aria-label={`Reorder ${username}`}
             style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
@@ -94,26 +99,35 @@ export function StreamerRow(
           >
             <IconGripVertical size={16} />
           </ActionIcon>
-          <Text size="sm" c="dimmed" ff="monospace" w={20}>{index + 1}</Text>
-          <StreamerAvatar
-            login={username}
-            avatarUrl={status?.avatarUrl ?? null}
-            size={28}
-            live={status?.isOnline === true}
-          />
+          <Text size="sm" c="dimmed" ff="monospace" w={20} className={classes.index}>
+            {index + 1}
+          </Text>
+          <div className={classes.avatar}>
+            <StreamerAvatar
+              login={username}
+              avatarUrl={status?.avatarUrl ?? null}
+              size={28}
+              live={status?.isOnline === true}
+            />
+          </div>
+          {/* The full name in `title`: this is the element that truncates,
+              so the whole of it has to stay available somewhere. */}
           <Text
             component="a"
             href={`https://twitch.tv/${username}`}
             target="_blank"
             rel="noopener noreferrer"
             fw={500}
-            style={{ color: "inherit", textDecoration: "none" }}
+            truncate
+            className={classes.name}
+            title={username}
           >
             {username}
           </Text>
           {watching && (
             <Badge
               size="xs" variant="light" color="twitch" data-testid="watching-tag"
+              className={classes.badge}
               title="The miner is currently watching this channel."
             >
               watching
@@ -122,13 +136,15 @@ export function StreamerRow(
           {/* Live state is what the ordering decision is actually made on,
               so it sits on the row being dragged. Absent when the miner is
               unreachable -- see StatusPill. */}
-          <StatusPill
-            isOnline={status?.isOnline ?? null}
-            liveSince={status?.liveSince ?? null}
-            lastLive={status?.lastLive ?? null}
-          />
-        </Group>
-        <Group gap="xs" wrap="nowrap">
+          <div className={classes.status}>
+            <StatusPill
+              isOnline={status?.isOnline ?? null}
+              liveSince={status?.liveSince ?? null}
+              lastLive={status?.lastLive ?? null}
+            />
+          </div>
+        </div>
+        <div className={classes.controls}>
           <Switch
             checked={enabled}
             onChange={onToggle}
@@ -157,8 +173,8 @@ export function StreamerRow(
               <IconX size={16} />
             </ActionIcon>
           </Tooltip>
-        </Group>
-      </Group>
+        </div>
+      </div>
     </Card>
   );
 }

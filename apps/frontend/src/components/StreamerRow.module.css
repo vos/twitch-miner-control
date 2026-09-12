@@ -1,0 +1,166 @@
+/* The row is a grid, not nested flex rows.
+
+   It was two `wrap="nowrap"` Groups, and the identity side sized itself
+   from its content -- grip, number, avatar, full name, badge, pill --
+   then won the space outright and pushed the controls past the card's
+   edge, where the card's overflow clipped them. At 320px even a
+   two-character name put the switch, the settings button and the remove
+   button outside the card: the controls this screen exists to operate
+   could not be reached at all on a phone.
+
+   Two columns set the priority instead. The controls take their
+   intrinsic width and never shrink; the identity column gives way. */
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  /* The list sits in a shell with a sidebar, so the row is narrow at
+     viewport widths a media query would still call wide. The queries
+     below therefore ask about this row, not the screen. */
+  container-type: inline-size;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Without this the flex row takes its max-content width and the grid's
+     1fr cannot shrink it -- the overflow comes straight back. */
+  min-width: 0;
+  /* Reserved inside the column, not as a margin on the pill: the name
+     truncates to fill whatever the pill leaves, so the pill always ends
+     exactly at the column edge and a margin on it has nothing to push
+     against. Padding here takes the space out of the column first, so a
+     solid red LIVE block never butts against the switch. */
+  padding-right: 6px;
+}
+
+/* Positional furniture: a drag handle that shrinks is one that misses. */
+.grip,
+.index,
+.avatar {
+  flex-shrink: 0;
+}
+
+/* The only element that gives up width, and the floor is deliberately
+   low. The pill cannot shrink, so a floor here is what stops the row
+   fitting: anything above 2em and the pill overflows the column and
+   overlaps the switch -- the original bug. 2em is the most the name can
+   hold without reintroducing it. Readability at the narrowest widths is
+   covered by dropping the badge and then wrapping to two lines. */
+.identity > .name {
+  /* Sized from its own text but free to shrink all the way: the name is
+     the only element that gives up width, and it does so instead of the
+     row ever wrapping. An earlier version broke the pill onto a second
+     line on narrow rows, but the break was decided per row-width rather
+     than per name, so short names wrapped with room to spare and left a
+     ragged half-empty line -- worse than a truncated name. */
+  flex: 0 1 auto;
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+
+.identity > .name:hover {
+  text-decoration: underline;
+}
+
+/* Never truncated, matching StreamerMeta: a badge clipped to "wat..." is
+   worse than no badge. It is dropped whole on a narrow row instead. */
+.badge {
+  flex-shrink: 0;
+}
+
+/* The pill keeps its whole text. StatusPill sets `flex-shrink: 0` on
+   itself and any attempt to override that here just moves the overflow
+   inside this wrapper -- the pill keeps its width and paints over the
+   switch regardless. So the name absorbs the shrinking instead, and the
+   two-line wrap below covers the widths where that is not enough.
+
+   The gap from the switch is reserved by .identity's padding. */
+.status {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* The point of the screen. Nothing here shrinks, wraps or clips. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Mid widths: the row fits, but a long duration ("LIVE 18h 32m" is
+   ~109px) leaves the name about 32px -- "stre...", which identifies
+   nothing. The duration goes instead: that a channel is live is the
+   signal the ordering decision rests on, how long it has been live is
+   detail, and the dashboard card carries it in full. Dropping it here
+   also keeps the row on one line rather than wrapping, which at these
+   widths left a ragged second line under a half-empty first one. */
+@container (max-width: 30rem) {
+  .status [data-testid="live-span"],
+  .status [data-testid="offline-span"] {
+    display: none;
+  }
+}
+
+/* The tint and border already mark a watched channel, so the badge is
+   the first thing to go when the row runs short. The threshold is high
+   on purpose: the badge is ~130px of fixed width competing with the one
+   element that identifies the row, and a name cut to "s..." beside an
+   intact WATCHING tag has the priority backwards. */
+@container (max-width: 34rem) {
+  .badge {
+    display: none;
+  }
+}
+
+/* Below this the name has hit its floor and the pill -- which never
+   shrinks -- still has nowhere to go, so it overlaps the switch: the
+   original bug. Only here does the identity block wrap to two lines.
+
+   The threshold is measured rather than guessed, and deliberately kept
+   at the point where the layout actually fails: below ~22rem the pill
+   overlaps the switch outright.
+
+   Between roughly 22 and 24rem a row with a long name and a long
+   duration ("LIVE 18h 32m" is ~109px) fits but leaves the name about
+   32px. Wrapping that band too was tried and rejected -- it broke rows
+   that had room to spare, leaving a ragged second line under a
+   half-empty first one, which reads worse than a truncated name. */
+@container (max-width: 22rem) {
+  .identity {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "grip index avatar name"
+      "status status status status";
+    column-gap: 6px;
+    row-gap: 2px;
+    align-items: center;
+  }
+
+  .grip { grid-area: grip; }
+  .index { grid-area: index; }
+  .avatar { grid-area: avatar; }
+
+  /* Flex sizing no longer applies to a grid item, and the floor above
+     would hold the column open; a full-width box in a minmax(0, 1fr)
+     column is what makes the ellipsis appear. */
+  .identity > .name {
+    grid-area: name;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .status {
+    grid-area: status;
+    justify-self: start;
+  }
+}
