@@ -1,0 +1,19 @@
+/* Badge renders a <div> by default; as a button it needs the cursor and
+   a reset of the UA button styling that Mantine's Badge does not expect
+   to be carrying.
+
+   Deliberately NOT `font: inherit` -- the shorthand resets font-size,
+   weight and letter-spacing along with the family, which wipes the
+   typography Mantine's size="sm" sets. Only the family is inherited.
+
+   The figures then get lining, tabular numerals. Inter's default
+   numerals are taller than its cap height, so "DROP 36/60M" read as a
+   larger badge than "WATCHING" beside it at exactly the same
+   font-size; `lining-nums` aligns them to the caps, and `tabular-nums`
+   stops the badge reflowing as the minutes tick up. */
+.badge {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  font-variant-numeric: lining-nums tabular-nums;
+}

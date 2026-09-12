@@ -13,7 +13,7 @@ const base: StreamerState = {
   liveSince: null, streamId: null, lastLive: null, lastActivity: null,
   online24h: 0, mined24h: 0, minedTotal: 0, pointsPerHour: null,
   multiplier: null, claimPending: false, watching: false, goal: null,
-  game: null, streamTitle: null, viewers: null,
+  game: null, streamTitle: null, viewers: null, drop: null,
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -557,4 +557,97 @@ test("shows the viewer count even when the channel has no category", () => {
   // live channel with no category set still has an audience.
   view({ game: null, viewers: 1200 });
   expect(screen.getByTestId("viewers")).toHaveTextContent("1.2K");
+});
+
+const dropAt = (over: object = {}) => ({
+  name: "Crate", minutes: 45, required: 60, claimable: false,
+  benefits: ["Weapon Charm"], endsAt: null, ...over,
+});
+
+test("shows how far along the next drop is", () => {
+  view({ drop: dropAt() });
+  const badge = screen.getByTestId("drop");
+  expect(badge).toHaveTextContent("45");
+  expect(badge).toHaveTextContent("60");
+});
+
+test("marks a drop that is ready to collect", () => {
+  // Waiting to be claimed is a different state from still accruing --
+  // one is actionable, the other is just progress.
+  view({ drop: dropAt({ minutes: 60, claimable: true }) });
+  expect(screen.getByTestId("drop")).toHaveAttribute("data-claimable", "true");
+});
+
+test("shows no drop badge when the channel has none", () => {
+  view({ drop: null });
+  expect(screen.queryByTestId("drop")).not.toBeInTheDocument();
+});
+
+test("names the drop for assistive tech, not just as a bar", () => {
+  view({ drop: dropAt() });
+  expect(screen.getByTestId("drop")).toHaveAccessibleName(/Crate/);
+});
+
+test("survives a snapshot with no drop field at all", () => {
+  const { drop: _d, ...older } = base;
+  render(
+    <MantineProvider><StreamerCard streamer={older as StreamerState} /></MantineProvider>,
+  );
+  expect(screen.queryByTestId("drop")).not.toBeInTheDocument();
+  expect(screen.getByTestId("balance")).toBeInTheDocument();
+});
+
+test("opens the drop detail on tap, not hover alone", async () => {
+  // A Tooltip never opens on a touch device, which is where the detail
+  // was unreachable -- the same reason the stream title uses a Popover.
+  const user = userEvent.setup();
+  view({ drop: dropAt() });
+  await user.click(screen.getByTestId("drop"));
+  expect(await screen.findByTestId("drop-detail")).toBeInTheDocument();
+});
+
+test("names the drop and what it awards in the detail", () => {
+  view({ drop: dropAt({ benefits: ["Weapon Charm", "500 Credits"] }) });
+  // Rendered up front rather than behind the click, so the assertion is
+  // about content rather than the disclosure.
+  expect(screen.getByTestId("drop")).toHaveAccessibleName(/Crate/);
+});
+
+test("says how much longer the drop needs", async () => {
+  const user = userEvent.setup();
+  view({ drop: dropAt({ minutes: 45, required: 60 }) });
+  await user.click(screen.getByTestId("drop"));
+  expect(await screen.findByTestId("drop-remaining")).toHaveTextContent("15");
+});
+
+test("reports a drop whose minutes are met as ready rather than 0 to go", async () => {
+  const user = userEvent.setup();
+  view({ drop: dropAt({ minutes: 60, required: 60, claimable: true }) });
+  await user.click(screen.getByTestId("drop"));
+  const remaining = await screen.findByTestId("drop-remaining");
+  expect(remaining).toHaveTextContent(/ready/i);
+  expect(remaining).not.toHaveTextContent("0 minutes");
+});
+
+test("shows the campaign deadline when there is one", async () => {
+  const user = userEvent.setup();
+  view({ drop: dropAt({ endsAt: Date.now() + 3 * 86_400_000 }) });
+  await user.click(screen.getByTestId("drop"));
+  expect(await screen.findByTestId("drop-ends")).toHaveTextContent("3d");
+});
+
+test("omits the deadline line when none was reported", async () => {
+  const user = userEvent.setup();
+  view({ drop: dropAt({ endsAt: null }) });
+  await user.click(screen.getByTestId("drop"));
+  await screen.findByTestId("drop-detail");
+  expect(screen.queryByTestId("drop-ends")).not.toBeInTheDocument();
+});
+
+test("omits the benefits line when the miner reported none", async () => {
+  const user = userEvent.setup();
+  view({ drop: dropAt({ benefits: [] }) });
+  await user.click(screen.getByTestId("drop"));
+  await screen.findByTestId("drop-detail");
+  expect(screen.queryByTestId("drop-benefits")).not.toBeInTheDocument();
 });

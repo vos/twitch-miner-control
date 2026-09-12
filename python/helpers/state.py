@@ -185,6 +185,59 @@ def _profile(user) -> dict:
         ),
     }
 
+def _next_drop(campaign_ids: list, campaigns: dict) -> dict | None:
+    """The nearest unclaimed drop across a channel's campaigns.
+
+    A campaign ladders its drops -- 30, 60, 120 minutes -- so "the drop"
+    for a channel is the next one still to earn. Ordered by minutes
+    required so the answer is the one worth waiting for rather than
+    whichever the API happened to list first.
+
+    A drop is skipped once claimed: it is no longer something the viewer
+    can earn, and reporting it would put a finished bar on the card.
+    `claimable` marks the other end -- the minutes are met and Twitch has
+    minted an instance id, so it is sitting there to be collected.
+
+    None when the channel has no campaign, or every drop in it is done.
+    """
+    remaining = []
+    for cid in campaign_ids:
+        campaign = campaigns.get(cid)
+        if campaign is None:
+            continue
+        for drop in getattr(campaign, "time_based_drops", None) or []:
+            edge = getattr(drop, "self_edge", None)
+            if edge is None or getattr(edge, "is_claimed", False):
+                continue
+            required = getattr(drop, "required_minutes_watched", 0) or 0
+            if required <= 0:
+                continue
+            remaining.append((required, drop, edge))
+
+    if not remaining:
+        return None
+    required, drop, edge = min(remaining, key=lambda r: r[0])
+    watched = getattr(edge, "current_minutes_watched", 0) or 0
+    end_at = getattr(drop, "end_at", None)
+    return {
+        "name": getattr(drop, "name", None) or "Drop",
+        # Clamped: Twitch keeps counting past the requirement, and a bar
+        # reporting 71/60 reads as a bug rather than a finished drop.
+        "minutes": min(watched, required),
+        "required": required,
+        "claimable": getattr(edge, "drop_instance_id", None) is not None,
+        # What the drop actually awards. Twitch lists one edge per benefit
+        # instance, so a drop granting two of an item repeats the name --
+        # deduped while keeping order, since "Crate, Crate" reads as a bug.
+        "benefits": list(dict.fromkeys(getattr(drop, "benefits", None) or [])),
+        # Epoch ms: end_at is a timezone-aware datetime from upstream's
+        # expect_iso_8601, and datetime is not JSON serialisable, so it
+        # would raise in serve()'s json.dumps if passed through.
+        "endsAt": (
+            int(end_at.timestamp() * 1000) if end_at is not None else None
+        ),
+    }
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -217,6 +270,10 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"profiles": self._profiles(req["streamers"])}}
+            if op == "drops":
+                self._ensure_token()
+                return {"id": req_id, "ok": True,
+                        "data": {"drops": self._drops(req["streamers"])}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -324,6 +381,54 @@ class Handler:
                     auth_error = exc
                     break
                 out[username] = _EMPTY_PROFILE.copy()
+        if auth_error is not None:
+            raise auth_error
+        return out
+
+    def _drops(self, streamers: dict) -> dict:
+        """The next unclaimed drop per channel, or None where there is none.
+
+        Three GQL calls stitched together, because no single one answers
+        the question:
+
+          - get_available_drops(channel_id) gives the campaign ids this
+            channel is currently running -- ids only, no names, no
+            progress. Per channel, so it is the expensive half.
+          - get_inventory() gives progress for every campaign we have
+            started, across all channels. Global, so it is fetched ONCE
+            for the whole batch rather than per streamer.
+
+        The inventory is global, which is the trap here: it holds
+        campaigns for channels we are not asking about. Only ids the
+        channel itself reported may be attributed to it, or a drop
+        earned elsewhere would show up on the wrong card.
+
+        `streamers` maps login -> channel id, since the available-drops
+        query is keyed by channel id while everything the caller holds
+        is keyed by login.
+        """
+        out = {}
+        # Fetched before the loop: one global call, not one per channel.
+        # An auth failure here is about the session and must propagate.
+        inventory = self.session.gql.get_inventory()
+        campaigns = {
+            c.id: c for c in (getattr(inventory, "campaigns", None) or [])
+        }
+
+        auth_error = None
+        for login, channel_id in streamers.items():
+            try:
+                ids = getattr(
+                    self.session.gql.get_available_drops(channel_id), "ids", None
+                ) or []
+                out[login] = _next_drop(ids, campaigns)
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    auth_error = exc
+                    break
+                # One unreachable channel must not cost the whole batch --
+                # the same contract as _state and _profiles.
+                out[login] = None
         if auth_error is not None:
             raise auth_error
         return out

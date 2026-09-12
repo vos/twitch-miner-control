@@ -1,5 +1,6 @@
 import { Badge, Group, Progress, Text, Tooltip, UnstyledButton } from "@mantine/core";
 import { useState } from "react";
+import { DropBadge } from "./DropBadge.js";
 import classes from "./StreamerMeta.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -28,6 +29,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   // them `undefined`, and a strict `!== null` test lets undefined through
   // to a property access that takes the whole dashboard down.
   const goal = s.goal ?? null;
+  const drop = s.drop ?? null;
   const multiplier = s.multiplier ?? null;
   const claimPending = s.claimPending ?? false;
   const watching = s.watching ?? false;
@@ -74,6 +76,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
           </Badge>
         </Tooltip>
       )}
+      {drop !== null && <DropBadge drop={drop} />}
       {s.pointsEnabled === false && (
         <Tooltip label="Channel points are disabled for this channel, so the balance cannot move.">
           <Badge color="yellow" variant="light" size="sm" data-testid="points-disabled">
@@ -87,7 +90,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   // An empty strip still costs a row gap on every card that has none of
   // these, so the whole thing is omitted rather than rendered blank.
   const hasBadges = multiplier !== null || claimPending || watching
-    || s.pointsEnabled === false;
+    || drop !== null || s.pointsEnabled === false;
   if (!hasBadges && goal === null) return null;
 
   return (

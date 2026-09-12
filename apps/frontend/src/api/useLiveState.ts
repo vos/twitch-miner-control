@@ -79,6 +79,23 @@ export interface StreamerState {
    * backend, or null when the channel is offline.
    */
   viewers?: number | null;
+  /**
+   * The next drop this channel has still to earn, or null when it has
+   * none. Also null when the miner is not claiming drops for the
+   * channel -- we have not looked, rather than found nothing, so the
+   * card shows no badge either way.
+   */
+  drop?: {
+    name: string;
+    minutes: number;
+    required: number;
+    /** Minutes met and waiting to be collected, not merely in progress. */
+    claimable: boolean;
+    /** What the drop awards; empty when the miner did not report any. */
+    benefits: string[];
+    /** Campaign deadline in epoch ms, or null when unknown. */
+    endsAt: number | null;
+  } | null;
 }
 
 export interface StateSnapshot {

@@ -5,6 +5,7 @@ import { downsample } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
 import type { ProfileRowData } from "./profiles.js";
+import type { DropProgress, DropsTarget } from "./drops.js";
 import { roundViewers } from "./viewers.js";
 
 export interface StreamerState {
@@ -106,6 +107,19 @@ export interface StreamerState {
   claimPending: boolean;
   /** The channel's active community goal, or null when it has none. */
   goal: { title: string; contributed: number; needed: number } | null;
+  /**
+   * The next drop this channel has still to earn, or null when it has
+   * none -- including when the miner is not claiming drops for it, in
+   * which case we have not looked rather than found nothing.
+   */
+  drop: {
+    name: string;
+    minutes: number;
+    required: number;
+    claimable: boolean;
+    benefits: string[];
+    endsAt: number | null;
+  } | null;
   /** The channel's category, or null when it has none set. */
   game: string | null;
   /**
@@ -128,7 +142,7 @@ export type RawStreamerState = Omit<
   | "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
   | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
-  | "game" | "streamTitle" | "viewers"
+  | "game" | "streamTitle" | "viewers" | "drop"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
   streamStartedAt: number | null;
@@ -203,6 +217,13 @@ export interface StateServiceDeps {
       logins: string[],
       live: ReadonlySet<string>,
     ): Promise<Map<string, ProfileRowData>>;
+  };
+  /**
+   * Drop progress, on its own slow clock. Absent, every streamer simply
+   * reports a null drop.
+   */
+  drops?: {
+    resolve(targets: DropsTarget[]): Promise<Map<string, DropProgress>>;
   };
 }
 
@@ -394,6 +415,17 @@ export class StateService extends EventEmitter {
             .catch(() => new Map<string, ProfileRowData>())
         : new Map<string, ProfileRowData>();
 
+      // Live channels only: a drop accrues from watch time, so an offline
+      // channel has nothing moving. The cache holds its own 10-minute
+      // clock, so this is a cheap call on most passes.
+      const drops = this.deps.drops
+        ? await this.deps.drops
+            .resolve(data.streamers
+              .filter((s) => s.isOnline === true)
+              .map((s) => ({ username: s.username, channelId: s.channelId })))
+            .catch(() => new Map<string, DropProgress>())
+        : new Map<string, DropProgress>();
+
       const before = JSON.stringify(this.streamers);
       const previous = new Map(this.streamers.map((s) => [s.username, s]));
       const at = this.now();
@@ -461,6 +493,7 @@ export class StateService extends EventEmitter {
         ));
 
         const profile = profiles.get(normaliseUsername(s.username));
+        const drop = drops.get(normaliseUsername(s.username)) ?? null;
         return {
           ...s,
           gained24h,
@@ -469,6 +502,7 @@ export class StateService extends EventEmitter {
             anchor === null || typeof s.points !== "number" ? null : s.points - anchor,
           spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
           avatarUrl: profile?.avatarUrl ?? null,
+          drop,
           game: profile?.game ?? null,
           streamTitle: profile?.title ?? null,
           // Damped so a count that drifts every poll does not push an SSE

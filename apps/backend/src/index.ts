@@ -22,6 +22,8 @@ import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer, updateChecker } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { ProfileCache } from "./state/profiles.js";
+import { DropsCache } from "./state/drops.js";
+import { dropsEligible } from "./state/dropsEligible.js";
 import { resolveRoster } from "./state/roster.js";
 import { StateService } from "./state/service.js";
 
@@ -167,11 +169,19 @@ function resolveStreamers(): Promise<string[]> {
 
 const profileCache = new ProfileCache({ profiles: new Profiles(db), client: helper });
 
+// Config is re-read per call rather than captured: toggling claimDrops
+// must take effect on the next pass, not at the next restart.
+const dropsCache = new DropsCache({
+  client: helper,
+  eligible: (login) => dropsEligible(loadConfig(configPath), login),
+});
+
 const stateService = new StateService({
   client: helper,
   history,
   getStreamers: resolveStreamers,
   profiles: profileCache,
+  drops: dropsCache,
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
