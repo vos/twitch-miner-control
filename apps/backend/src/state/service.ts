@@ -4,6 +4,8 @@ import { attribute } from "./attribute.js";
 import { downsample } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
+import type { ProfileRowData } from "./profiles.js";
+import { roundViewers } from "./viewers.js";
 
 export interface StreamerState {
   username: string;
@@ -104,6 +106,20 @@ export interface StreamerState {
   claimPending: boolean;
   /** The channel's active community goal, or null when it has none. */
   goal: { title: string; contributed: number; needed: number } | null;
+  /** The channel's category, or null when it has none set. */
+  game: string | null;
+  /**
+   * The stream's title. Not rendered on the card itself -- it is long,
+   * emoji-laden and changes mid-stream -- but carried for the popover.
+   */
+  streamTitle: string | null;
+  /**
+   * Current viewers, rounded to three significant figures, or null when
+   * the channel is offline. Rounded because the snapshot comparison that
+   * gates SSE frames is a whole-object compare: an exact count moves
+   * every poll and would wake every browser for nothing.
+   */
+  viewers: number | null;
 }
 
 /** What the Python helper reports, before this service derives the rest. */
@@ -112,6 +128,7 @@ export type RawStreamerState = Omit<
   | "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
   | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
+  | "game" | "streamTitle" | "viewers"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
   streamStartedAt: number | null;
@@ -181,7 +198,12 @@ export interface StateServiceDeps {
    * Optional so tests (and a boot before the cache exists) can run
    * without one. Absent, every streamer simply reports a null avatar.
    */
-  avatars?: { resolve(logins: string[]): Promise<Map<string, string | null>> };
+  profiles?: {
+    resolve(
+      logins: string[],
+      live: ReadonlySet<string>,
+    ): Promise<Map<string, ProfileRowData>>;
+  };
 }
 
 export class StateService extends EventEmitter {
@@ -353,15 +375,24 @@ export class StateService extends EventEmitter {
       const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
       );
-      // Resolved after the state response is in hand, so an avatar lookup
+      // Resolved after the state response is in hand, so a profile lookup
       // can never widen the balance poll it rides along with. Failures are
-      // swallowed here as well as inside AvatarCache: this must degrade to
-      // monograms, never to a stale or errored snapshot.
-      const avatars = this.deps.avatars
-        ? await this.deps.avatars
-            .resolve(data.streamers.map((s) => s.username))
-            .catch(() => new Map<string, string | null>())
-        : new Map<string, string | null>();
+      // swallowed here as well as inside ProfileCache: this must degrade
+      // to monograms, never to a stale or errored snapshot.
+      //
+      // The live set drives which channels get their volatile fields
+      // refreshed: an offline channel has no viewer count to go stale, so
+      // refreshing it would spend a GQL call on nothing.
+      const liveNow = new Set(
+        data.streamers
+          .filter((s) => s.isOnline === true)
+          .map((s) => normaliseUsername(s.username)),
+      );
+      const profiles = this.deps.profiles
+        ? await this.deps.profiles
+            .resolve(data.streamers.map((s) => s.username), liveNow)
+            .catch(() => new Map<string, ProfileRowData>())
+        : new Map<string, ProfileRowData>();
 
       const before = JSON.stringify(this.streamers);
       const previous = new Map(this.streamers.map((s) => [s.username, s]));
@@ -429,6 +460,7 @@ export class StateService extends EventEmitter {
           clip(this.deps.history.minerSpans(), 0, at),
         ));
 
+        const profile = profiles.get(normaliseUsername(s.username));
         return {
           ...s,
           gained24h,
@@ -436,7 +468,12 @@ export class StateService extends EventEmitter {
           gainedStream:
             anchor === null || typeof s.points !== "number" ? null : s.points - anchor,
           spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
-          avatarUrl: avatars.get(normaliseUsername(s.username)) ?? null,
+          avatarUrl: profile?.avatarUrl ?? null,
+          game: profile?.game ?? null,
+          streamTitle: profile?.title ?? null,
+          // Damped so a count that drifts every poll does not push an SSE
+          // frame to every browser -- see roundViewers.
+          viewers: roundViewers(profile?.viewers ?? null),
           liveSince: s.streamStartedAt,
           lastLive: this.deps.history.lastLive(s.username),
           lastActivity: this.deps.history.lastActivity(s.username),

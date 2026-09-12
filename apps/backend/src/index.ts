@@ -21,7 +21,7 @@ import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer, updateChecker } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
-import { AvatarCache } from "./state/avatars.js";
+import { ProfileCache } from "./state/profiles.js";
 import { resolveRoster } from "./state/roster.js";
 import { StateService } from "./state/service.js";
 
@@ -165,13 +165,13 @@ function resolveStreamers(): Promise<string[]> {
   });
 }
 
-const avatars = new AvatarCache({ profiles: new Profiles(db), client: helper });
+const profileCache = new ProfileCache({ profiles: new Profiles(db), client: helper });
 
 const stateService = new StateService({
   client: helper,
   history,
   getStreamers: resolveStreamers,
-  avatars,
+  profiles: profileCache,
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");

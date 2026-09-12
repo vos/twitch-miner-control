@@ -61,11 +61,12 @@ def goal(title="New emotes", contributed=3000, needed=10000, status="STARTED",
 
 class FakeGQL:
     def __init__(self, balances=None, live=None, follows=None, avatars=None,
-                 stream_id="s1", started_at=None):
+                 stream_id="s1", started_at=None, stream_info=None):
         self.balances = balances or {}
         self.live = live or {}
         self.follows = follows or []
         self.avatars = avatars or {}
+        self.stream_info = stream_info or {}
         self.stream_id = stream_id
         self.started_at = started_at or datetime.datetime(
             2026, 9, 6, 8, 15, tzinfo=datetime.timezone.utc
@@ -75,7 +76,27 @@ class FakeGQL:
         value = self.avatars.get(username)
         if isinstance(value, Exception):
             raise value
-        return SimpleNamespace(user=SimpleNamespace(profile_image_url=value))
+        # The real response carries the broadcast settings and the live
+        # stream alongside the picture -- this one call is where category,
+        # title and viewer count all come from.
+        info = self.stream_info.get(username, {})
+        stream = (
+            SimpleNamespace(viewers_count=info["viewers"])
+            if "viewers" in info
+            else None
+        )
+        return SimpleNamespace(user=SimpleNamespace(
+            profile_image_url=value,
+            broadcast_settings=SimpleNamespace(
+                title=info.get("title"),
+                game=(
+                    SimpleNamespace(display_name=info["game"])
+                    if info.get("game") is not None
+                    else None
+                ),
+            ),
+            stream=stream,
+        ))
 
     def get_channel_points_context(self, username):
         if username not in self.balances:
@@ -537,18 +558,20 @@ def test_lookup_still_reports_a_real_gql_failure_as_an_error():
 
 def test_avatars_returns_a_login_to_url_mapping():
     h = handler(avatars={"alpha": "https://cdn/a.png", "beta": "https://cdn/b.png"})
-    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha", "beta"]})
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha", "beta"]})
     assert out["ok"] is True
-    assert out["data"]["avatars"] == {
-        "alpha": "https://cdn/a.png",
-        "beta": "https://cdn/b.png",
+    assert out["data"]["profiles"] == {
+        "alpha": {"avatarUrl": "https://cdn/a.png", "game": None,
+                  "title": None, "viewers": None},
+        "beta": {"avatarUrl": "https://cdn/b.png", "game": None,
+                 "title": None, "viewers": None},
     }
 
 
 def test_avatars_reports_none_for_a_channel_without_one():
     h = handler(avatars={"alpha": None})
-    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha"]})
-    assert out["data"]["avatars"] == {"alpha": None}
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})
+    assert out["data"]["profiles"]["alpha"]["avatarUrl"] is None
 
 
 def test_one_failing_name_does_not_lose_the_rest_of_the_batch():
@@ -556,9 +579,10 @@ def test_one_failing_name_does_not_lose_the_rest_of_the_batch():
         "alpha": RuntimeError("channel is gone"),
         "beta": "https://cdn/b.png",
     })
-    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha", "beta"]})
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha", "beta"]})
     assert out["ok"] is True
-    assert out["data"]["avatars"] == {"alpha": None, "beta": "https://cdn/b.png"}
+    assert out["data"]["profiles"]["alpha"]["avatarUrl"] is None
+    assert out["data"]["profiles"]["beta"]["avatarUrl"] == "https://cdn/b.png"
 
 
 def test_auth_failure_propagates_rather_than_degrading_to_null():
@@ -570,14 +594,14 @@ def test_auth_failure_propagates_rather_than_degrading_to_null():
         "alpha": requests.exceptions.HTTPError(response=response),
     })
     h.session.is_logged_in = lambda: False
-    out = h.handle({"id": 1, "op": "avatars", "streamers": ["alpha"]})
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})
     assert out["ok"] is False
     assert out["code"] == "AUTH"
 
 
 def test_avatars_requires_the_streamers_field():
     h = handler()
-    out = h.handle({"id": 1, "op": "avatars"})
+    out = h.handle({"id": 1, "op": "profiles"})
     assert out["ok"] is False
     assert out["code"] == "BAD_REQUEST"
 
@@ -777,3 +801,59 @@ def test_unknown_channel_reports_the_new_fields_too():
     assert out["multiplier"] is None
     assert out["claimPending"] is False
     assert out["goal"] is None
+
+
+def test_profiles_reports_category_and_viewers_for_a_live_channel():
+    """All three ride the call the avatar lookup already made -- the same
+    response carries broadcastSettings and the running stream."""
+    h = handler(
+        avatars={"alpha": "https://cdn/a.png"},
+        stream_info={"alpha": {"game": "Just Chatting", "title": "chill stream",
+                               "viewers": 1247}},
+    )
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})
+    assert out["data"]["profiles"]["alpha"] == {
+        "avatarUrl": "https://cdn/a.png",
+        "game": "Just Chatting",
+        "title": "chill stream",
+        "viewers": 1247,
+    }
+
+
+def test_profiles_reports_null_viewers_for_an_offline_channel():
+    """An offline channel has no stream, so it has no viewer count -- 0
+    would be a claim that nobody is watching a running stream."""
+    h = handler(
+        avatars={"alpha": "https://cdn/a.png"},
+        stream_info={"alpha": {"game": "Just Chatting", "title": "back soon"}},
+    )
+    out = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})
+    row = out["data"]["profiles"]["alpha"]
+    assert row["viewers"] is None
+    # The category survives the stream ending: it is a broadcast setting,
+    # not a property of the running stream.
+    assert row["game"] == "Just Chatting"
+
+
+def test_profiles_handles_a_channel_with_no_category_set():
+    h = handler(
+        avatars={"alpha": "https://cdn/a.png"},
+        stream_info={"alpha": {"game": None, "title": "untitled", "viewers": 5}},
+    )
+    row = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})["data"]["profiles"]["alpha"]
+    assert row["game"] is None
+    assert row["viewers"] == 5
+
+
+def test_profiles_survives_a_response_without_the_newer_fields():
+    """A miner build whose parser predates broadcastSettings must still
+    yield an avatar rather than failing the whole profile batch."""
+    h = handler(avatars={"alpha": "https://cdn/a.png"})
+    h.session.gql.video_player_stream_info_overlay_channel = (
+        lambda username: SimpleNamespace(
+            user=SimpleNamespace(profile_image_url="https://cdn/a.png")
+        )
+    )
+    row = h.handle({"id": 1, "op": "profiles", "streamers": ["alpha"]})["data"]["profiles"]["alpha"]
+    assert row == {"avatarUrl": "https://cdn/a.png", "game": None,
+                   "title": None, "viewers": None}

@@ -66,6 +66,19 @@ export interface StreamerState {
    * Kept behind a disclosure on the card -- see StreamerMeta.
    */
   goal?: { title: string; contributed: number; needed: number } | null;
+  /** The channel's category, or null when none is set. */
+  game?: string | null;
+  /**
+   * The stream's title. Shown only in the context popover, never inline:
+   * titles run long and change mid-stream, so the card would truncate it
+   * to noise.
+   */
+  streamTitle?: string | null;
+  /**
+   * Current viewers, already rounded to three significant figures by the
+   * backend, or null when the channel is offline.
+   */
+  viewers?: number | null;
 }
 
 export interface StateSnapshot {

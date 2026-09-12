@@ -13,6 +13,7 @@ const base: StreamerState = {
   liveSince: null, streamId: null, lastLive: null, lastActivity: null,
   online24h: 0, mined24h: 0, minedTotal: 0, pointsPerHour: null,
   multiplier: null, claimPending: false, watching: false, goal: null,
+  game: null, streamTitle: null, viewers: null,
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -447,4 +448,57 @@ test("dims a multiplier on an offline channel rather than dropping it", () => {
 test("shows an active multiplier as active while the channel is live", () => {
   view({ isOnline: true, multiplier: 1.5 });
   expect(screen.getByTestId("multiplier")).toHaveAttribute("data-idle", "false");
+});
+
+test("shows the category and viewer count under the streamer name", () => {
+  view({ game: "Just Chatting", viewers: 1200 });
+  const context = screen.getByTestId("stream-context");
+  expect(context).toHaveTextContent("Just Chatting");
+  expect(context).toHaveTextContent("1.2K");
+});
+
+test("shows the category alone when the channel is offline", () => {
+  // A stream that is not running has no audience, so there is no count
+  // to print beside the category.
+  view({ isOnline: false, game: "Just Chatting", viewers: null });
+  const context = screen.getByTestId("stream-context");
+  expect(context).toHaveTextContent("Just Chatting");
+  expect(context).not.toHaveTextContent("K");
+});
+
+test("shows no context line when the category is unknown", () => {
+  view({ game: null, viewers: null });
+  expect(screen.queryByTestId("stream-context")).not.toBeInTheDocument();
+});
+
+test("keeps the stream title off the card itself", () => {
+  // Titles are long, emoji-laden and change mid-stream -- on a 320px
+  // card the line would truncate to noise.
+  view({ game: "Just Chatting", streamTitle: "!drops enabled // day 4" });
+  expect(screen.queryByText(/day 4/)).not.toBeInTheDocument();
+});
+
+test("reveals the stream title on tap, so it is reachable without hover", async () => {
+  const user = userEvent.setup();
+  view({ game: "Just Chatting", streamTitle: "!drops enabled // day 4" });
+  await user.click(screen.getByTestId("stream-context"));
+  expect(await screen.findByText("!drops enabled // day 4")).toBeInTheDocument();
+});
+
+test("offers no popover when the channel has no title set", () => {
+  view({ game: "Just Chatting", streamTitle: null });
+  const context = screen.getByTestId("stream-context");
+  expect(context.tagName).not.toBe("BUTTON");
+});
+
+test("does not close the title popover on the hover events a tap synthesises", async () => {
+  // A touch tap fires touchstart -> mouseenter -> click. With hover
+  // handlers bound unconditionally the mouseleave between them closed
+  // the popover the click had just opened, so on a phone -- the case a
+  // Popover exists for instead of a Tooltip -- the title was unreachable.
+  const user = userEvent.setup();
+  view({ game: "Just Chatting", streamTitle: "!drops enabled // day 4" });
+  const context = screen.getByTestId("stream-context");
+  await user.click(context);
+  expect(context).toHaveAttribute("aria-expanded", "true");
 });

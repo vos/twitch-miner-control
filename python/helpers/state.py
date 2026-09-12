@@ -159,6 +159,32 @@ def _goal(settings) -> dict | None:
         "needed": pick.amount_needed,
     }
 
+_EMPTY_PROFILE = {"avatarUrl": None, "game": None, "title": None, "viewers": None}
+
+
+def _profile(user) -> dict:
+    """Flatten one VideoPlayerStreamInfoOverlayChannel user into a row.
+
+    Every field is read with getattr: a miner build whose parser predates
+    broadcastSettings must still yield an avatar rather than failing the
+    whole profile batch.
+
+    `viewers` is None rather than 0 when the channel is offline. Zero is
+    a claim that a running stream has nobody watching it, which is a
+    different fact from there being no stream at all.
+    """
+    settings = getattr(user, "broadcast_settings", None)
+    game = getattr(settings, "game", None) if settings is not None else None
+    stream = getattr(user, "stream", None)
+    return {
+        "avatarUrl": getattr(user, "profile_image_url", None) or None,
+        "game": getattr(game, "display_name", None) if game is not None else None,
+        "title": getattr(settings, "title", None) if settings is not None else None,
+        "viewers": (
+            getattr(stream, "viewers_count", None) if stream is not None else None
+        ),
+    }
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -187,10 +213,10 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"streamers": self._state(req["streamers"])}}
-            if op == "avatars":
+            if op == "profiles":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
-                        "data": {"avatars": self._avatars(req["streamers"])}}
+                        "data": {"profiles": self._profiles(req["streamers"])}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -269,8 +295,14 @@ class Handler:
             raise auth_error
         return out
 
-    def _avatars(self, usernames: list[str]) -> dict:
-        """Profile picture URL per login, or None where there is none.
+    def _profiles(self, usernames: list[str]) -> dict:
+        """Avatar, category, stream title and viewer count per login.
+
+        All four come off ONE GQL call. This started as an avatar-only
+        lookup, but the response it was already making carries the
+        broadcast settings and the running stream too, so the category
+        and viewer count cost nothing beyond what the avatar refresh
+        already spent.
 
         Shaped like _state's loop for the same reason: one unreachable
         channel must not cost the whole batch, but an auth failure is
@@ -286,12 +318,12 @@ class Handler:
                 response = self.session.gql.video_player_stream_info_overlay_channel(
                     username
                 )
-                out[username] = getattr(response.user, "profile_image_url", None) or None
+                out[username] = _profile(response.user)
             except Exception as exc:
                 if _is_auth_error(exc):
                     auth_error = exc
                     break
-                out[username] = None
+                out[username] = _EMPTY_PROFILE.copy()
         if auth_error is not None:
             raise auth_error
         return out

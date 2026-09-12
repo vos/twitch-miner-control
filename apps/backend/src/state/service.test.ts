@@ -500,11 +500,47 @@ test("does not emit a change frame when only wall-clock time has passed", async 
 
 test("attaches the resolved avatar url to each streamer", async () => {
   const { service } = make([alpha(100)]);
-  (service as never as { deps: { avatars: unknown } }).deps.avatars = {
-    resolve: async () => new Map([["alpha", "https://cdn/a.png"]]),
-  };
+  stubProfiles(service, { avatarUrl: "https://cdn/a.png" });
   await service.refresh();
   expect(service.snapshot().streamers[0].avatarUrl).toBe("https://cdn/a.png");
+});
+
+/** Points the service at a profile cache yielding one row for alpha. */
+function stubProfiles(service: unknown, over: Record<string, unknown> = {}): void {
+  (service as { deps: { profiles: unknown } }).deps.profiles = {
+    resolve: async () => new Map([["alpha", {
+      avatarUrl: null, game: null, title: null, viewers: null, ...over,
+    }]]),
+  };
+}
+
+test("carries the category and stream title through to the snapshot", async () => {
+  const { service } = make([alpha(100)]);
+  stubProfiles(service, { game: "Just Chatting", title: "chill stream" });
+  await service.refresh();
+  const streamer = service.snapshot().streamers[0];
+  expect(streamer.game).toBe("Just Chatting");
+  expect(streamer.streamTitle).toBe("chill stream");
+});
+
+test("rounds the viewer count before it reaches a client", async () => {
+  // Exact counts drift every poll, and the snapshot comparison that
+  // gates SSE frames is a whole-object compare.
+  const { service } = make([alpha(100)]);
+  stubProfiles(service, { viewers: 18_432 });
+  await service.refresh();
+  expect(service.snapshot().streamers[0].viewers).toBe(18_400);
+});
+
+test("a drifting viewer count does not emit a change event", async () => {
+  const { service } = make([alpha(100), alpha(100)]);
+  stubProfiles(service, { viewers: 18_432 });
+  await service.refresh();
+  const changes = vi.fn();
+  service.on("change", changes);
+  stubProfiles(service, { viewers: 18_449 });
+  await service.refresh();
+  expect(changes).not.toHaveBeenCalled();
 });
 
 test("avatarUrl is null when no avatar cache is wired in", async () => {

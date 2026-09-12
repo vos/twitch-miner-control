@@ -1,5 +1,6 @@
 import { Group, Stack, Text } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
+import { StreamContext } from "./StreamContext.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamerMeta } from "./StreamerMeta.js";
 import { StreamerTimes } from "./StreamerTimes.js";
@@ -92,6 +93,17 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             elapsed={live ? elapsed : null}
           />
         </Group>
+
+        {/* Below the title row rather than inside it. Stacked under the
+            name it shared a row with the LIVE pill, which left it 118px of
+            a 320px card and truncated "Just Chatting" to "Just C...". It
+            has no reason to sit beside the pill, and full width costs
+            nothing: the row is only as tall as its text either way. */}
+        <StreamContext
+          game={s.game ?? null}
+          viewers={s.viewers ?? null}
+          title={s.streamTitle ?? null}
+        />
 
         <Text className={classes.balance} data-testid="balance">
           {s.points === null ? "—" : nf.format(s.points)}

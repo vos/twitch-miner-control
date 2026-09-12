@@ -1,0 +1,44 @@
+/* A subtitle under the name: dimmed and small so it reads as context for
+   the heading above rather than as another figure on the card.
+
+   The selector is doubled deliberately. The interactive variant IS a
+   Mantine UnstyledButton, whose `mantine-UnstyledButton-root` sets
+   font-size and color at a specificity one class cannot beat -- left as
+   a single class this line rendered at the card's base 16px and
+   competed with the balance directly below it. */
+.context.context {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--tw-text-dim);
+  line-height: 1.3;
+}
+
+/* The one element allowed to lose width -- the viewer count is short and
+   fixed, so clipping the category is what keeps both on one line. */
+.game {
+  font-size: inherit;
+  color: inherit;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot,
+.viewers {
+  flex-shrink: 0;
+}
+
+/* Tabular so a ticking audience cannot change the row's width. */
+.viewers {
+  font-variant-numeric: tabular-nums;
+}
+
+.interactive:hover .game,
+.interactive:hover .viewers {
+  color: var(--tw-text);
+}
