@@ -213,7 +213,7 @@ function stubSession(authed: () => boolean, onLogin: () => void = () => {}) {
       ok: true, status: 200,
       json: async () => ({
         miner: "RUNNING", loginRequired: false, startedAt: null, stats: null,
-        streamers: [], lastUpdated: null, stale: true, error: null,
+        streamers: [], lastUpdated: null, stale: true, error: null, events: [],
       }),
     };
   });
@@ -236,6 +236,16 @@ test("polls nothing and opens no stream until the gate is unlocked", async () =>
   await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
   await screen.findByRole("button", { name: /dashboard/i });
   expect(RecordingEventSource.created.length).toBeGreaterThan(0);
+});
+
+test("the dashboard and its activity feed share one stream", async () => {
+  // Every open EventSource holds a connection for the life of the page,
+  // and HTTP/1.1 allows a browser six per host across all its tabs.
+  stubSession(() => true);
+  view();
+  await screen.findByRole("button", { name: /dashboard/i });
+  expect(await screen.findByText(/recent activity/i)).toBeInTheDocument();
+  expect(RecordingEventSource.created).toHaveLength(1);
 });
 
 test("re-locks and closes the stream when the session expires under the dashboard", async () => {

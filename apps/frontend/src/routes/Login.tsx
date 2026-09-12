@@ -3,6 +3,7 @@ import {
 } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { useStreamEvent } from "../api/useLiveState.js";
 
 type Progress =
   | { stage: "code"; userCode: string; verificationUri: string; expiresAt: number }
@@ -51,16 +52,9 @@ export function TwitchLogin() {
     api.get<Config>("/api/config")
       .then((c) => { setConfig(c); setUsername(c.username); })
       .catch(() => { /* the field stays empty and validates on submit */ });
-    const source = new EventSource("/api/stream");
-    source.addEventListener("login", (event) => {
-      try {
-        setProgress(JSON.parse((event as MessageEvent).data) as Progress);
-      } catch {
-        // ignore malformed frames
-      }
-    });
-    return () => source.close();
   }, []);
+
+  useStreamEvent<Progress>("login", setProgress);
 
   /**
    * The login helper reads TWITCH_USERNAME from the stored config at spawn

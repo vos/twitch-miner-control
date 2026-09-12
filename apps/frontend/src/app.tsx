@@ -2,7 +2,7 @@ import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
-import { useLiveState } from "./api/useLiveState.js";
+import { LiveStateProvider, useLiveState } from "./api/useLiveState.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
@@ -44,7 +44,9 @@ export type ScreenKey = keyof typeof SCREENS;
 export function App() {
   return (
     <PasswordGate>
-      <Shell />
+      <LiveStateProvider>
+        <Shell />
+      </LiveStateProvider>
     </PasswordGate>
   );
 }

@@ -1,6 +1,7 @@
 import { Card, Group, Stack, Text, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { useStreamEvent } from "../api/useLiveState.js";
 
 interface MinerEvent { ts: number; type: string; message: string | null }
 
@@ -32,8 +33,7 @@ export function EventsFeed({ enabled }: { enabled: boolean }) {
 
   useEffect(() => {
     // Switching the feed off must stop the traffic, not just hide the
-    // panel: this effect owns the only /api/events caller in the app, and
-    // its own EventSource.
+    // panel: this effect owns the only /api/events caller in the app.
     if (!enabled) {
       setEvents(null);
       return;
@@ -54,34 +54,16 @@ export function EventsFeed({ enabled }: { enabled: boolean }) {
       // numbers that loaded fine. Stay unrendered instead.
       .catch(() => { if (alive) setEvents(null); });
 
-    // A second EventSource alongside useLiveState's: the browser's per-host
-    // connection budget is spent either way, and coupling this panel's
-    // lifecycle to the dashboard-wide hook would mean the stream could not
-    // be switched off with the feed. Reconnection is left to EventSource
-    // itself -- a missed row here costs a log line until the next mount,
-    // not a wrong number, so it does not need useLiveState's auth probe.
-    const source = new EventSource("/api/stream");
-    source.addEventListener("event", (frame) => {
-      let row: MinerEvent;
-      try {
-        row = JSON.parse((frame as MessageEvent).data) as MinerEvent;
-      } catch {
-        // A malformed frame must never take the page down.
-        return;
-      }
-      if (!alive) return;
-      // Newest first, matching the route's ordering, and capped so a
-      // long-lived tab cannot grow the list without bound. A backlog that
-      // failed to load stays null rather than being resurrected by a
-      // pushed row into a misleading one-row "history".
-      setEvents((current) => (current === null ? null : [row, ...current].slice(0, MAX_ROWS)));
-    });
-
-    return () => {
-      alive = false;
-      source.close();
-    };
+    return () => { alive = false; };
   }, [enabled]);
+
+  useStreamEvent<MinerEvent>("event", (row) => {
+    // Newest first, matching the route's ordering, and capped so a
+    // long-lived tab cannot grow the list without bound. A backlog that
+    // failed to load stays null rather than being resurrected by a
+    // pushed row into a misleading one-row "history".
+    setEvents((current) => (current === null ? null : [row, ...current].slice(0, MAX_ROWS)));
+  }, enabled);
 
   if (!enabled) return null;
   if (events === null) return null;

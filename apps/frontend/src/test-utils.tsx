@@ -1,6 +1,7 @@
 import { MantineProvider } from "@mantine/core";
 import { render, type RenderResult } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { LiveStateProvider } from "./api/useLiveState.js";
 import { theme } from "./theme.js";
 
 /**
@@ -16,6 +17,15 @@ export function renderApp(ui: ReactNode): RenderResult {
       {ui}
     </MantineProvider>,
   );
+}
+
+/**
+ * renderApp inside the shared live stream, for anything that reads it.
+ * The caller stubs `EventSource` and `fetch`: the provider opens the one
+ * and asks for /api/streamers through the other.
+ */
+export function renderLive(ui: ReactNode): RenderResult {
+  return renderApp(<LiveStateProvider>{ui}</LiveStateProvider>);
 }
 
 /** jsdom's own implementation, captured before any test overrides it. */

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CLIENT_STALE_AFTER_MS } from "../components/StalenessBadge.js";
 import { Dashboard } from "./Dashboard.js";
-import { renderApp } from "../test-utils.js";
+import { renderLive } from "../test-utils.js";
 
 const snapshot = {
   lastUpdated: Date.now(),
@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 const view = (loginRequired = false) =>
-  renderApp(<Dashboard loginRequired={loginRequired} onSignIn={() => {}} />);
+  renderLive(<Dashboard loginRequired={loginRequired} onSignIn={() => {}} />);
 
 test("shows the tiles' shape while the first snapshot is still loading", async () => {
   // A blank page for the first few seconds reads as an app with nothing
@@ -159,7 +159,7 @@ test("goes stale locally when no further frames arrive, even though the server s
   const now = Date.now();
   stub({ ...snapshot, stale: false, lastUpdated: now });
 
-  renderApp(<Dashboard />);
+  renderLive(<Dashboard />);
 
   // Let the initial REST fetch resolve and the first paint happen.
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -325,7 +325,7 @@ describe("the Twitch sign-in notice", () => {
 
   test("its button asks the app to open the Twitch account screen", async () => {
     const onSignIn = vi.fn();
-    renderApp(<Dashboard loginRequired onSignIn={onSignIn} />);
+    renderLive(<Dashboard loginRequired onSignIn={onSignIn} />);
     await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });

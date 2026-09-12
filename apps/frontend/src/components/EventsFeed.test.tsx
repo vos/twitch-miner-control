@@ -1,11 +1,13 @@
 import { MantineProvider } from "@mantine/core";
+import type { ReactNode } from "react";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { LiveStateProvider } from "../api/useLiveState.js";
 import { EventsFeed } from "./EventsFeed.js";
 
 /**
- * The feed subscribes to the same /api/stream the dashboard uses, so every
- * test needs an EventSource. jsdom has none.
+ * The feed listens on the app's shared /api/stream, so every test needs an
+ * EventSource. jsdom has none.
  */
 class FakeEventSource {
   static last: FakeEventSource | null = null;
@@ -42,7 +44,19 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-const view = () => render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+/** The feed inside the shared stream it listens on, as the dashboard mounts it. */
+const inStream = (ui: ReactNode) => (
+  <MantineProvider><LiveStateProvider>{ui}</LiveStateProvider></MantineProvider>
+);
+
+const view = () => render(inStream(<EventsFeed enabled />));
+
+/**
+ * The feed's own requests. The provider asks for /api/streamers on mount,
+ * which is not the feed's traffic.
+ */
+const feedCalls = (fetchMock: { mock: { calls: unknown[][] } }) =>
+  fetchMock.mock.calls.filter(([url]) => url === "/api/events");
 
 test("renders the miner's own line, which names the streamer", async () => {
   // The whole point of the panel: "streamer online" alone said nothing
@@ -94,44 +108,44 @@ test("does not touch the network when the feed is switched off", async () => {
   // The requirement is that polling stops, not that the panel is hidden.
   // A component that renders nothing while still fetching every 5s would
   // pass a DOM-absence assertion and fail the actual ask.
-  const fetchMock = vi.fn(async () => ({
+  const fetchMock = vi.fn(async (_url: string) => ({
     ok: true, status: 200, json: async () => ({ events: [] }),
   }));
   vi.stubGlobal("fetch", fetchMock);
 
-  render(<MantineProvider><EventsFeed enabled={false} /></MantineProvider>);
+  render(inStream(<EventsFeed enabled={false} />));
 
   // Give any mount effect a chance to fire before asserting silence.
   await new Promise((resolve) => setTimeout(resolve, 20));
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(feedCalls(fetchMock)).toHaveLength(0);
   expect(screen.queryByText(/recent activity/i)).not.toBeInTheDocument();
 });
 
 test("fetches the backlog once and then leaves the network alone", async () => {
   // The bug this replaced: a 5s poll that re-sent all 20 rows forever.
   // New rows now arrive on the stream, so exactly one request is correct.
-  const fetchMock = vi.fn(async () => ({
+  const fetchMock = vi.fn(async (_url: string) => ({
     ok: true, status: 200, json: async () => ({ events: [] }),
   }));
   vi.stubGlobal("fetch", fetchMock);
 
-  render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+  render(inStream(<EventsFeed enabled />));
 
   await screen.findByText(/no activity yet/i);
   expect(fetchMock).toHaveBeenCalledWith("/api/events", expect.anything());
 
   // Well past the old 5s poll period.
   await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(feedCalls(fetchMock)).toHaveLength(1);
 });
 
 test("renders a row pushed over the stream without refetching", async () => {
-  const fetchMock = vi.fn(async () => ({
+  const fetchMock = vi.fn(async (_url: string) => ({
     ok: true, status: 200, json: async () => ({ events: [] }),
   }));
   vi.stubGlobal("fetch", fetchMock);
 
-  render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+  render(inStream(<EventsFeed enabled />));
   await screen.findByText(/no activity yet/i);
 
   FakeEventSource.last!.push({
@@ -139,7 +153,7 @@ test("renders a row pushed over the stream without refetching", async () => {
   });
 
   expect(await screen.findByText("+50 -> forsen")).toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(feedCalls(fetchMock)).toHaveLength(1);
 });
 
 test("puts a pushed row above the backlog and caps the list", async () => {
@@ -149,7 +163,7 @@ test("puts a pushed row above the backlog and caps the list", async () => {
     })),
   });
 
-  render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+  render(inStream(<EventsFeed enabled />));
   await screen.findByText("old 0");
 
   FakeEventSource.last!.push({ ts: 2000, type: "GAIN_FOR_CLAIM", message: "brand new" });
@@ -163,7 +177,7 @@ test("puts a pushed row above the backlog and caps the list", async () => {
 
 test("ignores a malformed pushed frame", async () => {
   stub({ events: [] });
-  render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+  render(inStream(<EventsFeed enabled />));
   await screen.findByText(/no activity yet/i);
 
   act(() => {
@@ -174,14 +188,18 @@ test("ignores a malformed pushed frame", async () => {
   expect(screen.getByText(/no activity yet/i)).toBeInTheDocument();
 });
 
-test("closes the stream when the feed is switched off", async () => {
+test("stops taking pushed rows when switched off, without closing the shared stream", async () => {
   stub({ events: [] });
-  const { rerender } = render(<MantineProvider><EventsFeed enabled /></MantineProvider>);
+  const { rerender } = render(inStream(<EventsFeed enabled />));
   await screen.findByText(/no activity yet/i);
   const source = FakeEventSource.last!;
 
-  rerender(<MantineProvider><EventsFeed enabled={false} /></MantineProvider>);
+  rerender(inStream(<EventsFeed enabled={false} />));
+  source.push({ ts: Date.now(), type: "GAIN_FOR_CLAIM", message: "while off" });
+  rerender(inStream(<EventsFeed enabled />));
 
-  // Switching off must drop the connection, not just hide the panel.
-  expect(source.closed).toBe(true);
+  // The rest of the app still listens on this connection.
+  expect(source.closed).toBe(false);
+  expect(await screen.findByText(/no activity yet/i)).toBeInTheDocument();
+  expect(screen.queryByText("while off")).not.toBeInTheDocument();
 });

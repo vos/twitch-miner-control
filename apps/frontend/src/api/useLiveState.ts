@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import {
+  createContext, createElement, type ReactNode, useCallback, useContext, useEffect, useRef,
+  useState,
+} from "react";
 import { api, UnauthorizedError } from "./client.js";
 
 export interface StreamerState {
@@ -117,18 +120,116 @@ export const DISCONNECT_GRACE_MS = 5_000;
 /** Delay before rebuilding a stream that failed to open. */
 export const RECONNECT_DELAY_MS = 3_000;
 
-export function useLiveState() {
+/** A handler for one kind of stream frame, handed the frame's parsed JSON. */
+type FrameHandler = (data: unknown) => void;
+
+type Handlers = Map<string, Set<FrameHandler>>;
+
+/** An open EventSource and the frame types already listened for on it. */
+interface Wiring {
+  source: EventSource;
+  wired: Set<string>;
+}
+
+/**
+ * Listens for `type` on the source, fanning each frame out to that type's
+ * handlers. Once per type per source: a second listener would deliver every
+ * frame twice.
+ */
+function wire(wiring: Wiring, handlers: Handlers, type: string) {
+  if (wiring.wired.has(type)) return;
+  wiring.wired.add(type);
+  wiring.source.addEventListener(type, (frame) => {
+    let data: unknown;
+    try {
+      data = JSON.parse((frame as MessageEvent).data);
+    } catch {
+      // A malformed frame must never take the page down.
+      return;
+    }
+    // Copied, since a handler may unsubscribe while the set is being walked.
+    for (const handler of [...(handlers.get(type) ?? [])]) handler(data);
+  });
+}
+
+export interface LiveState {
+  snapshot: StateSnapshot | null;
+  connected: boolean;
+  loadError: string | null;
+  /**
+   * The session cookie is gone, so reconnecting is pointless -- the app has
+   * to send the user back through the login gate. Final for this provider:
+   * the gate unmounts it, and the next unlock mounts a fresh one.
+   */
+  authExpired: boolean;
+  /**
+   * Adds a handler for one frame type and returns its removal. Handlers
+   * outlive a reconnect: every rebuilt source is wired to them.
+   */
+  subscribe: (type: string, handler: FrameHandler) => () => void;
+}
+
+const LiveStateContext = createContext<LiveState | null>(null);
+
+/**
+ * Owns the app's one connection to /api/stream.
+ *
+ * Every EventSource holds a connection open for the life of the page, and
+ * HTTP/1.1 allows a browser six per host across all its tabs -- so
+ * everything that wants a frame subscribes here rather than opening its own.
+ */
+export function LiveStateProvider({ children }: { children: ReactNode }) {
+  return createElement(LiveStateContext.Provider, { value: useLiveConnection() }, children);
+}
+
+/** The shared stream. Throws outside a LiveStateProvider. */
+export function useLiveState(): LiveState {
+  const live = useContext(LiveStateContext);
+  if (live === null) throw new Error("useLiveState needs a LiveStateProvider above it");
+  return live;
+}
+
+/**
+ * Calls `handler` with each `type` frame on the shared stream while
+ * `enabled`. Always the latest handler, so an inline function does not
+ * resubscribe on every render.
+ */
+export function useStreamEvent<T>(type: string, handler: (data: T) => void, enabled = true) {
+  const { subscribe } = useLiveState();
+  const latest = useRef(handler);
+  // Declared before the subscribing effect, so it has run by the time that
+  // one does.
+  useEffect(() => { latest.current = handler; });
+  useEffect(() => {
+    if (!enabled) return;
+    return subscribe(type, (data) => latest.current(data as T));
+  }, [type, enabled, subscribe]);
+}
+
+function useLiveConnection(): LiveState {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The session cookie is gone, so reconnecting is pointless -- the app has
-  // to send the user back through the login gate. Final for this mount: the
-  // gate unmounts whatever runs this hook, and the next unlock mounts it
-  // afresh.
   const [authExpired, setAuthExpired] = useState(false);
+  const handlers = useRef<Handlers>(new Map());
+  const current = useRef<Wiring | null>(null);
+
+  const subscribe = useCallback((type: string, handler: FrameHandler) => {
+    let set = handlers.current.get(type);
+    if (set === undefined) {
+      set = new Set();
+      handlers.current.set(type, set);
+    }
+    set.add(handler);
+    // Children subscribe before this provider's own effect has opened a
+    // source; connect() wires those once it does.
+    if (current.current !== null) wire(current.current, handlers.current, type);
+    return () => { set.delete(handler); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
+    const unsubscribeState = subscribe("state", (data) => setSnapshot(data as StateSnapshot));
     api.get<StateSnapshot>("/api/streamers")
       .then((s) => { if (alive) setSnapshot(s); })
       .catch((cause) => {
@@ -137,7 +238,6 @@ export function useLiveState() {
         if (alive) setLoadError(cause instanceof Error ? cause.message : String(cause));
       });
 
-    let source: EventSource | null = null;
     let graceTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -169,20 +269,14 @@ export function useLiveState() {
 
     const connect = () => {
       if (!alive) return;
-      source = new EventSource("/api/stream");
+      const source = new EventSource("/api/stream");
+      current.current = { source, wired: new Set() };
+      for (const type of handlers.current.keys()) wire(current.current, handlers.current, type);
 
       source.addEventListener("open", () => {
         if (!alive) return;
         clearGrace();
         setConnected(true);
-      });
-
-      source.addEventListener("state", (event) => {
-        try {
-          setSnapshot(JSON.parse((event as MessageEvent).data) as StateSnapshot);
-        } catch {
-          // A malformed frame must never take the page down.
-        }
       });
 
       source.addEventListener("error", () => {
@@ -216,7 +310,7 @@ export function useLiveState() {
               clearGrace();
               return;
             }
-            source?.close();
+            current.current?.source.close();
             connect();
           });
         }, RECONNECT_DELAY_MS);
@@ -229,9 +323,11 @@ export function useLiveState() {
       alive = false;
       clearGrace();
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-      source?.close();
+      current.current?.source.close();
+      current.current = null;
+      unsubscribeState();
     };
-  }, []);
+  }, [subscribe]);
 
-  return { snapshot, connected, loadError, authExpired };
+  return { snapshot, connected, loadError, authExpired, subscribe };
 }

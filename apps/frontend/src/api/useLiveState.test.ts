@@ -1,6 +1,8 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { DISCONNECT_GRACE_MS, RECONNECT_DELAY_MS, useLiveState } from "./useLiveState.js";
+import {
+  DISCONNECT_GRACE_MS, LiveStateProvider, RECONNECT_DELAY_MS, useLiveState, useStreamEvent,
+} from "./useLiveState.js";
 
 const initial = { streamers: [], lastUpdated: 1, stale: false, error: null };
 
@@ -37,12 +39,16 @@ afterEach(() => {
   FakeEventSource.last = null;
 });
 
-function setup() {
+function stubBackend() {
   vi.stubGlobal("fetch", vi.fn(async () => ({
     ok: true, status: 200, json: async () => initial,
   })));
   vi.stubGlobal("EventSource", FakeEventSource);
-  return renderHook(() => useLiveState());
+}
+
+function setup() {
+  stubBackend();
+  return renderHook(() => useLiveState(), { wrapper: LiveStateProvider });
 }
 
 /** setup() whose probe of /api/status answers 401, i.e. the session expired. */
@@ -51,7 +57,7 @@ function setupWithExpiredSession() {
     ok: false, status: 401, json: async () => ({ error: "unauthorized" }),
   })));
   vi.stubGlobal("EventSource", FakeEventSource);
-  return renderHook(() => useLiveState());
+  return renderHook(() => useLiveState(), { wrapper: LiveStateProvider });
 }
 
 test("seeds from the REST snapshot", async () => {
@@ -246,6 +252,69 @@ test("stops reconnecting once the session has expired", async () => {
     // Reconnecting against a dead cookie would 401 forever; the app must
     // send the user through the login gate instead.
     expect(FakeEventSource.created).toHaveLength(afterAuthFailure);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("hands a pushed frame to every subscriber over one EventSource", () => {
+  stubBackend();
+  const first = vi.fn();
+  const second = vi.fn();
+  renderHook(() => {
+    useStreamEvent("event", first);
+    useStreamEvent("event", second);
+  }, { wrapper: LiveStateProvider });
+
+  act(() => { FakeEventSource.last!.emit("event", { n: 1 }); });
+
+  expect(first).toHaveBeenCalledWith({ n: 1 });
+  expect(second).toHaveBeenCalledWith({ n: 1 });
+  expect(FakeEventSource.created).toHaveLength(1);
+});
+
+test("a disabled subscriber is not handed frames", () => {
+  stubBackend();
+  const handler = vi.fn();
+  const { rerender } = renderHook(
+    ({ enabled }) => useStreamEvent("event", handler, enabled),
+    { wrapper: LiveStateProvider, initialProps: { enabled: true } },
+  );
+
+  rerender({ enabled: false });
+  act(() => { FakeEventSource.last!.emit("event", { n: 1 }); });
+
+  expect(handler).not.toHaveBeenCalled();
+});
+
+test("a subscriber skips a malformed frame", () => {
+  stubBackend();
+  const handler = vi.fn();
+  renderHook(() => useStreamEvent("event", handler), { wrapper: LiveStateProvider });
+
+  act(() => {
+    FakeEventSource.last!.handlers.get("event")!({ data: "not json" } as MessageEvent);
+  });
+
+  expect(handler).not.toHaveBeenCalled();
+});
+
+test("subscribers keep receiving frames once the stream is rebuilt", async () => {
+  vi.useFakeTimers();
+  try {
+    stubBackend();
+    const handler = vi.fn();
+    renderHook(() => useStreamEvent("event", handler), { wrapper: LiveStateProvider });
+
+    act(() => { FakeEventSource.last!.fail(); });
+    await act(async () => {
+      vi.advanceTimersByTime(RECONNECT_DELAY_MS + 100);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(FakeEventSource.created).toHaveLength(2);
+
+    act(() => { FakeEventSource.last!.emit("event", { n: 2 }); });
+    expect(handler).toHaveBeenCalledWith({ n: 2 });
   } finally {
     vi.useRealTimers();
   }

@@ -2,7 +2,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { TwitchLogin } from "./Login.js";
-import { renderApp } from "../test-utils.js";
+import { renderLive } from "../test-utils.js";
 
 function stub(status: unknown) {
   vi.stubGlobal("fetch", vi.fn(async () => ({
@@ -16,7 +16,7 @@ function stub(status: unknown) {
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-const view = () => renderApp(<TwitchLogin />);
+const view = () => renderLive(<TwitchLogin />);
 
 test("offers to start login when there is no session", async () => {
   stub({ login: null, miner: "STOPPED" });
