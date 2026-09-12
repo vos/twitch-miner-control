@@ -14,6 +14,23 @@ import { useLocalToggle } from "../lib/useLocalToggle.js";
 const nf = new Intl.NumberFormat("en-US");
 
 /**
+ * The narrowest a streamer card may get before another column is added.
+ *
+ * Fixed column counts per viewport breakpoint were wrong here: the grid
+ * sits inside the main area, which is a navbar and two paddings narrower
+ * than the window, so a viewport-keyed breakpoint decides the column
+ * count from a number ~280px larger than the space being divided. It
+ * fired `xl` (3 columns) at a 1408px window, dropping each card from
+ * 554px to 365px -- widening the browser made the cards shrink.
+ *
+ * `auto-fill` against the grid's real width has no such gap: a column is
+ * added only once one actually fits, so card width stays inside a band
+ * instead of collapsing at a threshold. It also caps the single-column
+ * case, which used to stretch one card to 700px of mostly empty row.
+ */
+const CARD_MIN_WIDTH = 320;
+
+/**
  * A section rule.
  *
  * `mb` is deliberately larger than the Stack's own gap: a heading sitting
@@ -194,7 +211,7 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
   const cards = (
     <>
       <SectionHeading testId="live-heading">{`LIVE NOW · ${live.length}`}</SectionHeading>
-      <SimpleGrid cols={{ base: 1, sm: 2, xl: 3 }} spacing="md">
+      <SimpleGrid minColWidth={CARD_MIN_WIDTH} spacing="md">
         {live.map((s) => <StreamerCard key={s.username} streamer={s} />)}
       </SimpleGrid>
 
@@ -206,7 +223,7 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
         {`OFFLINE · ${others.length}`}
       </SectionHeading>
       {offlineOn && (
-        <SimpleGrid cols={{ base: 1, sm: 2, xl: 3 }} spacing="md">
+        <SimpleGrid minColWidth={CARD_MIN_WIDTH} spacing="md">
           {others.map((s) => <StreamerCard key={s.username} streamer={s} />)}
         </SimpleGrid>
       )}
