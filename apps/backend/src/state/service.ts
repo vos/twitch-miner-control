@@ -94,6 +94,16 @@ export interface StreamerState {
   minedTotal: number;
   /** Points per hour mined, or null below MIN_MINED_FOR_RATE_MS. */
   pointsPerHour: number | null;
+  /**
+   * Combined factor of the channel's active points multipliers, or null
+   * when there is none. Not a subscription flag -- see _multiplier in
+   * helpers/state.py for why the factor is reported instead.
+   */
+  multiplier: number | null;
+  /** A points bonus is sitting unclaimed on this channel. */
+  claimPending: boolean;
+  /** The channel's active community goal, or null when it has none. */
+  goal: { title: string; contributed: number; needed: number } | null;
 }
 
 /** What the Python helper reports, before this service derives the rest. */

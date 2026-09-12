@@ -41,6 +41,31 @@ export interface StreamerState {
   mined24h: number;
   minedTotal: number;
   pointsPerHour: number | null;
+  /**
+   * Combined factor of every active channel-points multiplier, or null
+   * when there is none. Optional: a snapshot from a backend that
+   * predates the field has no such key -- see StreamerMeta, which
+   * reads all four defensively.
+   *
+   * NOT a subscription flag, though a sub is the usual way to get one:
+   * upstream's own `is_subscribed` is exactly "has any active
+   * multiplier", and multipliers have other sources. The card reports
+   * the factor rather than inferring a sub from it.
+   */
+  multiplier?: number | null;
+  /** A points bonus is sitting unclaimed on this channel right now. */
+  claimPending?: boolean;
+  /**
+   * Whether the miner is observed to be watching this channel, from
+   * watch-point gains. Already derived by the backend for the config
+   * rows; the dashboard card shows the same fact.
+   */
+  watching?: boolean;
+  /**
+   * The channel's active community goal, or null when it has none.
+   * Kept behind a disclosure on the card -- see StreamerMeta.
+   */
+  goal?: { title: string; contributed: number; needed: number } | null;
 }
 
 export interface StateSnapshot {

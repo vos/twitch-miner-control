@@ -1,0 +1,78 @@
+.row {
+  min-width: 0;
+}
+
+/* Never truncate: a badge clipped to "wat..." is worse than no badge,
+   and these are short and fixed-width by nature. The context text on
+   the left is what gives way when the card is narrow. */
+.badges {
+  flex-shrink: 0;
+}
+
+.goal {
+  min-width: 0;
+}
+
+/* A standing property of the channel that cannot act while the channel
+   is offline. Kept visible so the badge does not flicker with live
+   state, but muted so it does not read as currently multiplying. */
+.multiplier[data-idle="true"] {
+  opacity: 0.45;
+}
+
+/* A full-width hit area rather than a tiny caret -- the disclosure is
+   used on touch, where a 12px triangle is not a target.
+
+   UnstyledButton sets its own font-size on the element, so the size has
+   to be set here and on the spans -- a rule on the row alone lost to it
+   and rendered the collapsed goal title larger than the LAST event it
+   sits above. */
+.goalToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  font-size: 11px;
+  color: var(--tw-text-dim);
+}
+
+.goalToggle:hover .goalTitle {
+  color: var(--tw-text);
+}
+
+.goalCaret {
+  flex-shrink: 0;
+  font-size: 9px;
+  transition: transform 120ms ease;
+}
+
+.goalCaret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .goalCaret { transition: none; }
+}
+
+/* The one element here allowed to lose width. Dimmed and small: this is
+   a collapsed disclosure for the lowest-priority figure on the card, so
+   it must sit under the LAST event line rather than compete with it. */
+.goalTitle {
+  font-size: 11px;
+  color: var(--tw-text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Pushed right and tabular so the percentage does not jitter the row
+   as it ticks. */
+.goalPct {
+  font-size: 11px;
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}

@@ -16,18 +16,46 @@ from TwitchChannelPointsMiner.classes.gql.Errors import RetryError
 from helpers.state import Handler, serve
 
 
-def points_response(balance, channel_id="42", enabled=True):
+def points_response(balance, channel_id="42", enabled=True, multipliers=(),
+                    claim=None, goals=()):
+    """Mirrors the shape upstream's parser produces.
+
+    multipliers/available_claim/goals are all on the response _one already
+    fetches -- see Parser.community_points_parser -- so the fixture has to
+    carry them for the handler to be tested against anything real.
+    """
     return SimpleNamespace(
         community=SimpleNamespace(
             display_name="Alpha",
             channel=SimpleNamespace(
                 id=channel_id,
                 edge=SimpleNamespace(
-                    community_points=SimpleNamespace(balance=balance)
+                    community_points=SimpleNamespace(
+                        balance=balance,
+                        active_multipliers=[
+                            SimpleNamespace(factor=f) for f in multipliers
+                        ],
+                        available_claim=(
+                            SimpleNamespace(id=claim) if claim is not None else None
+                        ),
+                    )
                 ),
-                community_points_settings=SimpleNamespace(is_enabled=enabled),
+                community_points_settings=SimpleNamespace(
+                    is_enabled=enabled, goals=list(goals)
+                ),
             ),
         )
+    )
+
+
+def goal(title="New emotes", contributed=3000, needed=10000, status="STARTED",
+         in_stock=True):
+    return SimpleNamespace(
+        title=title,
+        points_contributed=contributed,
+        amount_needed=needed,
+        status=status,
+        is_in_stock=in_stock,
     )
 
 
@@ -92,6 +120,9 @@ def test_state_returns_exact_integer_balance():
         "pointsEnabled": True,
         "streamId": "s1",
         "streamStartedAt": 1788682500000,
+        "multiplier": None,
+        "claimPending": False,
+        "goal": None,
     }
 
 
@@ -654,3 +685,95 @@ def test_state_does_not_reload_when_a_token_is_already_held():
     Handler(session).handle({"id": 1, "op": "state", "streamers": ["alpha"]})
 
     assert calls == ["gql"]
+
+
+def _ctx(**kw):
+    """A handler whose channel-points context carries the extra fields."""
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    h.session.gql.get_channel_points_context = lambda username: (
+        points_response(10, **kw) if username == "alpha"
+        else SimpleNamespace(community=None)
+    )
+    return h
+
+
+def test_one_sums_active_multipliers_into_a_single_factor():
+    """Upstream treats "has any multiplier" as subscribed, but the factor
+    is the fact we actually have -- multipliers have sources other than a
+    sub, so the UI must not be handed a bare boolean called isSubscribed.
+    """
+    out = _ctx(multipliers=(1.2,))._one("alpha")
+    assert out["multiplier"] == 1.2
+
+
+def test_one_combines_several_multipliers():
+    out = _ctx(multipliers=(1.2, 0.3))._one("alpha")
+    assert out["multiplier"] == 1.5
+
+
+def test_one_reports_no_multiplier_as_null_not_one():
+    """1.0 would be a claim that a neutral multiplier is active; null says
+    Twitch gave us none, which is what the card needs to hide the badge."""
+    out = _ctx(multipliers=())._one("alpha")
+    assert out["multiplier"] is None
+
+
+def test_one_flags_an_unclaimed_bonus():
+    out = _ctx(claim="claim-1")._one("alpha")
+    assert out["claimPending"] is True
+
+
+def test_one_reports_no_claim_when_none_is_waiting():
+    out = _ctx(claim=None)._one("alpha")
+    assert out["claimPending"] is False
+
+
+def test_one_reports_the_active_community_goal():
+    out = _ctx(goals=(goal(),))._one("alpha")
+    assert out["goal"] == {
+        "title": "New emotes", "contributed": 3000, "needed": 10000,
+    }
+
+
+def test_one_ignores_a_finished_or_out_of_stock_goal():
+    """A goal that has ended is not something the viewer can contribute to,
+    so surfacing it would put a dead progress bar on the card."""
+    assert _ctx(goals=(goal(status="ENDED"),))._one("alpha")["goal"] is None
+    assert _ctx(goals=(goal(in_stock=False),))._one("alpha")["goal"] is None
+
+
+def test_one_picks_one_goal_when_a_channel_runs_several():
+    """The card has room for one. The least-complete is the one still
+    worth contributing to."""
+    out = _ctx(goals=(goal(title="Nearly", contributed=9000),
+                      goal(title="Fresh", contributed=100)))._one("alpha")
+    assert out["goal"]["title"] == "Fresh"
+
+
+def test_one_survives_a_response_without_the_newer_fields():
+    """A miner build whose parser predates these fields must degrade to a
+    card without badges, never take the whole state poll down."""
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    h.session.gql.get_channel_points_context = lambda username: SimpleNamespace(
+        community=SimpleNamespace(
+            display_name="Alpha",
+            channel=SimpleNamespace(
+                id="42",
+                edge=SimpleNamespace(community_points=SimpleNamespace(balance=10)),
+                community_points_settings=SimpleNamespace(is_enabled=True),
+            ),
+        )
+    )
+    out = h._one("alpha")
+    assert out["multiplier"] is None
+    assert out["claimPending"] is False
+    assert out["goal"] is None
+    assert out["points"] == 10
+
+
+def test_unknown_channel_reports_the_new_fields_too():
+    """Every path through _one must agree on its shape."""
+    out = handler(balances={})._one("ghost")
+    assert out["multiplier"] is None
+    assert out["claimPending"] is False
+    assert out["goal"] is None

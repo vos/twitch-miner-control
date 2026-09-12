@@ -1,6 +1,7 @@
-import { Badge, Group, Stack, Text, Tooltip } from "@mantine/core";
+import { Group, Stack, Text } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
+import { StreamerMeta } from "./StreamerMeta.js";
 import { StreamerTimes } from "./StreamerTimes.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import { useLiveDuration } from "../lib/useLiveDuration.js";
@@ -81,28 +82,15 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
               {s.displayName ?? s.username}
             </Text>
           </Group>
-          <Group gap={6} wrap="nowrap">
-            {/* Shared with the streamer config rows, so the two screens
-                cannot drift on what a channel's status looks like. The
-                offline pill carries the last time WE saw the channel live
-                -- our own observation, not Twitch's history: the GQL layer
-                exposes a stream's createdAt only while it is running, so a
-                channel we have never seen live reads a bare "offline".
-                `elapsed` is passed because this card ticks its own clock. */}
-            <StatusPill
-              isOnline={s.isOnline}
-              liveSince={s.liveSince}
-              lastLive={s.lastLive}
-              elapsed={live ? elapsed : null}
-            />
-            {s.pointsEnabled === false && (
-              <Tooltip label="Channel points are disabled for this channel, so the balance cannot move.">
-                <Badge color="yellow" variant="light" size="sm" data-testid="points-disabled">
-                  no points
-                </Badge>
-              </Tooltip>
-            )}
-          </Group>
+          {/* Status only. Every other signal moved to StreamerMeta so
+              this row stays identity + live state and the name keeps its
+              width as signals are added. */}
+          <StatusPill
+            isOnline={s.isOnline}
+            liveSince={s.liveSince}
+            lastLive={s.lastLive}
+            elapsed={live ? elapsed : null}
+          />
         </Group>
 
         <Text className={classes.balance} data-testid="balance">
@@ -112,6 +100,8 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
         {/* Fluid: the card's own width decides, so nothing is painted
             past its edge on a narrow column. */}
         <Sparkline values={s.spark} height={34} fill />
+
+        <StreamerMeta streamer={s} />
 
         <StreamerTimes streamer={s} />
 

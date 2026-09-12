@@ -117,6 +117,48 @@ def _is_missing_user_error(exc: Exception) -> bool:
     return False
 
 
+def _multiplier(points) -> float | None:
+    """The combined factor of every active channel-points multiplier.
+
+    None rather than 1.0 when there is none: 1.0 reads as "a neutral
+    multiplier is active", and the card needs to tell "no multiplier"
+    from "a multiplier that happens to be 1x" to decide whether to show
+    the badge at all.
+
+    Deliberately NOT reported as a subscription flag. Upstream's
+    is_subscribed() is exactly this "has any multiplier" test, but
+    multipliers have other sources, so a boolean called `subscribed`
+    would be an inference we cannot back up.
+    """
+    factors = getattr(points, "active_multipliers", None) or []
+    total = sum(f.factor for f in factors)
+    return round(total, 2) if total else None
+
+
+def _goal(settings) -> dict | None:
+    """The one community goal worth showing, or None.
+
+    Filtered to goals a viewer can still contribute to -- an ended or
+    out-of-stock goal would render a dead progress bar. Where a channel
+    runs several, the least complete is chosen: it is the one with the
+    most room left to contribute to.
+    """
+    goals = getattr(settings, "goals", None) or []
+    live = [
+        g for g in goals
+        if getattr(g, "status", None) == "STARTED"
+        and getattr(g, "is_in_stock", False)
+        and getattr(g, "amount_needed", 0) > 0
+    ]
+    if not live:
+        return None
+    pick = min(live, key=lambda g: g.points_contributed / g.amount_needed)
+    return {
+        "title": pick.title,
+        "contributed": pick.points_contributed,
+        "needed": pick.amount_needed,
+    }
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -260,10 +302,12 @@ class Handler:
         if community is None:
             return {"username": username, "channelId": None, "displayName": None,
                     "points": None, "isOnline": None, "pointsEnabled": None,
-                    "streamId": None, "streamStartedAt": None}
+                    "streamId": None, "streamStartedAt": None,
+                    "multiplier": None, "claimPending": False, "goal": None}
         channel = community.channel
         live = self.session.gql.with_is_stream_live_query(channel.id)
         stream = live.user.stream
+        points = channel.edge.community_points
         return {
             "username": username,
             "channelId": channel.id,
@@ -288,6 +332,13 @@ class Handler:
                 if stream is not None
                 else None
             ),
+            # All three ride the response this method already fetched --
+            # no extra GQL call. Every one is read with getattr so a miner
+            # build whose parser predates the field degrades to a card
+            # without the badge instead of failing the whole state poll.
+            "multiplier": _multiplier(points),
+            "claimPending": getattr(points, "available_claim", None) is not None,
+            "goal": _goal(channel.community_points_settings),
         }
 
 

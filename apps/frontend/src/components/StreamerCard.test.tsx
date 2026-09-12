@@ -1,5 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { StreamerCard } from "./StreamerCard.js";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -11,6 +12,7 @@ const base: StreamerState = {
   avatarUrl: null,
   liveSince: null, streamId: null, lastLive: null, lastActivity: null,
   online24h: 0, mined24h: 0, minedTotal: 0, pointsPerHour: null,
+  multiplier: null, claimPending: false, watching: false, goal: null,
 };
 
 const view = (streamer: Partial<StreamerState> = {}) =>
@@ -337,4 +339,112 @@ test("rounds mining time down, never up", () => {
 
   view({ isOnline: true, mined24h: 119 * 60_000, minedTotal: 119 * 60_000 });
   expect(screen.getAllByTestId("times-24h").at(-1)).toHaveTextContent("mined 1h");
+});
+
+test("reports an active multiplier as a factor rather than claiming a sub", () => {
+  // Sub tiers are the usual source of a multiplier, but not the only one,
+  // so the badge reports the factor Twitch actually gave us.
+  view({ multiplier: 1.2 });
+  expect(screen.getByTestId("multiplier")).toHaveTextContent("1.2");
+});
+
+test("shows no multiplier badge when there is no multiplier", () => {
+  view({ multiplier: null });
+  expect(screen.queryByTestId("multiplier")).not.toBeInTheDocument();
+});
+
+test("flags an unclaimed bonus, which is the one actionable badge", () => {
+  view({ claimPending: true });
+  expect(screen.getByTestId("claim-pending")).toBeInTheDocument();
+});
+
+test("shows no claim badge when nothing is waiting", () => {
+  view({ claimPending: false });
+  expect(screen.queryByTestId("claim-pending")).not.toBeInTheDocument();
+});
+
+test("marks the channels the miner is actually watching", () => {
+  view({ watching: true });
+  expect(screen.getByTestId("watching-badge")).toBeInTheDocument();
+});
+
+test("never claims to be watching an offline channel's card", () => {
+  view({ isOnline: false, watching: false });
+  expect(screen.queryByTestId("watching-badge")).not.toBeInTheDocument();
+});
+
+test("moves the points-disabled warning out of the title row", () => {
+  // It describes the channel, not its live status -- and the title row
+  // needs the headroom for the name.
+  view({ pointsEnabled: false });
+  const meta = screen.getByTestId("meta-row");
+  expect(meta).toContainElement(screen.getByTestId("points-disabled"));
+});
+
+test("renders no meta row at all when there is nothing to put in it", () => {
+  // An empty strip would still cost vertical space and a gap on every
+  // card that has none of these signals.
+  view({ multiplier: null, claimPending: false, watching: false });
+  expect(screen.queryByTestId("meta-row")).not.toBeInTheDocument();
+});
+
+const goal = { title: "New emotes", contributed: 3_000, needed: 10_000 };
+
+test("keeps a community goal behind a disclosure rather than always-on", () => {
+  // A title, a bar and two figures is a third of a 320px card's height
+  // for something that moves hourly.
+  view({ goal });
+  expect(screen.queryByTestId("goal-progress")).not.toBeInTheDocument();
+  expect(screen.getByTestId("goal-toggle")).toHaveTextContent("New emotes");
+});
+
+test("reveals the goal's progress once expanded", async () => {
+  const user = userEvent.setup();
+  view({ goal });
+  await user.click(screen.getByTestId("goal-toggle"));
+  const progress = screen.getByTestId("goal-progress");
+  expect(progress).toHaveTextContent("3,000");
+  expect(progress).toHaveTextContent("10,000");
+});
+
+test("offers no goal disclosure when the channel has no goal", () => {
+  view({ goal: null });
+  expect(screen.queryByTestId("goal-toggle")).not.toBeInTheDocument();
+});
+
+test("reports goal progress to assistive tech, not just as a bar width", () => {
+  const user = userEvent.setup();
+  view({ goal });
+  return user.click(screen.getByTestId("goal-toggle")).then(() => {
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "30");
+  });
+});
+
+test("survives a snapshot from a backend that predates these fields", () => {
+  // A frame that omits them entirely arrives as undefined, not null --
+  // a strict !== null test let it through to a property access that took
+  // the whole dashboard down.
+  const { multiplier, claimPending, watching, goal: _g, ...older } = base;
+  render(
+    <MantineProvider>
+      <StreamerCard streamer={older as StreamerState} />
+    </MantineProvider>,
+  );
+  expect(screen.getByTestId("balance")).toHaveTextContent("1,000");
+  expect(screen.queryByTestId("goal-toggle")).not.toBeInTheDocument();
+});
+
+test("dims a multiplier on an offline channel rather than dropping it", () => {
+  // A multiplier is a standing property of the channel, so hiding it when
+  // the stream ends would make the badge flicker with live state. But it
+  // cannot multiply anything while nothing is being mined, so it must not
+  // read as active either.
+  view({ isOnline: false, multiplier: 1.5 });
+  expect(screen.getByTestId("multiplier")).toHaveAttribute("data-idle", "true");
+});
+
+test("shows an active multiplier as active while the channel is live", () => {
+  view({ isOnline: true, multiplier: 1.5 });
+  expect(screen.getByTestId("multiplier")).toHaveAttribute("data-idle", "false");
 });
