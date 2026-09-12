@@ -1,6 +1,7 @@
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
+import { RECONNECT_DELAY_MS } from "./api/useLiveState.js";
 import { App } from "./app.js";
 import { renderApp } from "./test-utils.js";
 
@@ -113,7 +114,7 @@ test("holds the notice back until /api/status has actually answered", async () =
   // every signed-in user on every load.
   // PasswordGate probes /api/status too, and it has to succeed or the
   // gate never unlocks and there is no dashboard to assert about. So the
-  // first probe answers and every later one -- App's own poll -- hangs,
+  // first probe answers and every later one -- the shell's poll -- hangs,
   // leaving `loginRequired` on its unproven initial value.
   let probed = false;
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -182,6 +183,82 @@ test("remembers a collapsed sidebar across a reload", async () => {
   view();
   await screen.findByRole("button", { name: /dashboard/i });
   expect(desktopCollapsed()).toBe(true);
+});
+
+/**
+ * An EventSource that records every instance, so a test can tell whether
+ * the app opened a stream at all and drive the one it did open.
+ */
+class RecordingEventSource {
+  static created: RecordingEventSource[] = [];
+  closed = false;
+  handlers = new Map<string, () => void>();
+  constructor(public url: string) { RecordingEventSource.created.push(this); }
+  addEventListener(type: string, fn: () => void) { this.handlers.set(type, fn); }
+  close() { this.closed = true; }
+}
+
+/** A backend whose session exists only while `authed()` says so. */
+function stubSession(authed: () => boolean, onLogin: () => void = () => {}) {
+  RecordingEventSource.created = [];
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === "/api/session") {
+      onLogin();
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    if (!authed()) {
+      return { ok: false, status: 401, json: async () => ({ error: "unauthorized" }) };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        miner: "RUNNING", loginRequired: false, startedAt: null, stats: null,
+        streamers: [], lastUpdated: null, stale: true, error: null,
+      }),
+    };
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("EventSource", RecordingEventSource);
+  return fetchMock;
+}
+
+test("polls nothing and opens no stream until the gate is unlocked", async () => {
+  let authed = false;
+  const fetchMock = stubSession(() => authed, () => { authed = true; });
+  view();
+
+  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
+  // Only the gate's own probe and the login itself may reach the backend
+  // while the password form is up.
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/status"]);
+  expect(RecordingEventSource.created).toHaveLength(0);
+
+  await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
+  await screen.findByRole("button", { name: /dashboard/i });
+  expect(RecordingEventSource.created.length).toBeGreaterThan(0);
+});
+
+test("re-locks and closes the stream when the session expires under the dashboard", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let authed = true;
+    stubSession(() => authed);
+    view();
+    await screen.findByRole("button", { name: /dashboard/i });
+
+    // The backend restarted and forgot every session: the stream errors and
+    // the auth probe that follows is refused.
+    authed = false;
+    await act(async () => {
+      for (const source of RecordingEventSource.created) source.handlers.get("error")?.();
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAY_MS + 100);
+    });
+
+    expect(await screen.findByLabelText("Password")).toBeInTheDocument();
+    expect(RecordingEventSource.created.every((s) => s.closed)).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("keeps the sidebar open on a wide screen when a nav row is chosen", async () => {

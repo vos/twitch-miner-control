@@ -1,8 +1,9 @@
 import { createContext, useContext } from "react";
 
 /**
- * Lets anything below the gate drop the session and send the app back to
- * the password screen.
+ * Lets anything below the gate send the app back to the password screen --
+ * after logging out, or on finding the server has already ended the
+ * session.
  *
  * A context rather than a prop threaded App -> Sidebar -> MinerDock: the
  * lock state lives in PasswordGate, and every layer in between would

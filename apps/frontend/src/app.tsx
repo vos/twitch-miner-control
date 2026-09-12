@@ -5,6 +5,7 @@ import { api } from "./api/client.js";
 import { useLiveState } from "./api/useLiveState.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
+import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
@@ -16,7 +17,7 @@ import { Streamers } from "./routes/Streamers.js";
 
 /**
  * `element` is a function rather than a built element so a screen can be
- * handed props from App's own state -- the dashboard needs the Twitch
+ * handed props from Shell's own state -- the dashboard needs the Twitch
  * login status and a way to navigate. It also stops every screen being
  * constructed on each render when only one of them is shown.
  */
@@ -41,6 +42,22 @@ interface ScreenProps {
 export type ScreenKey = keyof typeof SCREENS;
 
 export function App() {
+  return (
+    <PasswordGate>
+      <Shell />
+    </PasswordGate>
+  );
+}
+
+/**
+ * Everything behind the gate, split out of App so none of it mounts until
+ * the gate is unlocked -- the status poll and the live stream would
+ * otherwise run against the password screen, 401ing all the while. Locking
+ * unmounts it again, which closes the stream; the next unlock starts a
+ * fresh one.
+ */
+function Shell() {
+  const { onLoggedOut } = useSession();
   const [screen, setScreen] = useState<ScreenKey>("dashboard");
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
@@ -89,7 +106,13 @@ export function App() {
   // dot. `connected` is computed by the hook from EventSource's own
   // lifecycle and, before this, was read nowhere -- so a dropped stream
   // looked exactly like a healthy one.
-  const { snapshot, connected, authExpired, retry } = useLiveState();
+  const { snapshot, connected, authExpired } = useLiveState();
+
+  // The stream only learns this with a session already on screen, so the
+  // server has logged the user out and the gate should say so.
+  useEffect(() => {
+    if (authExpired) onLoggedOut();
+  }, [authExpired, onLoggedOut]);
 
   useEffect(() => {
     const load = () =>
@@ -132,65 +155,63 @@ export function App() {
   };
 
   return (
-    <PasswordGate sessionExpired={authExpired} onUnlocked={retry}>
-      <AppShell
-        header={{ height: 56 }}
-        navbar={{
-          width: 240,
-          breakpoint: "sm",
-          collapsed: { mobile: !opened, desktop: deskCollapsed },
-        }}
-        padding="lg"
-      >
-        <AppShell.Header bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
-          <Group h="100%" px="md" justify="space-between" wrap="nowrap">
-            <Group gap="sm" wrap="nowrap">
-              <Burger
-                opened={wide ? !deskCollapsed : opened}
-                onClick={wide ? toggleDesk : toggle}
-                aria-label="Toggle sidebar"
-                size="sm"
-              />
-              <Text fw={600}>{SCREENS[screen].label}</Text>
-            </Group>
-            <Group gap="sm" wrap="nowrap">
-              <Tooltip label={connected ? "Live updates connected" : "Live updates disconnected"}>
-                <span
-                  data-testid="stream-connected"
-                  aria-label={connected ? "Live updates connected" : "Live updates disconnected"}
-                  style={{
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: connected ? "var(--tw-success)" : "var(--tw-text-dim)",
-                  }}
-                />
-              </Tooltip>
-              <MinerStatusBadge
-                state={miner.state}
-                startedAt={miner.startedAt}
-                history={statsHistory}
-              />
-            </Group>
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{
+        width: 240,
+        breakpoint: "sm",
+        collapsed: { mobile: !opened, desktop: deskCollapsed },
+      }}
+      padding="lg"
+    >
+      <AppShell.Header bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap">
+            <Burger
+              opened={wide ? !deskCollapsed : opened}
+              onClick={wide ? toggleDesk : toggle}
+              aria-label="Toggle sidebar"
+              size="sm"
+            />
+            <Text fw={600}>{SCREENS[screen].label}</Text>
           </Group>
-        </AppShell.Header>
-        <AppShell.Navbar bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
-          <Sidebar
-            screen={screen}
-            onNavigate={navigate}
-            liveCount={liveCount}
-            loginRequired={loginRequired}
-            miner={miner}
-            onMinerChange={setMiner}
-            version={version}
-            latestVersion={latestVersion}
-          />
-        </AppShell.Navbar>
-        <AppShell.Main>
-          {SCREENS[screen].element({
-            loginRequired: loginRequired && loginKnown,
-            navigate,
-          })}
-        </AppShell.Main>
-      </AppShell>
-    </PasswordGate>
+          <Group gap="sm" wrap="nowrap">
+            <Tooltip label={connected ? "Live updates connected" : "Live updates disconnected"}>
+              <span
+                data-testid="stream-connected"
+                aria-label={connected ? "Live updates connected" : "Live updates disconnected"}
+                style={{
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: connected ? "var(--tw-success)" : "var(--tw-text-dim)",
+                }}
+              />
+            </Tooltip>
+            <MinerStatusBadge
+              state={miner.state}
+              startedAt={miner.startedAt}
+              history={statsHistory}
+            />
+          </Group>
+        </Group>
+      </AppShell.Header>
+      <AppShell.Navbar bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
+        <Sidebar
+          screen={screen}
+          onNavigate={navigate}
+          liveCount={liveCount}
+          loginRequired={loginRequired}
+          miner={miner}
+          onMinerChange={setMiner}
+          version={version}
+          latestVersion={latestVersion}
+        />
+      </AppShell.Navbar>
+      <AppShell.Main>
+        {SCREENS[screen].element({
+          loginRequired: loginRequired && loginKnown,
+          navigate,
+        })}
+      </AppShell.Main>
+    </AppShell>
   );
 }

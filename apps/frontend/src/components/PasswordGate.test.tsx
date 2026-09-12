@@ -61,22 +61,6 @@ test("shows the brand mark above the unlock form", async () => {
   expect(await screen.findByRole("img", { name: /miner control/i })).toBeInTheDocument();
 });
 
-test("re-locks when a session that was valid expires", async () => {
-  stubSequence(200);
-  render(
-    <MantineProvider>
-      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
-    </MantineProvider>,
-  );
-
-  // The backend restarted and dropped every in-memory session, so the
-  // content on screen is backed by a cookie the server no longer knows.
-  await waitFor(() =>
-    expect(screen.getByLabelText("Password")).toBeInTheDocument(),
-  );
-  expect(screen.queryByText("secret content")).not.toBeInTheDocument();
-});
-
 test("focuses the password field so the user can just type", async () => {
   stubSequence(401);
   render(ui);
@@ -92,46 +76,6 @@ test("keeps focus in the field after a wrong password", async () => {
   await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
   await screen.findByRole("alert");
   await waitFor(() => expect(screen.getByLabelText("Password")).toHaveFocus());
-});
-
-test("unlocks after a login even while the live stream still reports the session gone", async () => {
-  // A fresh page load with no cookie: the stream 401s and latches
-  // `authExpired` before the user has finished typing. The successful
-  // login is newer information than that latch, so it must win --
-  // otherwise the form silently does nothing and only a manual refresh
-  // (which remounts the hook) shows the dashboard.
-  stubSequence(401, 200, 200);
-  render(
-    <MantineProvider>
-      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
-    </MantineProvider>,
-  );
-  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
-  await userEvent.click(screen.getByRole("button", { name: /unlock/i }));
-  expect(await screen.findByText("secret content")).toBeInTheDocument();
-});
-
-test("keeps what the user has typed when the stream reports the session gone", async () => {
-  // A fresh load with no cookie: the stream 401s and latches
-  // `authExpired` about three seconds in, while the user is still
-  // typing. Re-locking an already-locked form must not empty the field
-  // under them -- clearing the password belongs to ending a session that
-  // existed, not to news about one that never did.
-  stubSequence(401);
-  const { rerender } = render(
-    <MantineProvider>
-      <PasswordGate><div>secret content</div></PasswordGate>
-    </MantineProvider>,
-  );
-  await userEvent.type(await screen.findByLabelText("Password"), "hunter2");
-
-  rerender(
-    <MantineProvider>
-      <PasswordGate sessionExpired><div>secret content</div></PasswordGate>
-    </MantineProvider>,
-  );
-
-  expect(screen.getByLabelText("Password")).toHaveValue("hunter2");
 });
 
 test("credits the upstream miner with a link out", async () => {

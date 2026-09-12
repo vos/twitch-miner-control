@@ -1,31 +1,19 @@
 import { Anchor, Box, Button, Card, Center, PasswordInput, Stack, Text } from "@mantine/core";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { BrandMark } from "./BrandMark.js";
 import { SessionContext } from "./session.js";
 
 export interface PasswordGateProps {
+  /**
+   * Mounted only while unlocked, so anything that talks to the backend
+   * belongs in here. Something below that finds the session gone -- the
+   * live stream 401ing, say -- locks the gate through SessionContext.
+   */
   children: ReactNode;
-  /**
-   * Set once something else discovers the session is gone -- the live
-   * stream 401ing, say. The mount-time check cannot notice that on its
-   * own, which left a dead cookie rendering a full dashboard whose every
-   * request was quietly failing until the user happened to refresh.
-   */
-  sessionExpired?: boolean;
-  /**
-   * Called once a fresh session exists. Lets the live stream -- which
-   * parks itself for good when it decides the cookie is dead -- start
-   * over, instead of leaving a logged-in dashboard with no updates.
-   */
-  onUnlocked?: () => void;
 }
 
-export function PasswordGate({
-  children,
-  sessionExpired = false,
-  onUnlocked,
-}: PasswordGateProps) {
+export function PasswordGate({ children }: PasswordGateProps) {
   const [unlocked, setUnlocked] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -35,10 +23,7 @@ export function PasswordGate({
 
   useEffect(() => {
     api.get("/api/status")
-      // The probe was fired before any expiry could be reported, so its
-      // answer must not overrule one that arrived while it was in flight
-      // -- that would unlock the app on a cookie known to be dead.
-      .then(() => setUnlocked((prev) => (prev === false ? prev : true)))
+      .then(() => setUnlocked(true))
       .catch(() => setUnlocked(false));
   }, []);
 
@@ -46,45 +31,15 @@ export function PasswordGate({
    * Drop every trace of the finished session before showing the form
    * again -- leaving the old password in state would repopulate the
    * field for whoever sits down next.
+   *
+   * Stable, so a child can list it as an effect dependency without
+   * re-running that effect on every gate render.
    */
-  const lock = () => {
+  const lock = useCallback(() => {
     setUnlocked(false);
     setPassword("");
     setError(null);
-  };
-
-  /**
-   * A reported expiry re-locks the app.
-   *
-   * Handled here rather than by gating the render on `sessionExpired`: that
-   * read made the flag outrank everything that happened after it, so a
-   * stream 401ing before the user finished typing (every fresh load with no
-   * cookie) swallowed the login that followed -- the form appeared to do
-   * nothing, and only a manual refresh got the dashboard up. Folding it into
-   * state instead lets the newer event win.
-   *
-   * The password is cleared only when a session was actually on screen.
-   * On a fresh load with no cookie the stream 401s and reports an expiry
-   * a few seconds in, while the user is partway through typing -- and
-   * clearing it there wiped the field under them. Dropping the old
-   * password belongs to ending a session that existed, not to news about
-   * one that never did.
-   *
-   * The lock itself still applies unconditionally, including before the
-   * mount probe has answered: that probe defers to a known expiry rather
-   * than overruling it, so leaving `unlocked` alone here would let a
-   * 200 land after this and unlock a cookie already known to be dead.
-   */
-  useEffect(() => {
-    if (!sessionExpired) return;
-    // Read rather than branch inside the updater: StrictMode invokes
-    // updaters twice, so they have to stay pure.
-    if (unlocked === true) {
-      setPassword("");
-      setError(null);
-    }
-    setUnlocked(false);
-  }, [sessionExpired]);
+  }, []);
 
   if (unlocked === null) return null;
   if (unlocked) {
@@ -100,7 +55,6 @@ export function PasswordGate({
     try {
       await api.post("/api/session", { password });
       setUnlocked(true);
-      onUnlocked?.();
     } catch {
       setError("Wrong password");
       setAttempt((n) => n + 1);
