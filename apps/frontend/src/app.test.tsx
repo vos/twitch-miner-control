@@ -21,11 +21,15 @@ function stub(loginRequired: boolean) {
       };
     }
     // PasswordGate's own unlock check, and whatever the active screen
-    // (Dashboard by default) fetches -- neither is under test here, so a
-    // single generic-enough stub covers both.
+    // fetches -- none of them is under test here, so a single
+    // generic-enough stub covers them all. `lines` is part of that shape
+    // because the Logs screen polls on a timer: once a test has visited
+    // it, a later poll landing without it throws from inside a render.
     return {
       ok: true, status: 200,
-      json: async () => ({ streamers: [], lastUpdated: null, stale: true, error: null }),
+      json: async () => ({
+        streamers: [], lastUpdated: null, stale: true, error: null, lines: [],
+      }),
     };
   }));
   vi.stubGlobal("EventSource", class {
@@ -34,7 +38,13 @@ function stub(loginRequired: boolean) {
   });
 }
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  // The sidebar collapse preference persists, and jsdom shares localStorage
+  // across the tests in a file -- one test's collapse would otherwise be the
+  // next one's starting state.
+  localStorage.clear();
+});
 
 const view = () => renderApp(<App />);
 
@@ -135,4 +145,51 @@ test("the notice leads to the Twitch account screen", async () => {
   view();
   await userEvent.click(await screen.findByRole("button", { name: /sign in to twitch/i }));
   expect(await screen.findByLabelText("Twitch username")).toBeInTheDocument();
+});
+
+test("offers the sidebar toggle on a wide screen, not just a narrow one", async () => {
+  // The burger used to be `hiddenFrom="sm"`, so a desktop user had no way
+  // to reclaim the 240px the nav occupies.
+  stub(false);
+  view();
+  expect(await screen.findByRole("button", { name: /toggle sidebar/i })).toBeInTheDocument();
+});
+
+/**
+ * Mantine expresses the collapse as CSS custom properties inside a media
+ * block rather than an attribute on the nav, so this is what "the desktop
+ * sidebar is collapsed" actually looks like in the DOM. The `min-width`
+ * query is what distinguishes it from the mobile slide-over, which sets
+ * the same transform under `max-width`.
+ */
+function desktopCollapsed(): boolean {
+  return Array.from(document.querySelectorAll("style")).some((s) =>
+    /@media\(min-width[^)]*\)\{:root\{[^}]*--app-shell-navbar-transform:/.test(s.textContent ?? ""),
+  );
+}
+
+test("collapsing the sidebar on a wide screen widens the page", async () => {
+  stub(false);
+  view();
+  expect(desktopCollapsed()).toBe(false);
+  await userEvent.click(await screen.findByRole("button", { name: /toggle sidebar/i }));
+  expect(desktopCollapsed()).toBe(true);
+});
+
+test("remembers a collapsed sidebar across a reload", async () => {
+  stub(false);
+  localStorage.setItem("tw.sidebarCollapsed", "true");
+  view();
+  await screen.findByRole("button", { name: /dashboard/i });
+  expect(desktopCollapsed()).toBe(true);
+});
+
+test("keeps the sidebar open on a wide screen when a nav row is chosen", async () => {
+  // navigate() closes the mobile slide-over so it does not cover the
+  // screen just chosen. On desktop the nav is not covering anything, and
+  // collapsing it there would undo a preference the user set.
+  stub(false);
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: /^streamers$/i }));
+  expect(desktopCollapsed()).toBe(false);
 });

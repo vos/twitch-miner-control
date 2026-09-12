@@ -4,9 +4,25 @@ import "@testing-library/jest-dom/vitest";
 // mount (color scheme detection). Without this stub every test that renders
 // a Mantine component fails with "window.matchMedia is not a function"
 // before it reaches any assertion.
+//
+// Width queries are answered against jsdom's own 1024px window rather than
+// with a blanket false: the app asks whether it is on a desktop-width
+// screen to decide which half of the sidebar toggle to drive, and a stub
+// that always says no would pin every test to the narrow-screen branch --
+// making the wide-screen behaviour untestable and, worse, silently green.
+const WIDTH_QUERY = /\((min|max)-width:\s*([\d.]+)(px|em|rem)\)/;
+
+function widthMatches(query: string): boolean {
+  const parsed = WIDTH_QUERY.exec(query);
+  if (parsed === null) return false;
+  const [, bound, size, unit] = parsed;
+  const px = unit === "px" ? Number(size) : Number(size) * 16;
+  return bound === "min" ? window.innerWidth >= px : window.innerWidth <= px;
+}
+
 if (typeof window !== "undefined" && !window.matchMedia) {
   window.matchMedia = (query: string): MediaQueryList => ({
-    matches: false,
+    matches: widthMatches(query),
     media: query,
     onchange: null,
     addListener: () => {},

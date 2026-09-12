@@ -1,5 +1,5 @@
 import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
-import { useDisclosure } from "@mantine/hooks";
+import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { useEffect, useState } from "react";
 import { api } from "./api/client.js";
 import { useLiveState } from "./api/useLiveState.js";
@@ -7,6 +7,7 @@ import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadg
 import { PasswordGate } from "./components/PasswordGate.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
+import { useLocalToggle } from "./lib/useLocalToggle.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
@@ -71,6 +72,19 @@ export function App() {
   // this is only ever a version to show or nothing at all.
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [opened, { toggle, close }] = useDisclosure(false);
+  // The wide-screen counterpart of `opened`. AppShell keeps the two
+  // collapse states apart -- the narrow one slides a drawer over the page,
+  // the wide one takes the navbar out and lets the content have its width
+  // -- so one flag cannot drive both without the hidden one surfacing at
+  // the wrong size after a resize.
+  const [deskCollapsed, toggleDesk] = useLocalToggle("tw.sidebarCollapsed", false);
+  // Which of the two the burger drives. Matches AppShell's own `sm`
+  // breakpoint below, so the control always acts on the sidebar the user
+  // is actually looking at. Measured during the first render rather than
+  // in an effect (the hook's default): deferring it returns `undefined`
+  // once, which would paint the burger in its narrow-screen state for a
+  // frame and flash the icon on every desktop load.
+  const wide = useMediaQuery("(min-width: 48em)", false, { getInitialValueInEffect: false });
   // Drives the live-count badge in the nav and the header's connection
   // dot. `connected` is computed by the hook from EventSource's own
   // lifecycle and, before this, was read nowhere -- so a dropped stream
@@ -112,7 +126,8 @@ export function App() {
   const navigate = (key: ScreenKey) => {
     setScreen(key);
     // On mobile the sidebar is a slide-over; leaving it open over the
-    // screen the user just chose hides the thing they navigated to.
+    // screen the user just chose hides the thing they navigated to. The
+    // wide-screen sidebar covers nothing, so it stays as the user set it.
     close();
   };
 
@@ -120,13 +135,22 @@ export function App() {
     <PasswordGate sessionExpired={authExpired} onUnlocked={retry}>
       <AppShell
         header={{ height: 56 }}
-        navbar={{ width: 240, breakpoint: "sm", collapsed: { mobile: !opened } }}
+        navbar={{
+          width: 240,
+          breakpoint: "sm",
+          collapsed: { mobile: !opened, desktop: deskCollapsed },
+        }}
         padding="lg"
       >
         <AppShell.Header bg="var(--tw-surface)" style={{ borderColor: "var(--tw-border)" }}>
           <Group h="100%" px="md" justify="space-between" wrap="nowrap">
             <Group gap="sm" wrap="nowrap">
-              <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+              <Burger
+                opened={wide ? !deskCollapsed : opened}
+                onClick={wide ? toggleDesk : toggle}
+                aria-label="Toggle sidebar"
+                size="sm"
+              />
               <Text fw={600}>{SCREENS[screen].label}</Text>
             </Group>
             <Group gap="sm" wrap="nowrap">
