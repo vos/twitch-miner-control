@@ -111,8 +111,6 @@ export function StreamerRow(
           >
             {username}
           </Text>
-          {/* `title` rather than a Mantine <Tooltip>, which hangs the
-              vitest worker. */}
           {watching && (
             <Badge
               size="xs" variant="light" color="twitch" data-testid="watching-tag"

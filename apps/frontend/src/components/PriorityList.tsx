@@ -195,8 +195,6 @@ function PriorityRow(
             <Badge size="xs" variant="light" color="twitch">first</Badge>
           )}
         </Group>
-        {/* `title` rather than a Mantine <Tooltip>, which hangs the vitest
-            worker. */}
         <ActionIcon
           variant="subtle"
           color="red"

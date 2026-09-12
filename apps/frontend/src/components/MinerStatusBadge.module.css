@@ -1,0 +1,91 @@
+/*
+ * The header readout reveals itself in steps rather than all at once.
+ *
+ * Every figure used to hang off Mantine's `sm` (768px), which made the
+ * row binary: a phone got the badge and a bare percentage, and at 768
+ * everything else appeared together. That wasted the whole 400-760px
+ * range, where a tablet had hundreds of spare pixels showing nothing --
+ * and 768 is the worst possible moment to add content, since it is
+ * exactly where the sidebar mounts and takes 240px away.
+ *
+ * The thresholds below are measured, not guessed: each is the width at
+ * which that figure fits beside the ones before it, plus headroom for
+ * the longest value it can hold (a "3h 25m 12s" uptime, a "RESTARTING"
+ * badge). Reveal order follows what each figure is worth when space is
+ * short -- see the component's own doc comment.
+ *
+ * In `em` so a user's larger default font moves the steps with the text
+ * that has to fit; px thresholds would keep the layout's promises only
+ * at a 16px root.
+ */
+
+/*
+ * Three readings, not one sentence.
+ *
+ * Rendered in one weight and one colour, "16m 06s 2% 1m avg 58 MB" reads
+ * as a single run of text and the eye has to parse it to find the
+ * boundaries. Colour would separate them, but the palette has already
+ * spent its meanings -- green is a points gain, red is live, amber is a
+ * warning -- and the header shows green twice already (the connection
+ * dot and a RUNNING badge). A fourth, purely decorative green would cost
+ * those their meaning, and these three figures are neutral readings
+ * anyway: nothing about 58 MB is good or bad.
+ *
+ * So the separation is structural. Each figure is a bright value with a
+ * dimmed unit welded to it, and a hairline divides one from the next.
+ */
+
+.value {
+  color: var(--tw-text);
+  font-weight: 600;
+}
+
+/*
+ * Smaller and dimmed, and hard against its digits with no space: "58MB"
+ * is one object where "58 MB" is two words. This is what makes a figure
+ * legible as a unit without a label.
+ */
+.unit {
+  color: var(--tw-text-dim);
+  font-size: 0.85em;
+  font-weight: 400;
+}
+
+/*
+ * A rule, not a bullet or a slash: it divides without adding a glyph the
+ * eye can mistake for part of a value.
+ *
+ * `display` is deliberately absent. A divider also carries a tier class,
+ * and those toggle `display` to reveal at a width -- setting it here too
+ * would mean whichever rule won decided both questions. The flex parent
+ * makes a revealed `inline` span a flex item regardless, so the 1px box
+ * holds; `align-self` keeps it centred rather than stretched to the row.
+ */
+.divider {
+  width: 1px;
+  height: 14px;
+  align-self: center;
+  background: var(--tw-border);
+  flex-shrink: 0;
+}
+
+/* 25em = 400px. */
+.fromUptime { display: none; }
+@media (min-width: 25em) {
+  .fromUptime { display: revert; }
+}
+
+/* 28em = 448px. */
+.fromMemory { display: none; }
+@media (min-width: 28em) {
+  .fromMemory { display: revert; }
+}
+
+/*
+ * 36em = 576px. Last because it is the only figure the panel cannot
+ * restate: a shape has no text equivalent in the detail rows.
+ */
+.fromGraph { display: none; }
+@media (min-width: 36em) {
+  .fromGraph { display: flex; }
+}

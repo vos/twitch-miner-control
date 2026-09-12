@@ -84,7 +84,9 @@ test("the miner actions live in the sidebar dock, beside the header's badge", as
 test("the header shows how long the miner has been up", async () => {
   stub(false);
   view();
-  expect(await screen.findByTestId("miner-uptime")).toHaveTextContent("1m 30s");
+  // "1m30s": the header welds each number to its unit so the readout's
+  // figures read as separate objects -- see MinerStatusBadge.
+  expect(await screen.findByTestId("miner-uptime")).toHaveTextContent("1m30s");
 });
 
 test("the dashboard carries the sign-in notice when Twitch login is required", async () => {
