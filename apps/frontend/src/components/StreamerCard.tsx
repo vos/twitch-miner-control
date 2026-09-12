@@ -1,6 +1,7 @@
 import { Group, Stack, Text } from "@mantine/core";
 import { Sparkline } from "./Sparkline.js";
 import { StreamContext } from "./StreamContext.js";
+import { ViewerCount } from "./ViewerCount.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamerMeta } from "./StreamerMeta.js";
 import { StreamerTimes } from "./StreamerTimes.js";
@@ -58,8 +59,18 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
       data-testid={`streamer-${s.username}`}
     >
       <Stack gap="xs">
-        <Group justify="space-between" wrap="nowrap">
-          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+        {/* A grid, not nested rows. The pill is a real sibling on the
+            name's row, so with flex the text column could only ever have
+            the width the pill left it -- 174px of a 320px card -- and the
+            category truncated with empty space beside it.
+
+            Here the avatar spans both rows, the name shares row 1 with
+            the pill, and row 2 pairs the category with the viewer count
+            under the pill: the category starts beside the avatar and
+            takes the free width, the count stays a figure in a column
+            with the pill rather than trailing the prose. */}
+        <div className={classes.identity} data-testid="identity">
+          <div className={classes.avatarCell}>
             <StreamerAvatar
               login={s.username}
               displayName={s.displayName}
@@ -67,22 +78,22 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
               size={40}
               live={live}
             />
-            {/* Its own link rather than one anchor around both: the name
-                truncates and the avatar must not, so they cannot share a
-                box, and a separate link keeps each one's accessible name
-                honest. */}
-            <Text
-              component="a"
-              href={`https://twitch.tv/${s.username}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              fw={600}
-              truncate
-              className={classes.name}
-            >
-              {s.displayName ?? s.username}
-            </Text>
-          </Group>
+          </div>
+          {/* Its own link rather than one anchor around both: the name
+              truncates and the avatar must not, so they cannot share a
+              box, and a separate link keeps each one's accessible name
+              honest. */}
+          <Text
+            component="a"
+            href={`https://twitch.tv/${s.username}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            fw={600}
+            truncate
+            className={classes.name}
+          >
+            {s.displayName ?? s.username}
+          </Text>
           {/* Status only. Every other signal moved to StreamerMeta so
               this row stays identity + live state and the name keeps its
               width as signals are added. */}
@@ -92,18 +103,16 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
             lastLive={s.lastLive}
             elapsed={live ? elapsed : null}
           />
-        </Group>
-
-        {/* Below the title row rather than inside it. Stacked under the
-            name it shared a row with the LIVE pill, which left it 118px of
-            a 320px card and truncated "Just Chatting" to "Just C...". It
-            has no reason to sit beside the pill, and full width costs
-            nothing: the row is only as tall as its text either way. */}
-        <StreamContext
-          game={s.game ?? null}
-          viewers={s.viewers ?? null}
-          title={s.streamTitle ?? null}
-        />
+          <div className={classes.contextCell}>
+            <StreamContext game={s.game ?? null} title={s.streamTitle ?? null} />
+          </div>
+          {/* Its own cell under the pill: a figure belongs in a column
+              with the other figure above it, not trailing a line of prose
+              that truncates before it. */}
+          <div className={classes.viewersCell}>
+            <ViewerCount viewers={s.viewers ?? null} />
+          </div>
+        </div>
 
         <Text className={classes.balance} data-testid="balance">
           {s.points === null ? "—" : nf.format(s.points)}

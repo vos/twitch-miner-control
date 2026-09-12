@@ -28,17 +28,31 @@
   white-space: nowrap;
 }
 
-.dot,
-.viewers {
-  flex-shrink: 0;
-}
+/* Its own size and colour rather than inherited ones: this used to sit
+   inside .context and took both from it, but as its own grid cell it
+   inherits the card's 16px base instead and rendered as a headline
+   figure competing with the balance.
 
-/* Tabular so a ticking audience cannot change the row's width. */
+   Tabular so a ticking audience cannot change the column's width. */
 .viewers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--tw-text-dim);
   font-variant-numeric: tabular-nums;
 }
 
-.interactive:hover .game,
-.interactive:hover .viewers {
+/* Sized in em so it tracks the line's font-size, and nudged down a
+   hair: the glyph's optical centre sits above its box's centre, so
+   aligning the boxes leaves it floating above the digits. */
+.viewerIcon {
+  width: 1em;
+  height: 1em;
+  transform: translateY(0.5px);
+}
+
+.interactive:hover .game {
   color: var(--tw-text);
 }

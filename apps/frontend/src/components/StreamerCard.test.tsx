@@ -451,10 +451,11 @@ test("shows an active multiplier as active while the channel is live", () => {
 });
 
 test("shows the category and viewer count under the streamer name", () => {
+  // Separate cells now -- the category is prose that truncates, the
+  // count is a figure aligned under the pill.
   view({ game: "Just Chatting", viewers: 1200 });
-  const context = screen.getByTestId("stream-context");
-  expect(context).toHaveTextContent("Just Chatting");
-  expect(context).toHaveTextContent("1.2K");
+  expect(screen.getByTestId("stream-context")).toHaveTextContent("Just Chatting");
+  expect(screen.getByTestId("viewers")).toHaveTextContent("1.2K");
 });
 
 test("shows the category alone when the channel is offline", () => {
@@ -501,4 +502,59 @@ test("does not close the title popover on the hover events a tap synthesises", a
   const context = screen.getByTestId("stream-context");
   await user.click(context);
   expect(context).toHaveAttribute("aria-expanded", "true");
+});
+
+test("puts the stream context in the text column, not under the avatar", () => {
+  // Twitch's own shape: the avatar spans the identity block, with the
+  // name and what the channel is playing stacked beside it. Full-width
+  // below the avatar left the picture with nothing next to it and the
+  // context starting at the card's edge.
+  view({ game: "Just Chatting", viewers: 1200 });
+  const context = screen.getByTestId("stream-context");
+  const identity = screen.getByTestId("identity");
+  expect(identity).toContainElement(context);
+  // The avatar sits in the same identity block, as a sibling of the
+  // stack holding the name and context -- not above them.
+  expect(identity).toContainElement(
+    screen.getByRole("link", { name: /on Twitch/i }),
+  );
+});
+
+test("marks the viewer count with an icon so the number has a meaning", () => {
+  // A bare "2.0K" beside a category reads as an unlabelled figure. The
+  // person glyph is how Twitch itself says "this is an audience".
+  view({ game: "Just Chatting", viewers: 1200 });
+  expect(screen.getByTestId("viewers")).toHaveAccessibleName(/viewers/i);
+});
+
+test("renders no viewer icon when the channel is offline", () => {
+  view({ isOnline: false, game: "Just Chatting", viewers: null });
+  expect(screen.queryByTestId("viewers")).not.toBeInTheDocument();
+});
+
+test("aligns the viewer count right, under the live badge", () => {
+  // Its own grid cell rather than trailing the category: the count is a
+  // figure and belongs in a column with the pill above it, not in the
+  // middle of a line of prose that truncates.
+  view({ game: "Just Chatting", viewers: 1200 });
+  const identity = screen.getByTestId("identity");
+  const viewers = screen.getByTestId("viewers");
+  expect(identity).toContainElement(viewers);
+  // No longer inside the category's element -- they are siblings now.
+  expect(screen.getByTestId("stream-context")).not.toContainElement(viewers);
+});
+
+test("keeps the title popover on the category, not the viewer count", () => {
+  // The title describes what is being streamed, which is what the
+  // category names -- the audience size is a different fact.
+  view({ game: "Just Chatting", viewers: 1200, streamTitle: "!drops // day 4" });
+  expect(screen.getByTestId("stream-context")).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByTestId("viewers").tagName).not.toBe("BUTTON");
+});
+
+test("shows the viewer count even when the channel has no category", () => {
+  // The two are independent facts now that they are separate cells: a
+  // live channel with no category set still has an audience.
+  view({ game: null, viewers: 1200 });
+  expect(screen.getByTestId("viewers")).toHaveTextContent("1.2K");
 });

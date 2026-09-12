@@ -123,3 +123,62 @@
   color: var(--tw-purple);
   text-decoration: underline;
 }
+
+/* The identity block: avatar, name, status pill and stream context.
+
+   A grid because the pill and the context line have different owners.
+   As nested flex rows the context could only occupy what the pill left
+   over -- 174px of a 320px card -- so a category truncated while empty
+   space sat beside it. Here the avatar spans both rows, the name shares
+   row 1 with the pill, and row 2 pairs the category with the viewer
+   count: the category takes the free width, the count stays right
+   aligned in a column under the pill. */
+.identity {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "avatar name    pill"
+    "avatar context viewers";
+  align-items: center;
+  column-gap: 10px;
+  /* Zero: the name's line box already carries its own leading, and the
+     category is a subtitle of the name rather than a separate row. */
+  row-gap: 0;
+}
+
+.avatarCell {
+  grid-area: avatar;
+  display: flex;
+  align-items: center;
+}
+
+.identity > .name {
+  grid-area: name;
+  min-width: 0;
+  /* Tightened from the theme's ~1.55. That leading put ~4.4px of empty
+     space below the glyphs INSIDE the name's own box, so the category
+     read as a separate line rather than a subtitle -- and shrinking
+     row-gap could not close it, because the space was inside the box
+     above, not between the two. */
+  line-height: 1.25;
+}
+
+/* The pill sits with the name, not centred on the block: the context
+   line below must not push it out of line with the name it qualifies. */
+.identity > [data-testid$="-pill"] {
+  grid-area: pill;
+  justify-self: end;
+}
+
+.contextCell {
+  grid-area: context;
+  min-width: 0;
+}
+
+/* Right-aligned under the pill, and never allowed to shrink: the
+   category beside it is what gives way when the card is narrow. */
+.viewersCell {
+  grid-area: viewers;
+  justify-self: end;
+  min-width: 0;
+}

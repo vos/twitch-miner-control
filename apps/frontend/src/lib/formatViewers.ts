@@ -16,10 +16,10 @@ export function formatViewers(count: number | null): string | null {
   const [value, suffix] = count < 1_000_000
     ? [count / 1000, "K"]
     : [count / 1_000_000, "M"];
-  // A trailing ".0" spends a character saying nothing -- the rounding
-  // upstream guarantees the tenth is zero at this magnitude.
-  const shown = value >= 100 || Number.isInteger(value)
-    ? Math.round(value).toString()
-    : value.toFixed(1);
+  // The tenth is kept even when it is a zero: "2K" would throw away
+  // precision the snapshot carries, since 2,000 is exact at this
+  // magnitude. Only at or above 100K has the upstream rounding to three
+  // significant figures already dropped the tenth, leaving none to show.
+  const shown = value >= 100 ? Math.round(value).toString() : value.toFixed(1);
   return `${shown}${suffix}`;
 }
