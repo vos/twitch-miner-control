@@ -401,7 +401,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       };
     });
 
-    instance.get("/api/logs", async () => ({ lines: deps.supervisor.logs() }));
+    instance.get("/api/logs", async () => deps.supervisor.logs());
 
     for (const action of ["start", "stop", "restart"] as const) {
       instance.post(`/api/miner/${action}`, async () => {
@@ -513,6 +513,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // the row the moment it is recorded means only genuinely new events cross
   // the wire; the client fetches the backlog once on mount.
   deps.stateService.on("event", (row) => hub.broadcast("event", row));
+  // New miner output, carrying the buffer's running total so the log view can
+  // skip lines it already has and notice any it missed.
+  deps.supervisor.on("log", (frame) => hub.broadcast("log", frame));
   // Built at emit time, so the frame carries the start time that belongs to
   // the state being announced: a RUNNING frame gets the new process's
   // timestamp, and a STOPPED/CRASHED frame gets null.

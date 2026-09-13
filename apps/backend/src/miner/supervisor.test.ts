@@ -39,7 +39,17 @@ test("captures miner stdout into the log buffer", async () => {
   const s = make("normal");
   await s.start();
   await settle(100);
-  expect(s.logs().join("\n")).toContain("miner started");
+  expect(s.logs().lines.join("\n")).toContain("miner started");
+});
+
+test("announces captured output with the buffer's running line count", async () => {
+  const s = make("normal");
+  const frames: Array<{ lines: string[]; total: number }> = [];
+  s.on("log", (frame) => frames.push(frame));
+  await s.start();
+  await settle(100);
+  expect(frames.flatMap((f) => f.lines).join("\n")).toContain("miner started");
+  expect(frames.at(-1)!.total).toBe(s.logs().total);
 });
 
 test("stop terminates a well-behaved miner with SIGTERM", async () => {
@@ -74,7 +84,7 @@ test("CRASHED surfaces the last log lines for diagnosis", async () => {
   const s = make("instant");
   await s.start();
   await settle(400);
-  expect(s.logs().join("\n")).toContain("KeyError");
+  expect(s.logs().lines.join("\n")).toContain("KeyError");
 });
 
 test("restart serializes so two callers cannot fork two miners", async () => {

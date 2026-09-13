@@ -40,7 +40,7 @@ async function make(options: { statusTickMs?: number } = {}) {
   const supervisor = Object.assign(new EventEmitter(), {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
-    logs: () => ["line one", "line two"],
+    logs: () => ({ lines: ["line one", "line two"], total: 2 }),
     // The dashboard's uptime timer ticks from this, so the API has to
     // carry it; a fixed value keeps the assertions exact.
     runningSince: 1_700_000_000_000 as number | null,
@@ -291,7 +291,7 @@ test("POST /api/miner/restart delegates to the supervisor", async () => {
 
 test("GET /api/logs returns the ring buffer", async () => {
   const res = await ctx.app.inject({ method: "GET", url: "/api/logs", cookies: auth() });
-  expect(res.json().lines).toEqual(["line one", "line two"]);
+  expect(res.json()).toEqual({ lines: ["line one", "line two"], total: 2 });
 });
 
 test("GET /api/streamers/lookup proxies to the helper", async () => {
@@ -608,6 +608,16 @@ test("pushes the status to SSE clients the moment the miner changes state", asyn
   stream.close();
 });
 
+test("pushes new miner output to SSE clients as it is logged", async () => {
+  const stream = await openStream();
+  const seen = stream.next();
+  ctx.supervisor.emit("log", { lines: ["fresh line"], total: 3 });
+  const frame = await seen;
+  expect(frame).toContain("event: log");
+  expect(frame).toContain('{"lines":["fresh line"],"total":3}');
+  stream.close();
+});
+
 test("pushes the status to SSE clients when the Twitch session is found dead", async () => {
   ctx.loginStatus.markLoggedIn();
   const stream = await openStream();
@@ -711,7 +721,7 @@ async function makeLive() {
   const supervisor = {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
-    logs: () => [], on: vi.fn(),
+    logs: () => ({ lines: [], total: 0 }), on: vi.fn(),
   };
   const loginRunner = Object.assign(new EventEmitter(), {
     current: null, start: vi.fn(), cancel: vi.fn(),

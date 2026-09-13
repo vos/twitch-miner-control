@@ -24,8 +24,8 @@ function stub(loginRequired: boolean) {
     // PasswordGate's own unlock check, and whatever the active screen
     // fetches -- none of them is under test here, so a single
     // generic-enough stub covers them all. `lines` is part of that shape
-    // because the Logs screen polls on a timer: once a test has visited
-    // it, a later poll landing without it throws from inside a render.
+    // because the Logs screen renders straight from it: a test that visits
+    // that screen would otherwise throw from inside a render.
     return {
       ok: true, status: 200,
       json: async () => ({

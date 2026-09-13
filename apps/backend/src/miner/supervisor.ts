@@ -151,7 +151,15 @@ export class Supervisor extends EventEmitter {
     return run;
   }
 
-  logs(): string[] { return this.buffer.lines(); }
+  logs(): { lines: string[]; total: number } {
+    return { lines: this.buffer.lines(), total: this.buffer.total };
+  }
+
+  /** Keeps miner output and announces the lines kept, for the live log view. */
+  private log(chunk: string): void {
+    const lines = this.buffer.push(chunk);
+    if (lines.length > 0) this.emit("log", { lines, total: this.buffer.total });
+  }
 
   /**
    * When the live miner process started, or null if none is running.
@@ -198,8 +206,8 @@ export class Supervisor extends EventEmitter {
       env: { ...process.env, ...this.options.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout?.on("data", (d) => this.buffer.push(String(d)));
-    child.stderr?.on("data", (d) => this.buffer.push(String(d)));
+    child.stdout?.on("data", (d) => this.log(String(d)));
+    child.stderr?.on("data", (d) => this.log(String(d)));
     child.on("exit", (code) => this.onExit(generation, code));
     // Without this listener, a spawn failure (e.g. ENOENT for a bad
     // python/venv path) makes Node throw on the unhandled 'error' event
@@ -262,7 +270,7 @@ export class Supervisor extends EventEmitter {
   private onSpawnError(generation: number, err: Error): void {
     if (generation !== this.generation) return;
     this.child = null;
-    this.buffer.push(`failed to start miner: ${err.message}`);
+    this.log(`failed to start miner: ${err.message}`);
     this.setState("CRASHED");
   }
 
@@ -280,7 +288,7 @@ export class Supervisor extends EventEmitter {
     if (uptime < this.fastExit) {
       // Exited almost immediately: the config or environment is broken.
       // Retrying cannot help and risks hammering Twitch auth.
-      this.buffer.push(`miner exited after ${uptime}ms with code ${code}`);
+      this.log(`miner exited after ${uptime}ms with code ${code}`);
       this.setState("CRASHED");
       return;
     }
@@ -300,7 +308,7 @@ export class Supervisor extends EventEmitter {
 
   private async scheduleRestart(generation: number, code: number | null): Promise<void> {
     if (this.restartCount > (this.options.maxRestarts ?? 5)) {
-      this.buffer.push(
+      this.log(
         `giving up after ${this.restartCount} restarts within ${this.crashWindow}ms`,
       );
       this.setState("CRASHED");
@@ -328,7 +336,7 @@ export class Supervisor extends EventEmitter {
     // down too, instead of the backoff delay ratcheting up forever
     // over the miner's entire lifetime.
     const delay = Math.min(base * 2 ** (this.restartCount - 1), cap);
-    this.buffer.push(`miner exited (code ${code}); restarting in ${delay}ms`);
+    this.log(`miner exited (code ${code}); restarting in ${delay}ms`);
     await sleep(delay);
     // A stop()/restart() may have happened while we were sleeping;
     // bail out rather than resurrecting a miner the caller deliberately
@@ -394,7 +402,7 @@ export class Supervisor extends EventEmitter {
       // never fire kill() on an already-reaped pid or keep the event
       // loop alive after shutdown.
       const killTimer = setTimeout(() => {
-        this.buffer.push("miner ignored SIGTERM; sending SIGKILL");
+        this.log("miner ignored SIGTERM; sending SIGKILL");
         child.kill("SIGKILL");
       }, this.grace);
       child.kill("SIGTERM");
