@@ -79,7 +79,11 @@ export function Settings() {
   };
 
   return (
-    <Stack pb={80}>
+    // A form is read in one column, so the measure is capped rather than
+    // left to fill the window: AppShell.Main sets no width, and on a wide
+    // monitor every card stretched the full viewport, stranding each
+    // control an eye-journey away from the label it belongs to.
+    <Stack pb={80} maw={760}>
       {error && <Alert role="alert" color="red">{error}</Alert>}
       <Card withBorder padding="md">
         <Switch

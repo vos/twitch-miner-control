@@ -1,0 +1,39 @@
+/* A settings row is a label and a control separated by whatever width the
+   window happens to have. On a wide monitor `justify="space-between"` put
+   the label at one edge and its switch at the other, far enough apart that
+   matching a checkbox to its setting meant tracking across empty space --
+   and with seven near-identical switches stacked in a column, the eye lost
+   its row on the way back.
+
+   Three things fix that, and each is needed: the page caps its measure
+   (Settings.tsx), the label column stops growing (below), and the rows get
+   a rail to track along (below). */
+
+.row {
+  /* The control sits at a predictable x on every row instead of being
+     pushed around by the longest help text. Without the cap the label
+     stack's `flex: 1` claims the slack and the controls stagger. */
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-md);
+  flex-wrap: nowrap;
+  /* Was py=6. The extra height is what lets a divider read as a separator
+     between two rows rather than as an underline on the one above. */
+  padding: 10px 0;
+}
+
+/* A hairline per row, so the eye has something to follow from the label to
+   the control. Skipped on the last row: a card already ends there, and a
+   second line just below the final one reads as a mistake. */
+.row:not(:last-child) {
+  border-bottom: 1px solid var(--tw-border);
+}
+
+.label {
+  /* Sized from the content but never past the cap, and free to shrink on a
+     narrow row. 420px holds the longest help string here
+     ("Fetch the stream like a real player...") at about two lines. */
+  flex: 0 1 420px;
+  min-width: 0;
+}

@@ -1,5 +1,6 @@
 import { Badge, Group, NumberInput, Select, Stack, Switch, Text } from "@mantine/core";
 import { type SettingsField, describeDefault } from "../lib/settingsFields.js";
+import classes from "./SettingsFieldRow.module.css";
 
 export interface SettingsFieldRowProps {
   field: SettingsField;
@@ -109,8 +110,8 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
   };
 
   return (
-    <Group justify="space-between" align="flex-start" wrap="nowrap" py={6}>
-      <Stack gap={2} style={{ flex: 1 }}>
+    <div className={classes.row}>
+      <Stack gap={2} className={classes.label}>
         <Group gap="xs">
           <Text size="sm" fw={500}>{field.label}</Text>
           {/* Only where a field can inherit: there the badge says something
@@ -140,6 +141,6 @@ export function SettingsFieldRow(props: SettingsFieldRowProps) {
           />
         )}
       </Group>
-    </Group>
+    </div>
   );
 }
