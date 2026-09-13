@@ -1,16 +1,22 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { History } from "../db/history.js";
+import { Streamers } from "../db/streamers.js";
 import { openDb } from "../db/schema.js";
 import { StateService } from "./service.js";
 
 let history: History;
+let streamers: Streamers;
 let clock: number;
 beforeEach(() => {
-  history = new History(openDb(":memory:"));
+  // One database behind both: the sighting floor and the spans it clips
+  // are read together on every refresh.
+  const db = openDb(":memory:");
+  history = new History(db);
+  streamers = new Streamers(db);
   clock = 10_000;
 });
 
-function make(responses: unknown[], streamers = ["alpha"]) {
+function make(responses: unknown[], roster = ["alpha"]) {
   const queue = [...responses];
   const request = vi.fn(async () => {
     const next = queue.shift();
@@ -20,7 +26,8 @@ function make(responses: unknown[], streamers = ["alpha"]) {
   const service = new StateService({
     client: { request } as never,
     history,
-    getStreamers: () => streamers,
+    streamers,
+    getStreamers: () => roster,
     staleAfterMs: 1000,
     debounceMs: 50,
     now: () => clock,
@@ -235,13 +242,14 @@ test("skips the round trip when no streamers are configured", async () => {
 // lastUpdated (fresh, not stale), clear any previous error, and notify
 // listeners exactly once -- not on every subsequent empty refresh.
 test("removing the last streamer clears state, is not stale, and emits change once", async () => {
-  let streamers = ["alpha"];
+  let roster = ["alpha"];
   const queue: unknown[] = [alpha(100)];
   const request = vi.fn(async () => queue.shift());
   const service = new StateService({
     client: { request } as never,
     history,
-    getStreamers: () => streamers,
+    streamers,
+    getStreamers: () => roster,
     staleAfterMs: 1000,
     debounceMs: 50,
     now: () => clock,
@@ -253,7 +261,7 @@ test("removing the last streamer clears state, is not stale, and emits change on
   await service.refresh();
   expect(changes.length).toBe(1);
 
-  streamers = [];
+  roster = [];
   clock += 1;
   await service.refresh();
 
@@ -724,6 +732,9 @@ test("counts only the miner's own uptime inside a much longer stream", () => {
   clock = 10_000_000;
   history.openStreamerSession("alpha", "S1", clock - 26 * 3_600_000, 0);
   history.openMinerSession(clock - 13 * 60_000);
+  // We have had this channel on the roster since before the stream: the
+  // figure under test is the miner's late start, not a late roster add.
+  streamers.see("alpha", clock - 26 * 3_600_000);
   const { service } = make([alpha(100, true, "S1", clock - 26 * 3_600_000)]);
   return service.refresh().then(() => {
     const s = service.snapshot().streamers[0];
@@ -743,6 +754,9 @@ test("counts mining time only while the miner was up", async () => {
   history.closeStreamerSessionsExcept("alpha", null, streamEnd);
   history.openMinerSession(streamStart + 1_800_000);
   history.closeMinerSession(streamEnd);
+  // On the roster since before the closed stream -- the gap under test is
+  // between the two older clocks, not our arrival.
+  streamers.see("alpha", streamStart);
   const { service } = make([alpha(100, true, "S1", clock - 60_000)]);
   await service.refresh();
   const s = service.snapshot().streamers[0];
@@ -890,4 +904,66 @@ test("a 401 answered by the old helper cannot re-post itself after a login", asy
   await inFlight;
 
   expect(service.snapshot().error).toBeNull();
+});
+
+test("counts no mining time for a streamer added mid-stream", async () => {
+  // The bug from the dashboard: a channel added to the roster 8 hours
+  // into its stream reported all 8 hours as mined. The miner was up for
+  // every one of them and Twitch's createdAt is a genuine 8h ago, so the
+  // two existing clocks agree -- and are both wrong. Only "when did we
+  // first see this channel" can say we were not there for any of it.
+  clock = 100 * 3_600_000;
+  const streamStart = clock - 8 * 3_600_000;
+  history.openMinerSession(clock - 72 * 3_600_000);
+  const { service } = make([alpha(100, true, "S1", streamStart)]);
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  expect(s.mined24h).toBe(0);
+  expect(s.minedTotal).toBe(0);
+  // The stream's own length is untouched: the LIVE badge still needs it.
+  expect(s.liveSince).toBe(streamStart);
+});
+
+test("counts mining time from our arrival for a streamer added mid-stream", async () => {
+  // One hour after the add above, the figure is that hour -- not nine.
+  clock = 100 * 3_600_000;
+  const streamStart = clock - 8 * 3_600_000;
+  history.openMinerSession(clock - 72 * 3_600_000);
+  const { service } = make(
+    [alpha(100, true, "S1", streamStart), alpha(150, true, "S1", streamStart)],
+  );
+  await service.refresh();
+  clock += 3_600_000;
+  await service.refresh();
+  const s = service.snapshot().streamers[0];
+  expect(s.mined24h).toBe(3_600_000);
+  expect(s.minedTotal).toBe(3_600_000);
+});
+
+/** A poll that could not resolve the channel's community block: state.py
+ *  reports every descriptive field as null, the display name included. */
+const nameless = (points: number) => ({
+  streamers: [{
+    username: "alpha", channelId: null, displayName: null,
+    points, isOnline: true, pointsEnabled: true,
+    streamId: "S1", streamStartedAt: 1000,
+  }],
+});
+
+test("keeps the last known display name when a poll reports none", async () => {
+  // Without the fallback the card renames itself to the lowercase login
+  // for as long as the channel fails to resolve.
+  const { service } = make([alpha(100), nameless(100)]);
+  await service.refresh();
+  clock += 1000;
+  await service.refresh();
+  expect(service.snapshot().streamers[0].displayName).toBe("Alpha");
+});
+
+test("reports a null display name when none was ever resolved", async () => {
+  // Nothing stored and nothing polled: the card's own fallback to the
+  // login is correct here, so this must not invent a name.
+  const { service } = make([nameless(100)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].displayName).toBeNull();
 });

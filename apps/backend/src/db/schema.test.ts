@@ -21,6 +21,18 @@ test("creates the span tables", () => {
   );
 });
 
+test("creates the streamers table with the sighting floor", () => {
+  // first_seen_ts is the floor under every mining figure; the avatar
+  // columns share the row because both are per-streamer and keyed alike.
+  const db = openDb(":memory:");
+  expect(columns(db, "streamers")).toEqual(
+    expect.arrayContaining([
+      "login", "first_seen_ts", "last_seen_ts", "display_name",
+      "avatar_url", "fetched_at",
+    ]),
+  );
+});
+
 test("keeps one row per real stream", () => {
   const db = openDb(":memory:");
   const insert = () => db.prepare(

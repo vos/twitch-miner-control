@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
+import type { Streamers } from "../db/streamers.js";
 import { attribute } from "./attribute.js";
 import { downsample } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
@@ -203,6 +204,15 @@ export interface StateSnapshot {
 export interface StateServiceDeps {
   client: { request<T>(op: string, params?: object): Promise<T> };
   history: History;
+  /**
+   * Per-streamer sightings, the floor under every mining figure.
+   *
+   * Optional so a boot before the store exists -- and the many tests that
+   * do not care -- still run. Absent, mining time falls back to the two
+   * older clocks, which is exactly the behaviour that over-reported a
+   * channel added mid-stream.
+   */
+  streamers?: Streamers;
   getStreamers: () => string[] | Promise<string[]>;
   intervalMs?: number;
   debounceMs?: number;
@@ -443,6 +453,13 @@ export class StateService extends EventEmitter {
           this.deps.history.recordPoints(s.username, s.points, at);
         }
 
+        // Every polled channel, live or not: the floor is "since when
+        // have we been looking", which a channel answers by being in the
+        // roster at all, not by being live. The display name rides along
+        // so a poll that could not resolve one keeps the last we saw
+        // rather than falling back to the lowercase login.
+        this.deps.streamers?.see(s.username, at, s.displayName);
+
         // An upsert on Twitch's stream id rather than a reaction to an
         // observed transition: this runs on every live tick, so a restart
         // mid-stream finds the existing row and keeps its anchor intact.
@@ -483,19 +500,43 @@ export class StateService extends EventEmitter {
         // to the minute (toMinutes below): a live figure then changes at
         // most once a minute rather than on every poll.
         const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, at);
+        // The third clock. streamer_sessions.start_ts is Twitch's own
+        // createdAt, so a channel added to the roster mid-stream opens a
+        // session back-dated to a start we were never present for --
+        // and the miner, up the whole time, agrees. Both existing clocks
+        // are right and the intersection is still wrong: only "when did
+        // we first see this channel" rules out the hours before we
+        // arrived. Recorded just above, so a first-ever poll floors at
+        // `at` and reports zero rather than the stream's whole length.
+        //
+        // Null (no store, or a channel the state pass has never seen)
+        // leaves the older behaviour untouched.
+        const seen = this.deps.streamers?.firstSeen(s.username) ?? null;
+        const floor = seen ?? 0;
         const mined24h = total(intersect(
-          online,
+          clip(online, floor, at),
           clip(this.deps.history.minerSpans(dayAgo), dayAgo, at),
         ));
         const minedTotal = total(intersect(
-          clip(this.deps.history.streamerSpans(s.username), 0, at),
+          clip(this.deps.history.streamerSpans(s.username), floor, at),
           clip(this.deps.history.minerSpans(), 0, at),
         ));
 
         const profile = profiles.get(normaliseUsername(s.username));
         const drop = drops.get(normaliseUsername(s.username)) ?? null;
+        // Read after see() above wrote this poll's own name, so a
+        // resolved poll reads back what it just stored and a failed one
+        // reads the last good name instead. Null only when no poll has
+        // ever resolved the channel, which is the card's own cue to fall
+        // back to the login.
+        const known = this.deps.streamers?.get([s.username]).get(s.username) ?? null;
         return {
           ...s,
+          // Overrides the spread: `s.displayName` is null whenever the
+          // channel's community block is missing, which would otherwise
+          // visibly rename the card to its lowercase login until the
+          // next good poll.
+          displayName: s.displayName ?? known?.displayName ?? null,
           gained24h,
           gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
           gainedStream:

@@ -15,7 +15,7 @@ import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
-import { Profiles } from "./db/profiles.js";
+import { Streamers } from "./db/streamers.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
 import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
@@ -167,7 +167,8 @@ function resolveStreamers(): Promise<string[]> {
   });
 }
 
-const profileCache = new ProfileCache({ profiles: new Profiles(db), client: helper });
+const streamers = new Streamers(db);
+const profileCache = new ProfileCache({ streamers, client: helper });
 
 // Config is re-read per call rather than captured: toggling claimDrops
 // must take effect on the next pass, not at the next restart.
@@ -179,6 +180,7 @@ const dropsCache = new DropsCache({
 const stateService = new StateService({
   client: helper,
   history,
+  streamers,
   getStreamers: resolveStreamers,
   profiles: profileCache,
   drops: dropsCache,

@@ -55,13 +55,33 @@ export function openDb(path: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_miner_sessions_start ON miner_sessions (start_ts);
 
-    CREATE TABLE IF NOT EXISTS streamer_profiles (
-      login      TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS streamers (
+      login         TEXT PRIMARY KEY,
+      -- When we first polled this channel, and the floor under every
+      -- mining figure. streamer_sessions.start_ts is Twitch's createdAt,
+      -- so a channel added to the roster mid-stream opens a session
+      -- back-dated to a stream start we were never present for; without
+      -- this column that whole stretch counted as mined.
+      --
+      -- NULL until the state pass has actually seen the channel: the
+      -- avatar pass writes rows too, and a profile fetch is not evidence
+      -- that we have ever watched anyone.
+      first_seen_ts INTEGER,
+      -- The most recent poll that saw this channel, so "never polled"
+      -- stays distinguishable from "polled, currently offline".
+      last_seen_ts  INTEGER,
+      -- Twitch's own capitalisation ("AlphaTV" for the login "alphatv").
+      -- Persisted because state.py reports it as NULL whenever a
+      -- channel's community block is missing, and the card then falls
+      -- back to the raw lowercase login; holding the last known name
+      -- keeps a failed poll from visibly renaming the streamer.
+      display_name  TEXT,
       -- NULL means "asked Twitch, no avatar". A missing row means
       -- "never asked" -- collapsing the two would re-fetch an
       -- avatarless channel on every single poll, forever.
-      avatar_url TEXT,
-      fetched_at INTEGER NOT NULL
+      avatar_url    TEXT,
+      -- NULL until an avatar has been fetched; the row may exist first.
+      fetched_at    INTEGER
     );
   `);
   addEventColumns(db);

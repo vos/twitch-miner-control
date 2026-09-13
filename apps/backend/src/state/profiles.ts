@@ -1,4 +1,4 @@
-import type { Profiles } from "../db/profiles.js";
+import type { Streamers } from "../db/streamers.js";
 import { normaliseUsername } from "./roster.js";
 
 /**
@@ -45,7 +45,7 @@ export interface ProfileRowData extends StreamInfo {
 }
 
 export interface ProfileCacheDeps {
-  profiles: Profiles;
+  streamers: Streamers;
   client: { request<T>(op: string, params?: object): Promise<T> };
   now?: () => number;
 }
@@ -96,7 +96,7 @@ export class ProfileCache {
     if (wanted.length === 0) return out;
 
     const at = this.now();
-    const cached = this.deps.profiles.get(wanted);
+    const cached = this.deps.streamers.get(wanted);
     const stale: string[] = [];
 
     for (const login of wanted) {
@@ -109,7 +109,8 @@ export class ProfileCache {
         : { game: stream?.info.game ?? null, title: stream?.info.title ?? null,
             viewers: null };
 
-      const avatarFresh = row !== undefined && at - row.fetchedAt <= AVATAR_TTL_MS;
+      const avatarFresh = row !== undefined && row.fetchedAt !== null
+        && at - row.fetchedAt <= AVATAR_TTL_MS;
       // Only a live channel's volatile fields can be stale enough to be
       // worth a call -- an offline one has nothing moving to refresh.
       const streamStale = live.has(login)
@@ -135,7 +136,7 @@ export class ProfileCache {
         // on every refresh.
         const row = data.profiles?.[login] ?? null;
         const avatarUrl = row?.avatarUrl ?? null;
-        this.deps.profiles.put(login, avatarUrl, at);
+        this.deps.streamers.putProfile(login, avatarUrl, at);
         const info: StreamInfo = {
           game: row?.game ?? null,
           title: row?.title ?? null,

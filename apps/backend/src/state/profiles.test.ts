@@ -1,12 +1,12 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { openDb } from "../db/schema.js";
-import { Profiles } from "../db/profiles.js";
+import { Streamers } from "../db/streamers.js";
 import { ProfileCache, AVATAR_TTL_MS, STREAM_TTL_MS } from "./profiles.js";
 
-let profiles: Profiles;
+let streamers: Streamers;
 let clock: number;
 beforeEach(() => {
-  profiles = new Profiles(openDb(":memory:"));
+  streamers = new Streamers(openDb(":memory:"));
   clock = 1_000_000;
 });
 
@@ -21,7 +21,7 @@ function make(responses: unknown[]) {
     return next;
   });
   const cache = new ProfileCache({
-    profiles, client: { request } as never, now: () => clock,
+    streamers, client: { request } as never, now: () => clock,
   });
   return { cache, request };
 }
@@ -35,11 +35,11 @@ test("fetches a login it has never seen and caches it", async () => {
   const { cache, request } = make([{ profiles: { alpha: avatarRow("https://cdn/a.png") } }]);
   expect(await cache.resolve(["alpha"])).toEqual(new Map([["alpha", avatarRow("https://cdn/a.png")]]));
   expect(request).toHaveBeenCalledWith("profiles", { streamers: ["alpha"] });
-  expect(profiles.get(["alpha"]).get("alpha")?.avatarUrl).toBe("https://cdn/a.png");
+  expect(streamers.get(["alpha"]).get("alpha")?.avatarUrl).toBe("https://cdn/a.png");
 });
 
 test("serves a fresh row without asking the helper", async () => {
-  profiles.put("alpha", "https://cdn/a.png", clock);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock);
   const { cache, request } = make([]);
   expect(await cache.resolve(["alpha"])).toEqual(new Map([["alpha", avatarRow("https://cdn/a.png")]]));
   expect(request).not.toHaveBeenCalled();
@@ -48,22 +48,22 @@ test("serves a fresh row without asking the helper", async () => {
 test("a cached null is not re-fetched", async () => {
   // The whole point of storing NULL: a channel with no avatar must not
   // cost a GQL call on every refresh for the rest of time.
-  profiles.put("alpha", null, clock);
+  streamers.putProfile("alpha", null, clock);
   const { cache, request } = make([]);
   expect(await cache.resolve(["alpha"])).toEqual(new Map([["alpha", avatarRow(null)]]));
   expect(request).not.toHaveBeenCalled();
 });
 
 test("re-fetches a row older than the TTL", async () => {
-  profiles.put("alpha", "https://cdn/old.png", clock - AVATAR_TTL_MS - 1);
+  streamers.putProfile("alpha", "https://cdn/old.png", clock - AVATAR_TTL_MS - 1);
   const { cache, request } = make([{ profiles: { alpha: avatarRow("https://cdn/new.png") } }]);
   expect(await cache.resolve(["alpha"])).toEqual(new Map([["alpha", avatarRow("https://cdn/new.png")]]));
   expect(request).toHaveBeenCalledOnce();
-  expect(profiles.get(["alpha"]).get("alpha")?.fetchedAt).toBe(clock);
+  expect(streamers.get(["alpha"]).get("alpha")?.fetchedAt).toBe(clock);
 });
 
 test("a row exactly at the TTL boundary is still fresh", async () => {
-  profiles.put("alpha", "https://cdn/a.png", clock - AVATAR_TTL_MS);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock - AVATAR_TTL_MS);
   const { cache, request } = make([]);
   await cache.resolve(["alpha"]);
   expect(request).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ test("a row exactly at the TTL boundary is still fresh", async () => {
 test("a helper failure returns cached entries and does not throw", async () => {
   // An avatar lookup must never fail a refresh -- the balances in the
   // same tick are what the dashboard is actually for.
-  profiles.put("alpha", "https://cdn/a.png", clock);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock);
   const { cache } = make([new Error("helper exploded")]);
   expect(await cache.resolve(["alpha", "beta"])).toEqual(
     new Map([["alpha", avatarRow("https://cdn/a.png")], ["beta", avatarRow(null)]]),
@@ -92,19 +92,19 @@ test("fetches at most MAX_FETCH_PER_PASS logins in one pass", async () => {
 test("a login the helper omits is cached as null", async () => {
   const { cache } = make([{ profiles: {} }]);
   expect(await cache.resolve(["alpha"])).toEqual(new Map([["alpha", avatarRow(null)]]));
-  expect(profiles.get(["alpha"]).size).toBe(1);
+  expect(streamers.get(["alpha"]).size).toBe(1);
 });
 
 test("normalises logins so casing cannot split the cache", async () => {
-  profiles.put("alpha", "https://cdn/a.png", clock);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock);
   const { cache, request } = make([]);
   expect(await cache.resolve(["Alpha"])).toEqual(new Map([["alpha", avatarRow("https://cdn/a.png")]]));
   expect(request).not.toHaveBeenCalled();
 });
 
 test("makes no request when every login is cached", async () => {
-  profiles.put("alpha", "https://cdn/a.png", clock);
-  profiles.put("beta", null, clock);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock);
+  streamers.putProfile("beta", null, clock);
   const { cache, request } = make([]);
   await cache.resolve(["alpha", "beta"]);
   expect(request).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ test("serves stream info inside the TTL without asking the helper again", async 
 test("does not spend a call refreshing an offline channel's stream info", async () => {
   // The avatar is fresh and an offline channel has nothing moving, so
   // there is nothing worth a GQL call.
-  profiles.put("alpha", "https://cdn/a.png", clock);
+  streamers.putProfile("alpha", "https://cdn/a.png", clock);
   const { cache, request } = make([]);
   await cache.resolve(["alpha"], new Set());
   clock += STREAM_TTL_MS * 10;
@@ -181,7 +181,7 @@ test("drops a viewer count once the channel goes offline", async () => {
 test("still refreshes a stale avatar for an offline channel", async () => {
   // The avatar clock is independent of the stream clock: a week-old
   // picture is worth a call whether or not the channel is live.
-  profiles.put("alpha", "https://cdn/old.png", clock - AVATAR_TTL_MS - 1);
+  streamers.putProfile("alpha", "https://cdn/old.png", clock - AVATAR_TTL_MS - 1);
   const { cache, request } = make([{ profiles: { alpha: row({ viewers: null }) } }]);
   const out = await cache.resolve(["alpha"], new Set());
   expect(request).toHaveBeenCalledOnce();
