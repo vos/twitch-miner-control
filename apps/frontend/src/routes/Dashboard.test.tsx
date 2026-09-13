@@ -43,6 +43,36 @@ afterEach(() => {
 const view = (loginRequired = false) =>
   renderLive(<Dashboard loginRequired={loginRequired} onSignIn={() => {}} />);
 
+test("marks each tile with the unit it counts", async () => {
+  // The row mixes two units: the first tile counts points, the last two
+  // count channels. The glyphs are what say which is which at a glance,
+  // so a coin on a channel count would be an outright wrong claim.
+  view();
+  const glyph = (testId: string) =>
+    screen.getByTestId(testId).querySelector("svg");
+  expect(await screen.findByTestId("total-points")).toBeInTheDocument();
+  expect(glyph("total-points")).toBeInTheDocument();
+  expect(glyph("stat-live")).toBeInTheDocument();
+  expect(glyph("stat-tracked")).toBeInTheDocument();
+});
+
+test("leaves the 24h gain unmarked, which is already marked three ways", async () => {
+  // Its green rule, its "+" and the word "gain" say it is a points
+  // delta; a fourth marker on the least ambiguous tile is noise.
+  view();
+  await screen.findByTestId("stat-24h");
+  expect(screen.getByTestId("stat-24h").querySelector("svg")).toBeNull();
+});
+
+test("keeps the glyphs out of the figures the tiles report", async () => {
+  // The labels name the figures for assistive tech; an icon must not
+  // change what the tile reads as.
+  view();
+  expect(await screen.findByTestId("total-points")).toHaveTextContent(/^123,476$/);
+  expect(screen.getByTestId("stat-live")).toHaveTextContent(/^1$/);
+  expect(screen.getByTestId("stat-tracked")).toHaveTextContent(/^2$/);
+});
+
 test("shows the tiles' shape while the first snapshot is still loading", async () => {
   // A blank page for the first few seconds reads as an app with nothing
   // in it. The labels are fixed text, so they can say what is coming

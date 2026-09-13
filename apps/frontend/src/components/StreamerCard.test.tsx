@@ -282,6 +282,69 @@ test("shows the all-time mining figure", () => {
   expect(screen.getByTestId("mined-total")).toHaveTextContent("5d");
 });
 
+test("drops a zero stream gain rather than printing a dead figure", () => {
+  // "0 stream" beside "0 24h" put two zeros where the eye looks for
+  // deltas. A stream that has earned nothing is said by the absence.
+  view({ gainedStream: 0, gained24h: 250 });
+  expect(screen.queryByTestId("gain-stream")).not.toBeInTheDocument();
+  expect(screen.getByTestId("gain-24h")).toHaveTextContent("+250");
+});
+
+test("keeps a genuine zero 24h gain, which is not the same as unknown", () => {
+  // The headline delta: an empty right side would read as "not known
+  // yet", which is what the em-dash says instead.
+  view({ gainedStream: 0, gained24h: 0 });
+  expect(screen.queryByTestId("gain-stream")).not.toBeInTheDocument();
+  expect(screen.getByTestId("gain-24h")).toHaveTextContent("0");
+});
+
+test("still shows a real stream gain", () => {
+  // The zero case must not have taken the ordinary one with it.
+  view({ gainedStream: 40, gained24h: 250 });
+  expect(screen.getByTestId("gain-stream")).toHaveTextContent("+40");
+});
+
+test("marks the balance with a coin, so the figure says what it counts", () => {
+  // The row used to be one bare number sitting by itself. The glyph is
+  // what makes it read as currency rather than an unlabelled total.
+  const { container } = view({ points: 1000 });
+  expect(container.querySelector(".coin, svg")).toBeInTheDocument();
+});
+
+test("keeps the coin out of the balance's accessible name", () => {
+  // The digits carry the fact; a glyph announcing itself before every
+  // total would just add noise across a grid of cards.
+  view({ points: 1234567 });
+  expect(screen.getByTestId("balance")).toHaveTextContent("1,234,567");
+  expect(screen.getByTestId("balance").querySelector("svg"))
+    .toHaveAttribute("aria-hidden");
+});
+
+test("puts the gains beside the balance they describe", () => {
+  // They are deltas OF that number, so they read as its right-hand
+  // annotation rather than as a stray cluster further down the card.
+  view({ gained24h: 250, gainedStream: 40 });
+  const balanceRow = screen.getByTestId("balance").parentElement;
+  expect(balanceRow).toContainElement(screen.getByTestId("gain-24h"));
+  expect(balanceRow).toContainElement(screen.getByTestId("gain-stream"));
+});
+
+test("renders each gain exactly once after the move", () => {
+  // The figures were promoted, not copied -- a card showing "+250 24h"
+  // in two places would read as two different facts.
+  view({ gained24h: 250, gainedStream: 40 });
+  expect(screen.getAllByTestId("gain-24h")).toHaveLength(1);
+  expect(screen.getAllByTestId("gain-stream")).toHaveLength(1);
+});
+
+test("keeps the rate out of the balance row", () => {
+  // A speed is not a delta against the balance, so it stays below with
+  // the mined-time figures.
+  view({ pointsPerHour: 42.5 });
+  const balanceRow = screen.getByTestId("balance").parentElement;
+  expect(balanceRow).not.toContainElement(screen.getByTestId("points-per-hour"));
+});
+
 test("shows points per hour when it is reported", () => {
   view({ pointsPerHour: 42.5 });
   expect(screen.getByTestId("points-per-hour")).toHaveTextContent("42.5");

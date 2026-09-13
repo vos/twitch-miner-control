@@ -5,6 +5,10 @@
   border: 1px solid var(--tw-border);
   border-radius: 8px;
   background: var(--tw-surface);
+  /* The figure's type scales against the tile's own width, not the
+     viewport: these sit in a responsive grid, so a tile is narrow
+     because of its column count as much as the screen size. */
+  container-type: inline-size;
 }
 
 /* A hairline of color along the top edge -- enough to tie the row to the
@@ -29,12 +33,62 @@
   text-transform: uppercase;
 }
 
+/* A column: the figure row on top, the hint under it. Making .value
+   itself a wrapping row was wrong -- a long figure then wrapped away
+   from its own icon, so a narrow "TOTAL POINTS" tile rendered the coin
+   alone on one line and 1,234,567 on the next. */
 .value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   margin-top: 6px;
   font-family: var(--mantine-font-family-monospace);
-  font-size: 28px;
+  /* Scales with the tile rather than a fixed 28px: at two columns on a
+     phone a seven-figure total is ~150px of monospace in a ~145px tile,
+     and once the icon takes its 22px the last digit was clipped. A
+     points total with a digit missing is not a smaller number, it is a
+     wrong one -- so the type gives way instead.
+
+     Fitted to the two real widths: a four-column tile is ~233px and a
+     two-column one ~144px, so 9cqi + 7px resolves to 28px and 20px
+     respectively. The clamp then holds those as hard bounds, since a
+     dashboard in a very wide or very narrow window must not run the
+     figure away past either end. */
+  font-size: clamp(20px, 9cqi + 7px, 28px);
   font-weight: 700;
   line-height: 1.1;
+  /* Tabular so a ticking figure cannot shift the icon beside it. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* The icon and the number, kept on one line and never split: they are a
+   single figure, and the glyph is meaningless adrift from it. min-width
+   0 so a very long number still shrinks within the tile. */
+.figure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Takes the tile's own accent, so the person glyph is red on "Live now"
+   and purple on "Tracked" -- the hairline above already colours each
+   tile, and the icon joining it keeps the tile reading as one unit.
+   Sized under a proportional match to the 28px figure: it marks the
+   number without competing with it. */
+.icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--accent, var(--tw-purple));
+}
+
+/* Gold, not the tile's accent: this is the same coin as the card
+   balances below, and matching them matters more here than matching the
+   tile's own hairline. */
+.coin {
+  composes: icon;
+  color: var(--tw-warn);
 }
 
 /* Sits under the figure rather than beside it: the value is monospace and

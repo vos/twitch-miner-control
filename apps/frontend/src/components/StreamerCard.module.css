@@ -24,10 +24,66 @@
 
 .offline { opacity: 0.6; }
 
+/* The balance and the gains that explain it, on one row.
+
+   The gains are deltas OF this number -- the same relationship the
+   viewer count has to the pill above it -- so they read as its
+   right-hand annotation rather than as a group further down the card.
+
+   Wrap rather than nowrap: at 320px, the dashboard's minimum column, a
+   seven-figure balance and both gains do not fit on one line. The gains
+   drop below instead of the balance truncating -- the balance is the
+   thing this row exists for, and half a points total is not a number.
+
+   Centred rather than baseline-aligned: the balance is a headline figure
+   and the gains annotate it, so on a shared baseline the ~12px text hung
+   off the 22px digits' feet. Centring also matches the coin, which is
+   already optically centred on the digits. It governs only the
+   single-line case -- once the gains wrap, there is nothing to align
+   against. */
+.balanceRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  row-gap: 2px;
+}
+
 .balance {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-family: var(--mantine-font-family-monospace);
   font-size: 22px;
   font-weight: 700;
+  /* Tabular so a ticking balance cannot shift the gains beside it. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Gold rather than the card's purple: this marks the figure as currency,
+   which is what the row is, and purple is already the card's accent for
+   live state and freshness -- a third meaning on the same hue would blur
+   all three. --tw-warn is the theme's existing gold; no new token. */
+.coin {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  color: var(--tw-warn);
+  /* The glyph's optical centre sits above its box's, so aligning the
+     boxes leaves it floating above the digits -- the same nudge the
+     viewer-count icon carries, scaled to this row's larger type. */
+  transform: translateY(1px);
+}
+
+/* Pushed to the far edge, and never the thing that gives way: the gains
+   are short and fixed, so on a narrow card the whole group wraps to the
+   next line intact rather than any one figure clipping. */
+.gains {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 /* The last event, marked so it does not read as a third cumulative

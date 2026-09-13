@@ -1,4 +1,5 @@
-import { Group, Stack, Text } from "@mantine/core";
+import { Stack, Text } from "@mantine/core";
+import { IconCoins } from "@tabler/icons-react";
 import { Sparkline } from "./Sparkline.js";
 import { StreamContext } from "./StreamContext.js";
 import { ViewerCount } from "./ViewerCount.js";
@@ -114,9 +115,32 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
           </div>
         </div>
 
-        <Text className={classes.balance} data-testid="balance">
-          {s.points === null ? "—" : nf.format(s.points)}
-        </Text>
+        {/* Balance left, the gains that explain it right. The coin is
+            aria-hidden: the balance's own testid and the digits carry
+            the fact, and a glyph announcing "coin" before every total
+            would just add noise on a grid of cards. */}
+        <div className={classes.balanceRow}>
+          <Text className={classes.balance} data-testid="balance">
+            {/* A stack of coins rather than a denominated one: these are
+                channel points, not money, so a currency symbol on the
+                glyph's face would be a wrong claim. */}
+            <IconCoins className={classes.coin} stroke={2} aria-hidden />
+            {s.points === null ? "—" : nf.format(s.points)}
+          </Text>
+          <div className={classes.gains}>
+            {/* A zero stream gain is dropped, not printed. "0 stream"
+                beside "0 24h" put two dead figures where the eye looks
+                for deltas, and a stream that has earned nothing yet is
+                adequately said by the absence. The 24h gain is NOT
+                dropped the same way: it is the headline delta, and an
+                empty right side would read as "not known yet" -- which
+                is what the em-dash means here, a different claim. */}
+            {live && s.gainedStream !== null && s.gainedStream !== 0 && (
+              <Gain value={s.gainedStream} label="stream" testId="gain-stream" />
+            )}
+            <Gain value={s.gained24h} label="24h" since={s.gainedSince} testId="gain-24h" />
+          </div>
+        </div>
 
         {/* Fluid: the card's own width decides, so nothing is painted
             past its edge on a narrow column. */}
@@ -125,18 +149,6 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
         <StreamerMeta streamer={s} />
 
         <StreamerTimes streamer={s} />
-
-        <Group gap="sm">
-          {live && s.gainedStream !== null && (
-            <Gain value={s.gainedStream} label="stream" testId="gain-stream" />
-          )}
-          <Gain value={s.gained24h} label="24h" since={s.gainedSince} testId="gain-24h" />
-          {s.pointsPerHour !== null && (
-            <Text size="xs" c="dimmed" data-testid="points-per-hour">
-              {s.pointsPerHour}/h
-            </Text>
-          )}
-        </Group>
 
         {s.error && (
           <Text role="alert" size="xs" c="red">{s.error}</Text>

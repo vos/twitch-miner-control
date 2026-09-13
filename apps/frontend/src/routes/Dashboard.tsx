@@ -1,11 +1,13 @@
 import {
   Alert, Button, Group, NativeSelect, SimpleGrid, Stack, Switch, Text, UnstyledButton,
 } from "@mantine/core";
+import { IconCoins, IconUserFilled } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
 import { StatTile } from "../components/StatTile.js";
+import tileClasses from "../components/StatTile.module.css";
 import { StreamerCard } from "../components/StreamerCard.js";
 import { SORT_KEYS, SORT_LABELS, sortStreamers, type SortKey } from "../lib/sortStreamers.js";
 import { useLocalChoice } from "../lib/useLocalChoice.js";
@@ -259,7 +261,22 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
       {snapshot.error && <Alert role="alert" color="orange">{snapshot.error}</Alert>}
 
       <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md">
-        <StatTile label="Total points" value={totalText} testId="total-points" />
+        {/* The row mixes units: the first two tiles count points, the
+            last two count channels. The glyphs say which is which at a
+            glance -- the coin rhymes with the card balances below, the
+            person with their viewer counts. Gold on the coin rather than
+            the tile's accent, so it matches the cards exactly.
+
+            The 24h gain deliberately carries no coin: its green rule,
+            its "+" and the word "gain" already mark it three times over,
+            and a coin on exactly one points tile reads as marking THE
+            headline figure rather than making two mismatched pairs. */}
+        <StatTile
+          label="Total points"
+          value={totalText}
+          icon={<IconCoins className={tileClasses.coin} stroke={2} aria-hidden />}
+          testId="total-points"
+        />
         <StatTile
           label="24h gain"
           value={gainedText}
@@ -267,9 +284,17 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
           accent="success"
           testId="stat-24h"
         />
-        <StatTile label="Live now" value={String(live.length)} accent="live" testId="stat-live" />
         <StatTile
-          label="Tracked" value={String(snapshot.streamers.length)} testId="stat-tracked"
+          label="Live now"
+          value={String(live.length)}
+          icon={<IconUserFilled className={tileClasses.icon} aria-hidden />}
+          accent="live"
+          testId="stat-live"
+        />
+        <StatTile
+          label="Tracked" value={String(snapshot.streamers.length)}
+          icon={<IconUserFilled className={tileClasses.icon} aria-hidden />}
+          testId="stat-tracked"
         />
       </SimpleGrid>
 

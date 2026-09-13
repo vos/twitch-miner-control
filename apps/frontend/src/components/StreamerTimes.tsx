@@ -76,6 +76,9 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
   // started ten minutes into a day-long stream reported a full day.
   const mined24h = s.mined24h ?? 0;
   const minedTotal = s.minedTotal ?? 0;
+  // Read defensively like the rest: the backend omits it below the
+  // mining floor, and an older snapshot has no such key at all.
+  const rate = s.pointsPerHour ?? null;
 
   // Online time is deliberately not shown here. For a single ongoing
   // stream it is the same fact as the uptime above -- and worse, clipped
@@ -124,13 +127,27 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
         </div>
       )}
 
-      {(has24h || hasTotal) && (
+      {(has24h || hasTotal || rate !== null) && (
         <Group justify="space-between" gap="xs" wrap="nowrap">
-          {has24h && (
-            <Text size="xs" c="dimmed" data-testid="times-24h">
-              mined {duration(mined24h)} of 24h
-            </Text>
-          )}
+          {/* The rate joins the durations rather than the balance row:
+              it is a speed, and these are the figures about time spent --
+              its closest kin on the card. Grouped left so the all-time
+              total stays anchored right; a third item under
+              space-between would strand whichever sat in the middle.
+              It also used to render alone on the card's last line, which
+              is the same stray-number problem the balance row had. */}
+          <Group gap="xs" wrap="nowrap">
+            {has24h && (
+              <Text size="xs" c="dimmed" data-testid="times-24h">
+                mined {duration(mined24h)} of 24h
+              </Text>
+            )}
+            {rate !== null && (
+              <Text size="xs" c="dimmed" data-testid="points-per-hour">
+                {rate}/h
+              </Text>
+            )}
+          </Group>
           {hasTotal && (
             <Text size="xs" c="dimmed" data-testid="mined-total">
               {duration(minedTotal)} all-time
