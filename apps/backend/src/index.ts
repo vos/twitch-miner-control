@@ -5,7 +5,7 @@
  * rest of the backend keeps decoupled, so keep logic out of it.
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolvePythonBin } from "./config/pythonBin.js";
 import { resolveStopGraceMs } from "./config/stopGrace.js";
@@ -185,6 +185,9 @@ const stateService = new StateService({
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
+// Checked once at boot purely so the startup log can say which of the two
+// modes this process is in. buildServer does its own check.
+const staticRootExists = existsSync(staticRoot);
 
 // `loginRequired` used to be derived purely from `loginRunner.current` --
 // the progress of a login attempt made by *this* process -- which reads
@@ -248,3 +251,17 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 
 await app.listen({ port, host: "0.0.0.0" });
+
+// After listen resolves, so this reports a port actually bound rather than
+// one we merely asked for -- an EADDRINUSE rejects above and never gets
+// here. Fastify runs with `logger: false`, so without this the process
+// prints nothing at all on a successful start and a healthy server is
+// indistinguishable from one that died on boot.
+console.log(`listening on http://localhost:${port}`);
+console.log(
+  staticRootExists
+    ? `serving the frontend from ${staticRoot}`
+    // Worth saying plainly: the API works but the browser gets a 404 at
+    // the root, which otherwise looks like the server failing entirely.
+    : `no frontend at ${staticRoot} -- API only (run \`pnpm build\` first)`,
+);
