@@ -27,7 +27,7 @@ const APP_VERSION = resolveVersion(process.env.APP_VERSION);
  * Polls GitHub for a newer release of this app, so the sidebar can say so
  * next to the version readout. Module-scoped alongside APP_VERSION, which
  * it compares against: one checker for the process, holding the last
- * answer between status polls rather than asking GitHub per request.
+ * answer between status requests rather than asking GitHub per request.
  *
  * index.ts starts its schedule; until then, and whenever a check fails,
  * it offers nothing.
@@ -158,7 +158,15 @@ export interface ServerDeps {
    * need a built frontend on disk.
    */
   staticRoot?: string;
+  /** How often connected clients get a fresh status. Overridable for tests. */
+  statusTickMs?: number;
 }
+
+/**
+ * How often a status frame goes out while anyone is connected. The miner's
+ * CPU and memory change continuously, so events alone cannot carry them.
+ */
+export const STATUS_TICK_MS = 5_000;
 
 export function buildServer(deps: ServerDeps): FastifyInstance {
   // /api/stream hijacks its socket for a live SSE connection that never
@@ -231,6 +239,66 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
   }
 
+  // Held across calls, not built per call: CPU percent is a delta between
+  // two readings, so the previous sample has to survive from one status to
+  // the next (see ProcStats).
+  const procStats = new ProcStats();
+
+  /** What GET /api/status answers and every status frame carries. */
+  function status() {
+    const snapshot = deps.stateService.snapshot();
+    // Two independent reasons to send the user to the sign-in screen: no
+    // account has been named yet (a fresh install), or the session behind
+    // that account is not usable -- see LoginStatus for why the login
+    // *runner*'s progress cannot answer this.
+    const loginRequired =
+      loadConfig(deps.configPath).username === "" || deps.loginStatus.required;
+    const livePid = deps.supervisor.livePids()[0];
+    return {
+      miner: deps.supervisor.state,
+      // Null unless a live miner process exists -- see Supervisor#runningSince.
+      // The dashboard ticks its uptime readout from this rather than from a
+      // server-computed elapsed figure, so the timer stays smooth between
+      // status frames instead of jumping once every tick.
+      startedAt: deps.supervisor.runningSince,
+      // CPU and memory for the miner process, or null when nothing is
+      // running -- and equally when /proc cannot be read, which is how
+      // this degrades on a non-Linux dev machine instead of failing
+      // the whole status route over a decorative readout.
+      stats: livePid === undefined ? null : procStats.sample(livePid, Date.now()),
+      loginRequired,
+      login: deps.loginRunner.current,
+      lastUpdated: snapshot.lastUpdated,
+      stale: snapshot.stale,
+      error: snapshot.error,
+      pendingChanges: staged !== null,
+      version: APP_VERSION,
+      // Null unless a strictly newer release exists, so the frontend
+      // renders the notice iff this is set.
+      latestVersion: updateChecker.available,
+    };
+  }
+
+  /**
+   * Sends every connected client the current status. Called from timers and
+   * event handlers, where a throw -- config.json unreadable, say -- would
+   * take the process down rather than fail one request.
+   */
+  function pushStatus(): void {
+    try {
+      hub.broadcast("status", status());
+    } catch (cause) {
+      app.log.error({ err: cause }, "could not build a status frame");
+    }
+  }
+
+  const statusTick = setInterval(() => {
+    if (hub.clientCount > 0) pushStatus();
+  }, deps.statusTickMs ?? STATUS_TICK_MS);
+  // Never let a status tick for zero clients keep the process alive.
+  statusTick.unref();
+  app.addHook("onClose", () => { clearInterval(statusTick); });
+
   app.register(async (instance) => {
     await registerAuth(instance, {
       password: deps.password,
@@ -291,44 +359,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return { applied: true };
     });
 
-    // Held across requests, not built per call: CPU percent is a delta
-    // between two readings, so the previous sample has to survive from
-    // one status poll to the next (see ProcStats).
-    const procStats = new ProcStats();
-
-    instance.get("/api/status", async () => {
-      const snapshot = deps.stateService.snapshot();
-      // Two independent reasons to send the user to the sign-in screen: no
-      // account has been named yet (a fresh install), or the session behind
-      // that account is not usable -- see LoginStatus for why the login
-      // *runner*'s progress cannot answer this.
-      const loginRequired =
-        loadConfig(deps.configPath).username === "" || deps.loginStatus.required;
-      const livePid = deps.supervisor.livePids()[0];
-      return {
-        miner: deps.supervisor.state,
-        // Null unless a live miner process exists -- see Supervisor#runningSince.
-        // The dashboard ticks its uptime readout from this rather than from a
-        // server-computed elapsed figure, so the timer stays smooth between
-        // polls instead of jumping once every poll interval.
-        startedAt: deps.supervisor.runningSince,
-        // CPU and memory for the miner process, or null when nothing is
-        // running -- and equally when /proc cannot be read, which is how
-        // this degrades on a non-Linux dev machine instead of failing
-        // the whole status route over a decorative readout.
-        stats: livePid === undefined ? null : procStats.sample(livePid, Date.now()),
-        loginRequired,
-        login: deps.loginRunner.current,
-        lastUpdated: snapshot.lastUpdated,
-        stale: snapshot.stale,
-        error: snapshot.error,
-        pendingChanges: staged !== null,
-        version: APP_VERSION,
-        // Null unless a strictly newer release exists, so the frontend
-        // renders the notice iff this is set.
-        latestVersion: updateChecker.available,
-      };
-    });
+    instance.get("/api/status", async () => status());
 
     instance.get("/api/streamers", async () => deps.stateService.snapshot());
 
@@ -377,7 +408,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         await deps.supervisor[action]();
         // Both values are read after the action settles, so the caller can
         // render the outcome from this response alone and does not have to
-        // wait for the next poll or SSE frame to stop showing the old state.
+        // wait for the next status frame to stop showing the old state.
         return { state: deps.supervisor.state, startedAt: deps.supervisor.runningSince };
       });
     }
@@ -420,6 +451,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       }
 
       deps.loginStatus.markLoggedOut();
+      pushStatus();
       // The running helper froze the pickle's path at spawn and would keep
       // answering from the session it has already loaded, so the dashboard
       // would go on looking signed in against a cookie that is gone.
@@ -481,12 +513,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // the row the moment it is recorded means only genuinely new events cross
   // the wire; the client fetches the backlog once on mount.
   deps.stateService.on("event", (row) => hub.broadcast("event", row));
-  // Read at emit time rather than captured, so the frame carries the start
-  // time that belongs to the state being announced: a RUNNING frame gets the
-  // new process's timestamp, and a STOPPED/CRASHED frame gets null.
-  deps.supervisor.on("state", (state) =>
-    hub.broadcast("miner", { state, startedAt: deps.supervisor.runningSince }),
-  );
+  // Built at emit time, so the frame carries the start time that belongs to
+  // the state being announced: a RUNNING frame gets the new process's
+  // timestamp, and a STOPPED/CRASHED frame gets null.
+  deps.supervisor.on("state", () => pushStatus());
   deps.loginRunner.on("progress", (p: LoginProgress) => {
     hub.broadcast("login", p);
     if (p.stage !== "ok") return;
@@ -497,6 +527,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     // out of config.json at spawn time, so a helper started first would
     // keep resolving the old (or empty) cookie pickle path.
     persistUsername(p.username);
+    pushStatus();
     // A refresh already in flight when the login completed was answered by
     // the old, signed-out helper. Its 401 arrives after this point and
     // state.py cannot classify it as AUTH -- the new pickle is on disk by
@@ -530,10 +561,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // whatever a past login attempt reported. Both paths a rejected request
   // can take are covered -- one attributed to a caller (StateService's
   // refresh) and one that could not be attributed to any single request.
-  deps.stateService.on("auth-error", () => deps.loginStatus.markLoggedOut());
+  deps.stateService.on("auth-error", () => {
+    deps.loginStatus.markLoggedOut();
+    pushStatus();
+  });
   deps.helper.on("unattributed-error", (error: unknown) => {
     if (error instanceof NdjsonError && error.code === "AUTH") {
       deps.loginStatus.markLoggedOut();
+      pushStatus();
     }
   });
 

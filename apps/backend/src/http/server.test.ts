@@ -28,7 +28,7 @@ const validConfig = {
 
 let ctx: Awaited<ReturnType<typeof make>>;
 
-async function make() {
+async function make(options: { statusTickMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "srv-"));
   const configPath = join(dir, "config.json");
   // Real directory on disk: the logout route deletes a file from it, and a
@@ -36,17 +36,18 @@ async function make() {
   const cookiesDir = join(dir, "cookies");
   mkdirSync(cookiesDir, { recursive: true });
   const history = new History(openDb(":memory:"));
-  const supervisor = {
+  // A real emitter: a test drives its "state" event to check the status push.
+  const supervisor = Object.assign(new EventEmitter(), {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
     start: vi.fn(async () => {}), stop: vi.fn(async () => {}),
-    logs: () => ["line one", "line two"], on: vi.fn(),
+    logs: () => ["line one", "line two"],
     // The dashboard's uptime timer ticks from this, so the API has to
     // carry it; a fixed value keeps the assertions exact.
     runningSince: 1_700_000_000_000 as number | null,
     // The header's process stats are read for this pid. It is the test
     // runner's own pid so the route reads a real, live /proc entry.
     livePids: () => [process.pid],
-  };
+  });
   const client = {
     request: vi.fn(async () => ({ streamers: [] })),
     restart: vi.fn(async () => {}),
@@ -74,6 +75,7 @@ async function make() {
     loginStatus,
     cookiesDir,
     staticRoot: PUBLIC_ROOT,
+    statusTickMs: options.statusTickMs,
   });
   await app.ready();
   const login = await app.inject({
@@ -576,6 +578,58 @@ test("a recorded event is pushed to SSE clients instead of waiting for a poll", 
   expect(frame).toContain('"message":"+50 -> forsen"');
 
   controller.abort();
+});
+
+/** Opens an authenticated stream on a listening server, past its first frame. */
+async function openStream() {
+  await ctx.app.listen({ port: 0, host: "127.0.0.1" });
+  const address = ctx.app.server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const controller = new AbortController();
+  const res = await fetch(`http://127.0.0.1:${port}/api/stream`, {
+    headers: { cookie: `session=${ctx.cookie}` },
+    signal: controller.signal,
+  });
+  const reader = res.body!.getReader();
+  await reader.read(); // ": connected"
+  return {
+    next: async () => new TextDecoder().decode((await reader.read()).value),
+    close: () => controller.abort(),
+  };
+}
+
+test("pushes the status to SSE clients the moment the miner changes state", async () => {
+  const stream = await openStream();
+  const seen = stream.next();
+  ctx.supervisor.emit("state", "STOPPED");
+  const frame = await seen;
+  expect(frame).toContain("event: status");
+  expect(frame).toContain('"startedAt":1700000000000');
+  stream.close();
+});
+
+test("pushes the status to SSE clients when the Twitch session is found dead", async () => {
+  ctx.loginStatus.markLoggedIn();
+  const stream = await openStream();
+  const seen = stream.next();
+  ctx.state.emit("auth-error");
+  const frame = await seen;
+  expect(frame).toContain("event: status");
+  expect(frame).toContain('"loginRequired":true');
+  stream.close();
+});
+
+test("keeps SSE clients' process stats current on a tick", async () => {
+  ctx.state.stop();
+  await ctx.app.close();
+  ctx = await make({ statusTickMs: 20 });
+
+  const stream = await openStream();
+  // Nothing emitted: this frame can only have come from the tick.
+  const frame = await stream.next();
+  expect(frame).toContain("event: status");
+  expect(frame).toContain('"stats":{');
+  stream.close();
 });
 
 // --- Shutdown with an attached SSE client (I4) --------------------------

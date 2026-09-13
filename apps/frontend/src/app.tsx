@@ -1,8 +1,8 @@
 import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client.js";
-import { LiveStateProvider, useLiveState } from "./api/useLiveState.js";
+import { LiveStateProvider, useLiveState, useStreamEvent } from "./api/useLiveState.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
@@ -41,6 +41,16 @@ interface ScreenProps {
 
 export type ScreenKey = keyof typeof SCREENS;
 
+/** The parts of /api/status, and of each status frame, that the shell reads. */
+interface Status {
+  miner: string;
+  loginRequired: boolean;
+  startedAt: number | null;
+  stats: { cpu: number | null; rssBytes: number } | null;
+  version?: string;
+  latestVersion?: string | null;
+}
+
 export function App() {
   return (
     <PasswordGate>
@@ -53,7 +63,7 @@ export function App() {
 
 /**
  * Everything behind the gate, split out of App so none of it mounts until
- * the gate is unlocked -- the status poll and the live stream would
+ * the gate is unlocked -- the status load and the live stream would
  * otherwise run against the password screen, 401ing all the while. Locking
  * unmounts it again, which closes the stream; the next unlock starts a
  * fresh one.
@@ -64,11 +74,11 @@ function Shell() {
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
   // render a STOPPED badge next to a still-ticking uptime.
-  // state: null until the first poll answers -- see MinerStatus. A
+  // state: null until the first status arrives -- see MinerStatus. A
   // placeholder string would read as a real state to every control that
   // checks one.
   const [miner, setMiner] = useState<MinerStatus>({ state: null, startedAt: null });
-  // true until the first poll answers, matching the server's own
+  // true until the first status arrives, matching the server's own
   // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);
   // Whether that default has actually been confirmed by the server yet.
@@ -82,7 +92,7 @@ function Shell() {
   // in a ref (see useRollingHistory), so only this one value is state.
   const [stats, setStats] = useState<ProcSample | null>(null);
   // Fixed for the life of the server process, but it arrives with the
-  // status poll rather than from a build-time constant: the frontend is
+  // status rather than from a build-time constant: the frontend is
   // served by that same backend, so this reports what is actually
   // running rather than what the bundle was built from.
   const [version, setVersion] = useState<string | null>(null);
@@ -116,32 +126,34 @@ function Shell() {
     if (authExpired) onLoggedOut();
   }, [authExpired, onLoggedOut]);
 
+  const applyStatus = (s: Status) => {
+    setMiner({ state: s.miner, startedAt: s.startedAt });
+    setLoginRequired(s.loginRequired);
+    setLoginKnown(true);
+    // Optional, so a backend that predates the field renders no
+    // readout rather than the string "undefined".
+    setVersion(s.version ?? null);
+    setLatestVersion(s.latestVersion ?? null);
+    // Stamped on arrival: the history uses this to tell a fresh
+    // reading from a re-render carrying the same one.
+    setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
+  };
+
+  // The server pushes a status whenever the miner or the Twitch session
+  // changes, and on a tick for the process stats. Set once one has arrived,
+  // so the mount-time load below cannot land after it and roll it back.
+  const pushed = useRef(false);
+  useStreamEvent<Status>("status", (s) => {
+    pushed.current = true;
+    applyStatus(s);
+  });
+
+  // Frames only start once the stream is open, so the header would sit
+  // empty until the first tick without this.
   useEffect(() => {
-    const load = () =>
-      api.get<{
-        miner: string;
-        loginRequired: boolean;
-        startedAt: number | null;
-        stats: { cpu: number | null; rssBytes: number } | null;
-        version?: string;
-        latestVersion?: string | null;
-      }>("/api/status")
-        .then((s) => {
-          setMiner({ state: s.miner, startedAt: s.startedAt });
-          setLoginRequired(s.loginRequired);
-          setLoginKnown(true);
-          // Optional, so a backend that predates the field renders no
-          // readout rather than the string "undefined".
-          setVersion(s.version ?? null);
-          setLatestVersion(s.latestVersion ?? null);
-          // Stamped on arrival: the history uses this to tell a fresh
-          // reading from a re-render carrying the same one.
-          setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
-        })
-        .catch(() => undefined);
-    void load();
-    const timer = setInterval(load, 5000);
-    return () => clearInterval(timer);
+    api.get<Status>("/api/status")
+      .then((s) => { if (!pushed.current) applyStatus(s); })
+      .catch(() => undefined);
   }, []);
 
   const statsHistory = useRollingHistory(stats);

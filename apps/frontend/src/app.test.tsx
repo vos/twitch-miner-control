@@ -114,7 +114,7 @@ test("holds the notice back until /api/status has actually answered", async () =
   // every signed-in user on every load.
   // PasswordGate probes /api/status too, and it has to succeed or the
   // gate never unlocks and there is no dashboard to assert about. So the
-  // first probe answers and every later one -- the shell's poll -- hangs,
+  // first probe answers and every later one -- the shell's own load -- hangs,
   // leaving `loginRequired` on its unproven initial value.
   let probed = false;
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -192,10 +192,16 @@ test("remembers a collapsed sidebar across a reload", async () => {
 class RecordingEventSource {
   static created: RecordingEventSource[] = [];
   closed = false;
-  handlers = new Map<string, () => void>();
+  handlers = new Map<string, (frame?: { data: string }) => void>();
   constructor(public url: string) { RecordingEventSource.created.push(this); }
-  addEventListener(type: string, fn: () => void) { this.handlers.set(type, fn); }
+  addEventListener(type: string, fn: (frame?: { data: string }) => void) {
+    this.handlers.set(type, fn);
+  }
   close() { this.closed = true; }
+  /** Delivers a frame exactly as the server writes one: JSON text. */
+  emit(type: string, data: unknown) {
+    this.handlers.get(type)?.({ data: JSON.stringify(data) });
+  }
 }
 
 /** A backend whose session exists only while `authed()` says so. */
@@ -246,6 +252,29 @@ test("the dashboard and its activity feed share one stream", async () => {
   await screen.findByRole("button", { name: /dashboard/i });
   expect(await screen.findByText(/recent activity/i)).toBeInTheDocument();
   expect(RecordingEventSource.created).toHaveLength(1);
+});
+
+test("takes the header's status from the stream instead of polling for it", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const fetchMock = stubSession(() => true);
+    view();
+    expect(await screen.findByTestId("miner-state")).toHaveTextContent("RUNNING");
+
+    const statusCalls = () => fetchMock.mock.calls.filter(([url]) => url === "/api/status").length;
+    const before = statusCalls();
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(statusCalls()).toBe(before);
+
+    act(() => {
+      RecordingEventSource.created[0].emit("status", {
+        miner: "STOPPED", startedAt: null, stats: null, loginRequired: false,
+      });
+    });
+    expect(screen.getByTestId("miner-state")).toHaveTextContent("STOPPED");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("re-locks and closes the stream when the session expires under the dashboard", async () => {
