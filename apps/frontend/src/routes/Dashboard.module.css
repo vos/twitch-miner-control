@@ -1,0 +1,29 @@
+/*
+ * The label naming the sort control.
+ *
+ * Same type as the freshness caption at the other end of the strip
+ * (StalenessBadge.module.css) and as a StatTile's label: dim, 11px, 600,
+ * wide tracking, uppercase. That is this app's one form for "quiet
+ * caption", and the row already holds two other scales -- a 30px select
+ * and a switch -- so a label at any fourth size would be the thing that
+ * makes the strip read as assorted parts again.
+ *
+ * A <label> rather than decorative text, tied to the input by id: it
+ * gives the control a visible name that also announces, and makes the
+ * word itself a click target for opening the menu.
+ */
+.sortLabel {
+  color: var(--tw-text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* The row is `wrap="nowrap"`; without this the label is the first thing
+     the flexbox gives up when the window narrows, and a control whose
+     name has been squeezed to "So..." is worse than an unlabelled one. */
+  flex-shrink: 0;
+  /* Pairs the word with the control it names rather than leaving it
+     floating mid-row: the Group's own gap sits on the other side. */
+  cursor: pointer;
+  user-select: none;
+}

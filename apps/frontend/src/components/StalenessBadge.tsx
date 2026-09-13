@@ -1,5 +1,5 @@
-import { Badge } from "@mantine/core";
 import { useEffect, useState } from "react";
+import classes from "./StalenessBadge.module.css";
 
 /**
  * How old `lastUpdated` may get before the client treats the view as
@@ -22,6 +22,18 @@ import { useEffect, useState } from "react";
  */
 export const CLIENT_STALE_AFTER_MS = 180_000;
 
+/**
+ * Whether the view's numbers are current, stated as quietly as the fact
+ * deserves.
+ *
+ * Rendered as a dot and a caption rather than a badge; the CSS module
+ * explains why at length. The short version: the fresh state is the
+ * default state, and the default state should not be the brightest thing
+ * on the page.
+ *
+ * The element keeps a live clock of its own -- see below -- so this stays
+ * honest when frames stop arriving entirely.
+ */
 export function StalenessBadge({ lastUpdated, stale }: {
   lastUpdated: number | null; stale: boolean;
 }) {
@@ -36,14 +48,27 @@ export function StalenessBadge({ lastUpdated, stale }: {
   }, []);
 
   if (lastUpdated === null) {
-    return <Badge color="gray" data-testid="staleness">never updated</Badge>;
+    return (
+      <span
+        className={`${classes.root} ${classes.unknown}`}
+        data-testid="staleness"
+      >
+        never updated
+      </span>
+    );
   }
+
   const ageMs = Date.now() - lastUpdated;
   const seconds = Math.round(ageMs / 1000);
   const effectiveStale = stale || ageMs > CLIENT_STALE_AFTER_MS;
+
   return (
-    <Badge color={effectiveStale ? "orange" : "green"} data-testid="staleness">
-      {effectiveStale ? `stale — updated ${seconds}s ago` : `updated ${seconds}s ago`}
-    </Badge>
+    <span
+      className={`${classes.root} ${effectiveStale ? classes.stale : ""}`}
+      data-testid="staleness"
+    >
+      <span className={classes.dot} aria-hidden />
+      {effectiveStale ? `stale · updated ${seconds}s ago` : `updated ${seconds}s ago`}
+    </span>
   );
 }

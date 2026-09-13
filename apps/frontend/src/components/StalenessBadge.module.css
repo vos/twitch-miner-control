@@ -1,0 +1,80 @@
+/*
+ * The dashboard's freshness readout.
+ *
+ * Deliberately not a Badge. A filled badge -- white on saturated green --
+ * was the loudest element on the page, and it was reporting the most
+ * boring fact on it: that a healthy dashboard is healthy. The app already
+ * reserves a solid fill with white text for the one genuinely urgent
+ * state, a live channel's red (see StatusPill.module.css); spending that
+ * same treatment on "nothing is wrong" cost the live pill its meaning and
+ * read as poor contrast besides.
+ *
+ * So the fresh state is built to be skimmed past: a dot at the palette's
+ * success green, and the label in the same dim uppercase as a StatTile's
+ * label, which is the house form for "quiet caption". The stale state is
+ * the one that has to interrupt, and it does it by going amber and
+ * dropping the pulse.
+ */
+
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  /* Matches StatTile's .label exactly -- this sits directly above that
+     row, and a second, nearly-identical caption at a slightly different
+     size or tracking reads as a mistake rather than a family. */
+  color: var(--tw-text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* The seconds tick every second; tabular figures stop 9s -> 10s from
+     changing the element's width and nudging the row. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--tw-success);
+  /* The same 2s pulse as the live dot and the card's own indicator, not a
+     new timing: two different breathing rates on one screen read as two
+     unrelated mechanisms. */
+  animation: tw-pulse 2s ease-in-out infinite;
+}
+
+/*
+ * Stale: amber, and static.
+ *
+ * Losing the animation is the point rather than a side effect -- a
+ * pulsing dot is the app's sign of a live, moving thing, and a frozen
+ * dashboard is precisely not that. Amber is the palette's existing
+ * warning (--tw-warn), already carried by the coin glyph and the
+ * transitional miner states, so it needs no new colour.
+ *
+ * The whole row goes amber, not just the dot: at 11px a 6px dot changing
+ * hue is not a reliable signal on its own, and the text is what actually
+ * says what happened.
+ */
+.stale {
+  color: var(--tw-warn);
+}
+
+.stale .dot {
+  background: var(--tw-warn);
+  animation: none;
+}
+
+/*
+ * Never updated: no dot at all.
+ *
+ * A grey dot would still claim the shape of a status indicator while
+ * reporting the absence of one. Omitting it leaves the bare caption,
+ * which is what "we have not heard anything yet" should look like.
+ */
+.unknown {
+  color: var(--tw-text-dim);
+}

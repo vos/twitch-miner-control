@@ -1,5 +1,5 @@
 import {
-  Alert, Button, Group, NativeSelect, SimpleGrid, Stack, Switch, Text, UnstyledButton,
+  Alert, Button, Group, Select, SimpleGrid, Stack, Switch, Text, UnstyledButton,
 } from "@mantine/core";
 import { IconCoins, IconUserFilled } from "@tabler/icons-react";
 import type { ReactNode } from "react";
@@ -12,8 +12,18 @@ import { StreamerCard } from "../components/StreamerCard.js";
 import { SORT_KEYS, SORT_LABELS, sortStreamers, type SortKey } from "../lib/sortStreamers.js";
 import { useLocalChoice } from "../lib/useLocalChoice.js";
 import { useLocalToggle } from "../lib/useLocalToggle.js";
+import classes from "./Dashboard.module.css";
 
 const nf = new Intl.NumberFormat("en-US");
+
+/**
+ * Ties the visible "Sort" label to the Select's own input.
+ *
+ * A fixed id rather than `useId`: Mantine's Select puts this on the
+ * element the label must point at, and the dashboard mounts once, so
+ * there is no second instance to collide with.
+ */
+const SORT_INPUT_ID = "dashboard-sort";
 
 /**
  * The narrowest a streamer card may get before another column is added.
@@ -35,9 +45,15 @@ const CARD_MIN_WIDTH = 320;
 /**
  * A section rule.
  *
- * `mb` is deliberately larger than the Stack's own gap: a heading sitting
- * the same distance from its cards as from the section above reads as
- * crowded and does not group with what it labels.
+ * The heading sits closer to the cards it labels than to the section
+ * above it, so it groups downward rather than floating between the two.
+ * The asymmetry is what does that, and it is smaller than it looks from
+ * the props: this renders inside a `Stack gap="md"`, so the 16px `mt`
+ * lands on top of the Stack's own 16px for 32px of real space above,
+ * against the 10px `mb` below.
+ *
+ * `mt` was `xl`, which made that 48px above and read as a gap in the
+ * page rather than a division within it.
  *
  * Passing `collapsed` turns the whole rule into the section's disclosure
  * control. The heading already carries the count, so a collapsed section
@@ -64,7 +80,7 @@ function SectionHeading({ children, testId, collapsed, onToggle }: {
 
   if (!onToggle) {
     return (
-      <Group gap="sm" wrap="nowrap" mt="xl" mb="xs" data-testid={testId}>
+      <Group gap="sm" wrap="nowrap" mt="md" mb="xs" data-testid={testId}>
         {label}
       </Group>
     );
@@ -75,7 +91,7 @@ function SectionHeading({ children, testId, collapsed, onToggle }: {
       onClick={onToggle}
       data-testid={testId}
       aria-expanded={!collapsed}
-      mt="xl" mb="xs"
+      mt="md" mb="xs"
       style={{ display: "block", width: "100%" }}
     >
       <Group gap="sm" wrap="nowrap">
@@ -234,26 +250,44 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
 
   return frame(
     <>
-      <Group justify="space-between" wrap="wrap">
+      {/* One strip, not three widgets. `align="center"` rather than the
+          default stretch so the freshness caption sits on the controls'
+          own centre line -- it is an 11px caption beside a 30px select,
+          and left to stretch it floated against the top of the row. The
+          switch is sized down to `xs` to match: a caption, a select and a
+          switch at three different scales was most of why this row read
+          as unrelated parts. */}
+      <Group justify="space-between" align="center" wrap="wrap" gap="sm">
         <StalenessBadge lastUpdated={snapshot.lastUpdated} stale={snapshot.stale} />
-        <Group gap="md" wrap="nowrap">
-          {/* A native <select> rather than Mantine's Select: four fixed
-              options need no search or portal, and it is the better
-              control on a phone and by keyboard. */}
-          <NativeSelect
+        <Group gap="sm" align="center" wrap="nowrap">
+          {/* The control sorts the cards below, and nothing on screen used
+              to say so -- a bare dropdown reading "Default" beside a
+              freshness caption could as easily have been filtering the
+              roster or picking a time window. The label is the fix, and
+              it takes the caption's own type so the strip still reads as
+              one row rather than acquiring a third scale. */}
+          <Text className={classes.sortLabel} component="label" htmlFor={SORT_INPUT_ID}>
+            Sort
+          </Text>
+          <Select
+            id={SORT_INPUT_ID}
             data={SORT_KEYS.map((key) => ({ value: key, label: SORT_LABELS[key] }))}
             value={sort}
-            onChange={(event) => setSort(event.currentTarget.value as SortKey)}
+            onChange={(value) => value !== null && setSort(value as SortKey)}
+            // A sort must always be *some* ordering: clearing the value
+            // would leave the grid in an order the control no longer names.
+            allowDeselect={false}
             aria-label="Sort streamers"
             data-testid="sort-control"
             size="xs"
+            // Fits the longest label ("Recently live") plus the chevron.
             w={150}
           />
           <Switch
             checked={feedOn}
             onChange={toggleFeed}
             label="Activity feed"
-            size="sm"
+            size="xs"
           />
         </Group>
       </Group>

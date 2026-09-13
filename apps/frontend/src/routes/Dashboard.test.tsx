@@ -279,8 +279,19 @@ function cardOrder(): string[] {
     .map((el) => el.getAttribute("data-testid")!.replace("streamer-", ""));
 }
 
+/**
+ * Picks a sort from the dropdown.
+ *
+ * Mantine's Select is a Combobox, not a <select>, so `selectOptions` does
+ * not drive it -- the target is `role="combobox"` and the menu has to be
+ * opened first. `hidden: true` is load-bearing: the dropdown is portalled
+ * into a wrapper that keeps `display: none` even while expanded, so
+ * Testing Library's accessibility filter hides the options and a plain
+ * `getByRole("option")` fails as if the menu never opened.
+ */
 async function sortBy(label: string) {
-  await userEvent.selectOptions(screen.getByTestId("sort-control"), label);
+  await userEvent.click(screen.getByTestId("sort-control"));
+  await userEvent.click(screen.getByRole("option", { name: label, hidden: true }));
 }
 
 describe("sorting", () => {

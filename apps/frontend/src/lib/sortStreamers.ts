@@ -5,8 +5,16 @@ export const SORT_KEYS = ["default", "name", "gain", "recent"] as const;
 
 export type SortKey = (typeof SORT_KEYS)[number];
 
+/**
+ * The control's own wording. Deliberately not derived from the keys: the
+ * keys are persisted in localStorage and matched by `comparator`, so
+ * "default" has to stay "default" on disk no matter what the menu calls
+ * it -- and "Default" told the user nothing about what the ordering
+ * actually is. "Roster order" names it: the order the roster itself is
+ * in, which is what the no-comparator case falls back to below.
+ */
 export const SORT_LABELS: Record<SortKey, string> = {
-  default: "Default",
+  default: "Roster order",
   name: "Name",
   gain: "24h gain",
   recent: "Recently live",
