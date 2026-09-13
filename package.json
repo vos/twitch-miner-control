@@ -23,6 +23,8 @@
     "build": "pnpm -r build",
     "build:backend": "tsc -p apps/backend/tsconfig.json",
     "test": "pnpm -r test",
+    "prepreview": "pnpm run build",
+    "preview": "STATIC_ROOT=./apps/frontend/dist node --env-file=.env apps/backend/dist/index.js",
     "start": "node --env-file=.env apps/backend/dist/index.js"
   },
   "devDependencies": {

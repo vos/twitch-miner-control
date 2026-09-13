@@ -14,6 +14,16 @@ export default defineConfig({
     // [::1] and miss the backend listening on 0.0.0.0.
     proxy: { "/api": "http://127.0.0.1:8080" },
   },
+  // `vite preview` serves the built bundle, and does NOT inherit the
+  // `server` block above -- without its own proxy every /api call 404s
+  // against the static server. Production does not use this path at all:
+  // there the backend serves the built frontend itself from STATIC_ROOT
+  // (see docker/Dockerfile), so this exists purely to test a production
+  // bundle against a backend already running on 8080.
+  preview: {
+    host: true,
+    proxy: { "/api": "http://127.0.0.1:8080" },
+  },
   test: {
     environment: "jsdom",
     // Each test file still gets its own jsdom, but inside a VM context in a
