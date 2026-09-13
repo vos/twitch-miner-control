@@ -16,6 +16,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Each test file still gets its own jsdom, but inside a VM context in a
+    // reused worker rather than a fresh one -- building those environments
+    // was over a third of the suite's run time. `isolate: false` is not an
+    // alternative: files then share one document and each other's renders.
+    pool: "vmThreads",
     setupFiles: ["./src/test-setup.ts"],
     globals: true,
     css: true,
