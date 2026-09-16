@@ -12,6 +12,13 @@
   transform: translateY(-2px);
 }
 
+.clickable { cursor: pointer; }
+
+.clickable:focus-visible {
+  outline: 2px solid var(--tw-purple);
+  outline-offset: 2px;
+}
+
 /* A live channel must be readable before a single word is. */
 .live::before {
   content: "";

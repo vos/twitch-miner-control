@@ -1,0 +1,101 @@
+import { Badge, Stack, Table, Text } from "@mantine/core";
+import { sessionRows, type DetailSession } from "../lib/sessionRows.js";
+
+const nf = new Intl.NumberFormat("en-US");
+
+/** How many streams the table shows before it stops. Enough to see a
+ *  pattern; short enough not to turn the dialog into a scroll. */
+const LIMIT = 20;
+
+/** Coverage below this is worth pointing at: most of the stream was missed. */
+const LOW_COVERAGE = 0.5;
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+
+/** Truncated, never rounded up, like formatWorked -- but to the minute
+ *  past the hour, since two streams of "3h" can differ by most of one. */
+function duration(ms: number): string {
+  if (ms < MINUTE) return "0m";
+  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+  const hours = Math.floor(ms / HOUR);
+  const minutes = Math.floor((ms % HOUR) / MINUTE);
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+/**
+ * One row per stream: how long it ran, how much of it we mined, what it
+ * earned.
+ *
+ * This is the table that answers "is this channel worth keeping", which
+ * no chart does -- a balance line says points arrived, not whether the
+ * streams producing them are ones we are actually present for.
+ */
+export function StreamHistoryTable({ sessions }: { sessions: DetailSession[] }) {
+  const rows = sessionRows(sessions, Date.now()).slice(0, LIMIT);
+
+  if (rows.length === 0) {
+    return (
+      <Text size="sm" c="dimmed" data-testid="streams-empty">
+        No streams recorded for this channel yet.
+      </Text>
+    );
+  }
+
+  return (
+    <Stack gap="xs">
+      <Text size="xs" fw={700} c="dimmed" style={{ letterSpacing: "0.1em" }}>
+        STREAMS
+      </Text>
+      <Table.ScrollContainer minWidth={420}>
+        <Table highlightOnHover verticalSpacing="xs" fz="sm">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Date</Table.Th>
+              <Table.Th>Length</Table.Th>
+              <Table.Th>Mined</Table.Th>
+              <Table.Th ta="right">Earned</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.map((row) => (
+              <Table.Tr key={row.streamId} data-testid="stream-row">
+                <Table.Td>
+                  {new Date(row.start).toLocaleDateString(undefined,
+                    { month: "short", day: "numeric" })}
+                  {row.live && (
+                    <Badge color="twitch" variant="light" size="xs" ml={6}>live</Badge>
+                  )}
+                </Table.Td>
+                <Table.Td>{duration(row.length)}</Table.Td>
+                <Table.Td>
+                  {duration(row.mined)}
+                  {row.coverage !== null && row.coverage < LOW_COVERAGE && (
+                    // The one actionable signal in the dialog: the stream
+                    // ran and we were not there for most of it.
+                    <Badge
+                      color="yellow" variant="light" size="xs" ml={6}
+                      data-testid="low-coverage"
+                    >
+                      {Math.round(row.coverage * 100)}%
+                    </Badge>
+                  )}
+                </Table.Td>
+                <Table.Td ta="right" data-testid="stream-earned">
+                  {row.earned === null
+                    ? "—"
+                    : `${row.earned > 0 ? "+" : ""}${nf.format(row.earned)}`}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
+      {sessions.length > LIMIT && (
+        <Text size="xs" c="dimmed">
+          Showing {LIMIT} of {sessions.length} recorded streams.
+        </Text>
+      )}
+    </Stack>
+  );
+}

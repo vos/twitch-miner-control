@@ -388,3 +388,18 @@ test("renders the stored figures a pending snapshot carries", async () => {
   view();
   expect(await screen.findByTestId("total-points")).toHaveTextContent("123,476");
 });
+
+test("opens the clicked streamer's detail dialog", async () => {
+  const empty = {
+    series: [], events: [], sessions: [],
+    coverage: { live: [], mined: [] }, firstSeen: null, retentionFloor: null,
+  };
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+    ok: true, status: 200,
+    json: async () => (url.startsWith("/api/history") ? empty : snapshot),
+  })));
+  renderLive(<Dashboard />);
+  await userEvent.click(await screen.findByTestId("streamer-beta"));
+  expect(await screen.findByTestId("detail-title")).toHaveTextContent("Beta");
+  expect(await screen.findByTestId("streams-empty")).toBeInTheDocument();
+});

@@ -1,4 +1,7 @@
 import "@mantine/core/styles.css";
+// After the core styles, which it builds on: charts imported first lose
+// their tooltip and colour rules to the core sheet.
+import "@mantine/charts/styles.css";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/700.css";

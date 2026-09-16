@@ -47,7 +47,10 @@ function Gain({ value, label, since, testId }: {
   );
 }
 
-export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
+export function StreamerCard({ streamer: s, onOpen }: {
+  streamer: StreamerState;
+  onOpen?: () => void;
+}) {
   const live = s.isOnline === true;
   // Ticked here rather than below the sparkline: the badge already says
   // "this channel is live", and how long it has been live is the same
@@ -56,8 +59,30 @@ export function StreamerCard({ streamer: s }: { streamer: StreamerState }) {
   const elapsed = useLiveDuration(live ? s.liveSince ?? null : null);
   return (
     <div
-      className={`${classes.card} ${live ? classes.live : classes.offline}`}
+      className={`${classes.card} ${live ? classes.live : classes.offline}${
+        onOpen ? ` ${classes.clickable}` : ""}`}
       data-testid={`streamer-${s.username}`}
+      // The card is a button only when something is listening. Without a
+      // handler it keeps its plain-div semantics rather than announcing
+      // an action that does nothing.
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `Details for ${s.displayName ?? s.username}` : undefined}
+      onClick={onOpen === undefined ? undefined : (event) => {
+        // The card already holds a link to twitch.tv and the goal
+        // disclosure button. A click that started inside either belongs
+        // to it, not to the card.
+        if ((event.target as HTMLElement).closest("a, button")) return;
+        onOpen();
+      }}
+      onKeyDown={onOpen === undefined ? undefined : (event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        // Space scrolls the page by default, which on a grid of cards
+        // moves the very thing just activated.
+        event.preventDefault();
+        onOpen();
+      }}
     >
       <Stack gap="xs">
         {/* A grid, not nested rows. The pill is a real sibling on the
