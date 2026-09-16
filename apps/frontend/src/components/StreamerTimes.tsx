@@ -1,6 +1,7 @@
 import { Group, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { formatSpan } from "../lib/formatSpan.js";
+import { formatWorked } from "../lib/formatWorked.js";
 import { parseActivity } from "../lib/parseActivity.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -11,8 +12,6 @@ const ago = (ts: number, now: number) => `${formatSpan(Math.max(0, now - ts))} a
 const nf = new Intl.NumberFormat("en-US");
 
 const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 /**
  * How recent an event has to be to render as "just happened".
@@ -24,25 +23,6 @@ const DAY = 24 * HOUR;
  * marked between gains rather than flickering.
  */
 const FRESH = 5 * MINUTE;
-
-/**
- * A duration of *work done*, rounded down.
- *
- * formatSpan is built for labelling a gain window, where "about an hour"
- * is the point, so it rounds to nearest and floors at "1m": 30 minutes
- * renders "1h" and zero renders "1m". Both are wrong for a mining
- * figure, which is a claim about time actually spent -- rounding up
- * overstates it by as much as 2x, and this figure exists precisely to
- * show when mining time is short or missing.
- *
- * So: truncate, and let a genuine zero read "0m".
- */
-function duration(ms: number): string {
-  if (ms < MINUTE) return "0m";
-  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
-  if (ms < DAY) return `${Math.floor(ms / HOUR)}h`;
-  return `${Math.floor(ms / DAY)}d`;
-}
 
 /**
  * The time block under a card's sparkline: last activity and mining time.
@@ -139,7 +119,7 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
           <Group gap="xs" wrap="nowrap">
             {has24h && (
               <Text size="xs" c="dimmed" data-testid="times-24h">
-                mined {duration(mined24h)} of 24h
+                mined {formatWorked(mined24h)} of 24h
               </Text>
             )}
             {rate !== null && (
@@ -150,7 +130,7 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
           </Group>
           {hasTotal && (
             <Text size="xs" c="dimmed" data-testid="mined-total">
-              {duration(minedTotal)} all-time
+              {formatWorked(minedTotal)} all-time
             </Text>
           )}
         </Group>
