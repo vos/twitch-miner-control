@@ -4,6 +4,13 @@ import type { Span } from "../state/spans.js";
 export interface PointSample { ts: number; balance: number }
 export interface EventSample { ts: number; type: string; message: string | null }
 
+export interface SessionRow {
+  streamId: string;
+  start: number;
+  end: number | null;
+  anchorPoints: number | null;
+}
+
 export class History {
   constructor(private readonly db: Db) {}
 
@@ -104,6 +111,42 @@ export class History {
       )
       .get(streamer) as EventSample | undefined;
     return row ?? null;
+  }
+
+  /**
+   * Every attributed event for one streamer, newest first.
+   *
+   * lastActivity is this query with LIMIT 1. Unattributed rows
+   * (streamer NULL) stay invisible here for the same reason they do
+   * there: they belong to the roster-wide feed, not to a channel.
+   */
+  eventsFor(streamer: string, limit: number): EventSample[] {
+    return this.db
+      .prepare(
+        "SELECT ts, type, message FROM events WHERE streamer = ? " +
+          "ORDER BY ts DESC, id DESC LIMIT ?",
+      )
+      .all(streamer, limit) as EventSample[];
+  }
+
+  /**
+   * A streamer's stream sessions, newest first, with the anchor balance
+   * each one started from.
+   *
+   * `anchorPoints` stays null rather than defaulting: a session opened
+   * before any balance was known cannot report what it earned, and zero
+   * would be a confident claim that it earned nothing.
+   */
+  sessionsFor(streamer: string, fromTs: number): SessionRow[] {
+    return this.db
+      .prepare(
+        `SELECT stream_id AS streamId, start_ts AS start, end_ts AS end,
+                anchor_points AS anchorPoints
+           FROM streamer_sessions
+          WHERE streamer = ? AND (end_ts IS NULL OR end_ts >= ?)
+          ORDER BY start_ts DESC`,
+      )
+      .all(streamer, fromTs) as SessionRow[];
   }
 
   /**

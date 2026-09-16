@@ -381,3 +381,52 @@ test("openStreamerSessionStart is null once the session is closed", () => {
   history.closeStreamerSessionsExcept("forsen", null, 9000);
   expect(history.openStreamerSessionStart("forsen")).toBeNull();
 });
+
+test("eventsFor returns only that streamer's events, newest first", () => {
+  history.recordEvent("GAIN_FOR_CLAIM", 1000, "+50 → x", "alpha");
+  history.recordEvent("GAIN_FOR_WATCH", 2000, "+10 → y", "beta");
+  history.recordEvent("GAIN_FOR_CLAIM", 3000, "+20 → z", "alpha");
+  expect(history.eventsFor("alpha", 10)).toEqual([
+    { ts: 3000, type: "GAIN_FOR_CLAIM", message: "+20 → z" },
+    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50 → x" },
+  ]);
+});
+
+test("eventsFor excludes unattributed events", () => {
+  history.recordEvent("STARTUP", 1000, "booted", null);
+  expect(history.eventsFor("alpha", 10)).toEqual([]);
+});
+
+test("eventsFor honours the limit", () => {
+  history.recordEvent("A", 1000, null, "alpha");
+  history.recordEvent("B", 2000, null, "alpha");
+  expect(history.eventsFor("alpha", 1)).toEqual([
+    { ts: 2000, type: "B", message: null },
+  ]);
+});
+
+test("sessionsFor returns sessions newest first with their anchors", () => {
+  history.openStreamerSession("alpha", "s1", 1000, 100);
+  history.openStreamerSession("alpha", "s2", 5000, 300);
+  expect(history.sessionsFor("alpha", 0)).toEqual([
+    { streamId: "s2", start: 5000, end: null, anchorPoints: 300 },
+    { streamId: "s1", start: 1000, end: null, anchorPoints: 100 },
+  ]);
+});
+
+test("sessionsFor keeps a null anchor null rather than zero", () => {
+  history.openStreamerSession("alpha", "s1", 1000, null);
+  expect(history.sessionsFor("alpha", 0)[0].anchorPoints).toBeNull();
+});
+
+test("sessionsFor excludes sessions that ended before the window", () => {
+  history.recordPoints("alpha", 100, 2000);
+  history.openStreamerSession("alpha", "old", 1000, 10);
+  history.closeStreamerSessionsExcept("alpha", null, 2000);
+  expect(history.sessionsFor("alpha", 5000)).toEqual([]);
+});
+
+test("sessionsFor ignores other streamers", () => {
+  history.openStreamerSession("beta", "s1", 1000, 100);
+  expect(history.sessionsFor("alpha", 0)).toEqual([]);
+});

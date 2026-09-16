@@ -8,12 +8,14 @@ import { loadConfig, saveConfig } from "../config/store.js";
 import { UpdateChecker } from "../config/updateCheck.js";
 import { resolveVersion } from "../config/version.js";
 import type { History } from "../db/history.js";
+import type { Streamers } from "../db/streamers.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
 import type { LoginStatus } from "../helpers/loginStatus.js";
 import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { StateService } from "../state/service.js";
+import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
 import { SseHub } from "./sse.js";
 
@@ -134,6 +136,13 @@ export interface ServerDeps {
   supervisor: Supervisor;
   stateService: StateService;
   history: History;
+  /**
+   * The roster store, read for `first_seen_ts` -- the floor under every
+   * mining figure. Optional, and read defensively, exactly as
+   * StateService reads it: a server built without one still answers,
+   * with an unfloored figure, rather than failing to build.
+   */
+  streamers?: Streamers;
   helper: NdjsonClient;
   loginRunner: LoginRunner;
   /**
@@ -440,9 +449,44 @@ export function buildServer(deps: ServerDeps): AppServer {
       if (from === null || to === null) {
         return reply.code(400).send({ error: "from and to must be finite numbers" });
       }
+      const login = streamer.data;
+      // The floor under every mining figure: streamer_sessions.start_ts
+      // is Twitch's own createdAt, so a channel added mid-stream has a
+      // session back-dated to a start we were never present for. Without
+      // this, that channel's first stream reports its whole length as
+      // mined. Composed exactly as state/service.ts does it.
+      const firstSeen = deps.streamers?.firstSeen(login) ?? null;
+      const floor = firstSeen ?? 0;
+      const minerSpans = deps.history.minerSpans();
+      const sessions = deps.history.sessionsFor(login, from).map((s) => {
+        const end = s.end ?? to;
+        const mined = total(intersect(
+          clip([{ start: s.start, end: s.end }], floor, end),
+          clip(minerSpans, floor, end),
+        ));
+        // balanceAt, not latest: writes are change-only, so the balance
+        // in force at a session's end is the most recent snapshot at or
+        // before it. A null anchor means the earning is unknowable.
+        const closing = deps.history.balanceAt(login, end);
+        const earned = s.anchorPoints === null || closing === null
+          ? null
+          : closing - s.anchorPoints;
+        return { streamId: s.streamId, start: s.start, end: s.end, mined, earned };
+      });
+      const liveSpans = deps.history.streamerSpans(login, from);
       return {
-        series: deps.history.pointsSeries(streamer.data, from, to),
-        events: deps.history.recentEvents(100),
+        series: deps.history.pointsSeries(login, from, to),
+        events: deps.history.eventsFor(login, 100),
+        sessions,
+        coverage: {
+          live: clip(liveSpans, Math.max(floor, from), to),
+          mined: clip(intersect(liveSpans, minerSpans), Math.max(floor, from), to),
+        },
+        firstSeen,
+        // The oldest sample that survived pruning, so the client can say
+        // what the window really covers instead of inferring the channel
+        // began at the retention cutoff.
+        retentionFloor: deps.history.earliestSample(login)?.ts ?? null,
       };
     });
 

@@ -245,6 +245,7 @@ const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
+  streamers,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
 });
 

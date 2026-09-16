@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
+import { Streamers } from "../db/streamers.js";
 import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { StateService } from "../state/service.js";
@@ -35,7 +36,9 @@ async function make(options: { statusTickMs?: number } = {}) {
   // stub would not prove the pickle actually goes.
   const cookiesDir = join(dir, "cookies");
   mkdirSync(cookiesDir, { recursive: true });
-  const history = new History(openDb(":memory:"));
+  const db = openDb(":memory:");
+  const history = new History(db);
+  const streamers = new Streamers(db);
   // A real emitter: a test drives its "state" event to check the status push.
   const supervisor = Object.assign(new EventEmitter(), {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
@@ -70,6 +73,7 @@ async function make(options: { statusTickMs?: number } = {}) {
     supervisor: supervisor as never,
     stateService: state,
     history,
+    streamers,
     helper: client as never,
     loginRunner: loginRunner as never,
     loginStatus,
@@ -82,7 +86,7 @@ async function make(options: { statusTickMs?: number } = {}) {
     method: "POST", url: "/api/session", payload: { password: PASSWORD },
   });
   return {
-    app, supervisor, client, history, state, loginRunner, loginStatus, configPath,
+    app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
     cookiesDir,
     cookie: login.cookies[0].value,
   };
@@ -319,6 +323,70 @@ test("GET /api/history returns a series", async () => {
     method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
   });
   expect(res.json().series).toEqual([{ ts: 1000, balance: 10 }]);
+});
+
+test("GET /api/history scopes events to the streamer asked for", async () => {
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 1000, "+50", "alpha");
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, "+70", "beta");
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
+  });
+  expect(res.json().events).toEqual([
+    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50" },
+  ]);
+});
+
+test("GET /api/history reports points earned per stream", async () => {
+  ctx.history.openStreamerSession("alpha", "s1", 1000, 100);
+  ctx.history.recordPoints("alpha", 180, 4000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
+  });
+  expect(res.json().sessions[0].earned).toBe(80);
+});
+
+test("GET /api/history leaves earned null when the anchor is unknown", async () => {
+  ctx.history.openStreamerSession("alpha", "s1", 1000, null);
+  ctx.history.recordPoints("alpha", 180, 4000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
+  });
+  expect(res.json().sessions[0].earned).toBeNull();
+});
+
+test("GET /api/history floors mined time at our first sighting", async () => {
+  // A session back-dated by Twitch's createdAt to before we were watching:
+  // the miner being up the whole time must not bill those hours as mined.
+  ctx.history.openMinerSession(0);
+  ctx.history.openStreamerSession("alpha", "s1", 1000, 100);
+  ctx.streamers.see("alpha", 6000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=10000", cookies: auth(),
+  });
+  const body = res.json();
+  expect(body.firstSeen).toBe(6000);
+  expect(body.sessions[0].mined).toBe(4000);
+  expect(body.coverage.mined).toEqual([{ start: 6000, end: 10000 }]);
+});
+
+test("GET /api/history reports the oldest kept sample as the retention floor", async () => {
+  ctx.history.recordPoints("alpha", 10, 5000);
+  ctx.history.recordPoints("alpha", 20, 9000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
+  });
+  expect(res.json().retentionFloor).toBe(5000);
+});
+
+test("GET /api/history returns empty blocks for an untracked streamer", async () => {
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=nobody&from=0&to=99999", cookies: auth(),
+  });
+  const body = res.json();
+  expect(body.series).toEqual([]);
+  expect(body.events).toEqual([]);
+  expect(body.sessions).toEqual([]);
+  expect(body.retentionFloor).toBeNull();
 });
 
 // --- Query validation (Correction 3) -----------------------------------
