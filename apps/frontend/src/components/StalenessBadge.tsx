@@ -34,8 +34,19 @@ export const CLIENT_STALE_AFTER_MS = 180_000;
  * The element keeps a live clock of its own -- see below -- so this stays
  * honest when frames stop arriving entirely.
  */
-export function StalenessBadge({ lastUpdated, stale }: {
+export function StalenessBadge({ lastUpdated, stale, pending }: {
   lastUpdated: number | null; stale: boolean;
+  /**
+   * The snapshot came from the backend's database and a Twitch pass is
+   * still running to complete it.
+   *
+   * Worth saying because the frame is visibly partial: the balances are
+   * as of the last poll rather than this second, and viewer counts,
+   * categories and drop progress are absent until the pass lands.
+   * Liveness usually is known -- it comes from the miner's own log --
+   * so this no longer claims otherwise.
+   */
+  pending?: boolean;
 }) {
   // Force a re-render on a ticking clock so the locally-derived staleness
   // check below is re-evaluated even when no new snapshot ever arrives --
@@ -46,6 +57,19 @@ export function StalenessBadge({ lastUpdated, stale }: {
     const id = setInterval(() => forceTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Takes precedence over both branches below: while a pass is running,
+  // how old the stored figures are is not the thing the reader needs.
+  if (pending) {
+    return (
+      <span
+        className={`${classes.root} ${classes.unknown}`}
+        data-testid="staleness"
+      >
+        updating…
+      </span>
+    );
+  }
 
   if (lastUpdated === null) {
     return (

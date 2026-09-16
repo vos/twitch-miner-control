@@ -319,3 +319,34 @@ test("subscribers keep receiving frames once the stream is rebuilt", async () =>
     vi.useRealTimers();
   }
 });
+
+test("adopts a pending REST snapshot, then the SSE frame replaces it", async () => {
+  // Cold start, or a wake from idle: the backend answers in milliseconds
+  // from its own database rather than blocking on state.py's
+  // per-streamer GQL loop. Those cards are real -- only what Twitch
+  // alone can answer is null -- so they are rendered immediately instead
+  // of holding the skeleton for several seconds.
+  // A card as the local frame builds it: stored figures real, everything
+  // only Twitch can answer still null.
+  const local = {
+    streamers: [{
+      username: "alpha", displayName: "Alpha", points: 1500,
+      isOnline: null, viewers: null, gained24h: 500, spark: [1000, 1500],
+    }],
+    lastUpdated: 1, stale: true, error: null, pending: true,
+  };
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true, status: 200, json: async () => local,
+  })));
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const { result } = renderHook(() => useLiveState(), { wrapper: LiveStateProvider });
+
+  // Painted, not withheld.
+  await waitFor(() => expect(result.current.snapshot).toEqual(local));
+  // Liveness stays unknown until the pass lands, so nothing claims LIVE.
+  expect(result.current.snapshot!.streamers[0].isOnline).toBeNull();
+
+  // The pass lands and replaces it in place.
+  FakeEventSource.last!.emit("state", initial);
+  await waitFor(() => expect(result.current.snapshot).toEqual(initial));
+});

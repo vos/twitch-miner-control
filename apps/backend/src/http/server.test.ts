@@ -1054,3 +1054,58 @@ test("a failed login leaves the miner alone", async () => {
   await Promise.resolve();
   expect(ctx.supervisor.restart).not.toHaveBeenCalled();
 });
+
+test("exposes the live SSE client count", () => {
+  // The state service reads this to decide whether a refresh needs its
+  // display half, so it has to track the set rather than snapshot it.
+  expect(ctx.app.clientCount).toBe(0);
+});
+
+test("GET /api/streamers answers from the held snapshot", async () => {
+  // The Streamers tab remounts and refetches on every visit, so a round
+  // trip here is felt as a multi-second stall each time it is opened.
+  await ctx.state.refresh();
+  const before = ctx.client.request.mock.calls.length;
+  await ctx.app.inject({ method: "GET", url: "/api/streamers", cookies: auth() });
+  expect(ctx.client.request.mock.calls.length).toBe(before);
+});
+
+test("GET /api/streamers derives first when the backend has been idle", async () => {
+  // The one case that must wait: an idle pass left the held copy without
+  // its display fields, so serving it directly would render blank cards.
+  const idle = new StateService({
+    client: ctx.client as never,
+    history: ctx.history,
+    getStreamers: () => ["alpha"],
+    clientsConnected: () => false,
+  });
+  await idle.refresh();
+  expect(idle.needsDerive).toBe(true);
+
+  const app = buildServer({
+    configPath: ctx.configPath,
+    password: PASSWORD,
+    doorbellToken: "doorbell-token",
+    supervisor: ctx.supervisor as never,
+    stateService: idle,
+    history: ctx.history,
+    helper: ctx.client as never,
+    loginRunner: ctx.loginRunner as never,
+    loginStatus: ctx.loginStatus,
+    cookiesDir: ctx.cookiesDir,
+    staticRoot: PUBLIC_ROOT,
+  });
+  await app.ready();
+  const login = await app.inject({
+    method: "POST", url: "/api/session", payload: { password: PASSWORD },
+  });
+  const before = ctx.client.request.mock.calls.length;
+  await app.inject({
+    method: "GET", url: "/api/streamers",
+    cookies: { session: login.cookies[0].value },
+  });
+  expect(ctx.client.request.mock.calls.length).toBeGreaterThan(before);
+
+  idle.stop();
+  await app.close();
+});

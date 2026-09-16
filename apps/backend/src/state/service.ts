@@ -175,6 +175,25 @@ const MIN_MINED_FOR_RATE_MS = 15 * 60_000;
 const WATCH_GAIN_TTL_MS = 10 * 60_000;
 
 /**
+ * How old the miner's last liveness verdict may be and still be used.
+ *
+ * The miner announces every channel's state within about a second of
+ * starting and then reports transitions as they happen, so while it is
+ * running its verdict is current to the minute. It is only the *stopped*
+ * case that needs bounding: nothing retracts the last verdict when the
+ * miner exits, so a row can sit at "Online!" indefinitely. The dev
+ * database held ten-day-old ONLINE rows for two channels that had since
+ * left the roster entirely -- rendering those as live would be precisely
+ * the false claim the local frame exists to avoid.
+ *
+ * Fifteen minutes is comfortably longer than any gap between miner
+ * reports while it is up, and short enough that a stopped miner's last
+ * word expires before anyone would still believe it. Past that the field
+ * goes back to null -- unknown, not offline.
+ */
+const LIVENESS_TRUST_MS = 15 * 60_000;
+
+/**
  * Quantisation step for the duration figures.
  *
  * These are inherently time-dependent while a stream is live -- an open
@@ -235,6 +254,25 @@ export interface StateServiceDeps {
   drops?: {
     resolve(targets: DropsTarget[]): Promise<Map<string, DropProgress>>;
   };
+  /**
+   * Whether anyone is currently watching the dashboard.
+   *
+   * This process spends most of its life running the miner with no
+   * browser attached -- days at a time -- and everything a refresh
+   * derives for display is thrown away unread in that state. When this
+   * returns false, a refresh still performs every write that feeds a
+   * stored figure (see doRefresh) and then stops, skipping the profile
+   * and drops round trips, the per-streamer derivation, and the SSE
+   * frame nobody is listening for.
+   *
+   * Nothing is lost by it: the rendered fields are computed from the
+   * history the idle path keeps writing, so the first refresh after a
+   * client connects rebuilds them in full, however long the gap was.
+   *
+   * Optional, and absent means "always connected" -- every existing
+   * caller and test then behaves exactly as before.
+   */
+  clientsConnected?: () => boolean;
 }
 
 export class StateService extends EventEmitter {
@@ -268,6 +306,21 @@ export class StateService extends EventEmitter {
    * rather than misattributed.
    */
   private roster: string[] = [];
+  /**
+   * Whether `this.streamers` is missing the fields a dashboard renders.
+   *
+   * Set when a refresh takes the idle path, which stops before deriving
+   * gains, sparklines, avatars and drops. Distinct from `stale`: a
+   * snapshot can be perfectly current and still be undrawable, which is
+   * exactly the state this process sits in while nobody is watching.
+   *
+   * Starts true: until the first full pass lands there is nothing to
+   * draw, and the empty array is "we have not looked yet", not "this
+   * user follows nobody". Serving that as a finished answer let the
+   * dashboard leave its skeleton and render a complete-looking empty
+   * page for the whole of a cold start.
+   */
+  private undrawn = true;
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
@@ -290,6 +343,18 @@ export class StateService extends EventEmitter {
       stale: this.lastError !== null || this.sessionDead || age > staleAfter,
       error: this.lastError,
     };
+  }
+
+  /**
+   * Whether the held snapshot still needs its display fields derived.
+   *
+   * True before the first full pass and after any idle one, i.e. exactly
+   * when the held copy would render as blank cards. /api/streamers passes
+   * it to the client as `pending` so the dashboard keeps its loading
+   * skeleton, and kicks a refresh whose SSE frame carries the real data.
+   */
+  get needsDerive(): boolean {
+    return this.undrawn;
   }
 
   /**
@@ -393,6 +458,11 @@ export class StateService extends EventEmitter {
       // lastUpdated ages past staleAfterMs from a stale prior value.
       const hadStreamers = this.streamers.length > 0;
       this.streamers = [];
+      // A resolved empty roster *is* the finished answer: there is
+      // nothing to derive, so the dashboard should render its empty
+      // state immediately rather than waiting on a refresh that would
+      // return this same emptiness.
+      this.undrawn = false;
       this.lastUpdated = this.now();
       this.lastError = null;
       this.sessionDead = false;
@@ -402,10 +472,87 @@ export class StateService extends EventEmitter {
       return;
     }
     const epoch = this.errorEpoch;
+
+    // Nothing drawable is being held -- a cold start, or the first pass
+    // after a stretch with nobody watching. Paint from the database now
+    // rather than making the dashboard wait out state.py's per-streamer
+    // GQL loop for figures it mostly already has. Only the *first* such
+    // pass does this; once the live pass below lands, `undrawn` is false
+    // and a client holding real cards is never sent backwards.
+    //
+    // A refresh reaching here on its own (the 60s tick, a doorbell ring)
+    // paints too, so an idle backend that wakes without an HTTP request
+    // still has cards ready for whoever connects next.
+    if (this.deps.clientsConnected?.() !== false) this.paintFrom(usernames);
+
     try {
       const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
       );
+      const before = JSON.stringify(this.streamers);
+      const previous = new Map(this.streamers.map((s) => [s.username, s]));
+      const at = this.now();
+      this.lastUpdated = at;
+      // Rides the existing poll rather than its own timer: this is exactly
+      // the cadence the heartbeat needs, and a second timebase would be
+      // one more thing to reconcile when the two disagree.
+      this.deps.history.beatMinerSession(at);
+      this.lastError = null;
+      this.sessionDead = false;
+      const dayAgo = at - DAY_MS;
+
+      // Every write that outlives this pass happens here, before the
+      // idle check below, and never depends on a profile or drop. The
+      // clamp inside closeStreamerSessionsExcept reads the point
+      // snapshot recorded alongside it, so the two must stay in the same
+      // loop on the same clock -- splitting them would let an idle pass
+      // close a session against a balance it had not written yet.
+      for (const s of data.streamers) {
+        if (typeof s.points === "number") {
+          this.deps.history.recordPoints(s.username, s.points, at);
+        }
+
+        // Every polled channel, live or not: the floor is "since when
+        // have we been looking", which a channel answers by being in the
+        // roster at all, not by being live. The display name rides along
+        // so a poll that could not resolve one keeps the last we saw
+        // rather than falling back to the lowercase login.
+        this.deps.streamers?.see(s.username, at, s.displayName);
+
+        // An upsert on Twitch's stream id rather than a reaction to an
+        // observed transition: this runs on every live tick, so a restart
+        // mid-stream finds the existing row and keeps its anchor intact.
+        if (s.isOnline && s.streamId !== null && s.streamStartedAt !== null) {
+          this.deps.history.openStreamerSession(
+            s.username,
+            s.streamId,
+            s.streamStartedAt,
+            typeof s.points === "number" ? s.points : null,
+          );
+        }
+        // Any other open session for this streamer has ended. Clamped
+        // inside History to our last snapshot, so an outage is not billed
+        // as online time.
+        this.deps.history.closeStreamerSessionsExcept(s.username, s.streamId, at);
+      }
+
+      // Nobody is watching: the stored record above is complete and
+      // everything below this line exists only to be rendered. Bail
+      // before spending two GQL round trips and a full derivation on a
+      // snapshot no one will read.
+      //
+      // `this.streamers` is deliberately left as it was rather than
+      // cleared -- snapshot() reports it alongside lastUpdated, and a
+      // client that connects between this return and the refresh it
+      // triggers should see the last real numbers, stale-flagged, not an
+      // empty dashboard.
+      if (this.deps.clientsConnected && !this.deps.clientsConnected()) {
+        // Only the *first* idle pass changes anything: from here on the
+        // held copy keeps whatever it last derived, now going stale.
+        this.undrawn = true;
+        return;
+      }
+
       // Resolved after the state response is in hand, so a profile lookup
       // can never widen the balance poll it rides along with. Failures are
       // swallowed here as well as inside ProfileCache: this must degrade
@@ -436,145 +583,252 @@ export class StateService extends EventEmitter {
             .catch(() => new Map<string, DropProgress>())
         : new Map<string, DropProgress>();
 
-      const before = JSON.stringify(this.streamers);
-      const previous = new Map(this.streamers.map((s) => [s.username, s]));
-      const at = this.now();
-      this.lastUpdated = at;
-      // Rides the existing poll rather than its own timer: this is exactly
-      // the cadence the heartbeat needs, and a second timebase would be
-      // one more thing to reconcile when the two disagree.
-      this.deps.history.beatMinerSession(at);
-      this.lastError = null;
-      this.sessionDead = false;
-      const dayAgo = at - DAY_MS;
+      this.streamers = data.streamers.map(
+        (s) => this.deriveOne(s, at, dayAgo, profiles, drops),
+      );
 
-      this.streamers = data.streamers.map((s) => {
-        if (typeof s.points === "number") {
-          this.deps.history.recordPoints(s.username, s.points, at);
-        }
-
-        // Every polled channel, live or not: the floor is "since when
-        // have we been looking", which a channel answers by being in the
-        // roster at all, not by being live. The display name rides along
-        // so a poll that could not resolve one keeps the last we saw
-        // rather than falling back to the lowercase login.
-        this.deps.streamers?.see(s.username, at, s.displayName);
-
-        // An upsert on Twitch's stream id rather than a reaction to an
-        // observed transition: this runs on every live tick, so a restart
-        // mid-stream finds the existing row and keeps its anchor intact.
-        if (s.isOnline && s.streamId !== null && s.streamStartedAt !== null) {
-          this.deps.history.openStreamerSession(
-            s.username,
-            s.streamId,
-            s.streamStartedAt,
-            typeof s.points === "number" ? s.points : null,
-          );
-        }
-        // Any other open session for this streamer has ended. Clamped
-        // inside History to our last snapshot, so an outage is not billed
-        // as online time.
-        this.deps.history.closeStreamerSessionsExcept(s.username, s.streamId, at);
-
-        const anchor = s.streamId === null
-          ? null
-          : this.deps.history.streamAnchor(s.username, s.streamId);
-        const window = this.gainWindow(s.username, dayAgo);
-        const gained24h =
-          window === null || typeof s.points !== "number"
-            ? null
-            : s.points - window.balance;
-
-        // Measured all the way to `at`, including the stream and miner
-        // session still running.
-        //
-        // These figures must never be completed by the client. Mining
-        // time is the *intersection* of "channel live" and "miner up",
-        // and only this side knows the second half -- a card that added
-        // the running stream's own elapsed time would be assuming the
-        // miner was up for all of it, which is precisely the conflation
-        // the two clocks exist to prevent. A miner started ten minutes
-        // into a day-long stream reported a full day of mining.
-        //
-        // The SSE cost of an ever-growing figure is handled by rounding
-        // to the minute (toMinutes below): a live figure then changes at
-        // most once a minute rather than on every poll.
-        const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, at);
-        // The third clock. streamer_sessions.start_ts is Twitch's own
-        // createdAt, so a channel added to the roster mid-stream opens a
-        // session back-dated to a start we were never present for --
-        // and the miner, up the whole time, agrees. Both existing clocks
-        // are right and the intersection is still wrong: only "when did
-        // we first see this channel" rules out the hours before we
-        // arrived. Recorded just above, so a first-ever poll floors at
-        // `at` and reports zero rather than the stream's whole length.
-        //
-        // Null (no store, or a channel the state pass has never seen)
-        // leaves the older behaviour untouched.
-        const seen = this.deps.streamers?.firstSeen(s.username) ?? null;
-        const floor = seen ?? 0;
-        const mined24h = total(intersect(
-          clip(online, floor, at),
-          clip(this.deps.history.minerSpans(dayAgo), dayAgo, at),
-        ));
-        const minedTotal = total(intersect(
-          clip(this.deps.history.streamerSpans(s.username), floor, at),
-          clip(this.deps.history.minerSpans(), 0, at),
-        ));
-
-        const profile = profiles.get(normaliseUsername(s.username));
-        const drop = drops.get(normaliseUsername(s.username)) ?? null;
-        // Read after see() above wrote this poll's own name, so a
-        // resolved poll reads back what it just stored and a failed one
-        // reads the last good name instead. Null only when no poll has
-        // ever resolved the channel, which is the card's own cue to fall
-        // back to the login.
-        const known = this.deps.streamers?.get([s.username]).get(s.username) ?? null;
-        return {
-          ...s,
-          // Overrides the spread: `s.displayName` is null whenever the
-          // channel's community block is missing, which would otherwise
-          // visibly rename the card to its lowercase login until the
-          // next good poll.
-          displayName: s.displayName ?? known?.displayName ?? null,
-          gained24h,
-          gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
-          gainedStream:
-            anchor === null || typeof s.points !== "number" ? null : s.points - anchor,
-          spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
-          avatarUrl: profile?.avatarUrl ?? null,
-          drop,
-          game: profile?.game ?? null,
-          streamTitle: profile?.title ?? null,
-          // Damped so a count that drifts every poll does not push an SSE
-          // frame to every browser -- see roundViewers.
-          viewers: roundViewers(profile?.viewers ?? null),
-          liveSince: s.streamStartedAt,
-          lastLive: this.deps.history.lastLive(s.username),
-          lastActivity: this.deps.history.lastActivity(s.username),
-          // An offline channel is never being watched, whatever the last
-          // gain says: the guard keeps a stale event from outliving the
-          // stream it came from when a channel drops inside the window.
-          watching: (() => {
-            if (s.isOnline !== true) return false;
-            const gained = this.deps.history.lastWatchGain(s.username);
-            return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
-          })(),
-          online24h: quantise(total(online)),
-          mined24h: quantise(mined24h),
-          minedTotal: quantise(minedTotal),
-          pointsPerHour:
-            mined24h < MIN_MINED_FOR_RATE_MS || gained24h === null
-              ? null
-              : Math.round((gained24h / (mined24h / HOUR_MS)) * 10) / 10,
-        };
-      });
+      this.undrawn = false;
 
       if (before !== JSON.stringify(this.streamers)) {
         this.emit("change", this.snapshot());
       }
     } catch (cause) {
-      // A login (or anything else calling clearError) happened while this
+      return this.handleRefreshError(cause, epoch);
+    }
+  }
+
+  /**
+   * Builds one dashboard card from a raw state row plus stored history.
+   *
+   * Shared by the live pass and deriveLocal(), which differ only in where
+   * the raw row comes from -- the helper, or the database. Keeping one
+   * implementation is what stops the mining-time intersection being
+   * written twice; see the comment on `mined24h` for why a second version
+   * of that arithmetic would be a bug waiting to happen.
+   */
+  private deriveOne(
+    s: RawStreamerState,
+    at: number,
+    dayAgo: number,
+    profiles: Map<string, ProfileRowData>,
+    drops: Map<string, DropProgress>,
+  ): StreamerState {
+    const anchor = s.streamId === null
+      ? null
+      : this.deps.history.streamAnchor(s.username, s.streamId);
+    const window = this.gainWindow(s.username, dayAgo);
+    const gained24h =
+      window === null || typeof s.points !== "number"
+        ? null
+        : s.points - window.balance;
+
+    // Measured all the way to `at`, including the stream and miner
+    // session still running.
+    //
+    // These figures must never be completed by the client. Mining
+    // time is the *intersection* of "channel live" and "miner up",
+    // and only this side knows the second half -- a card that added
+    // the running stream's own elapsed time would be assuming the
+    // miner was up for all of it, which is precisely the conflation
+    // the two clocks exist to prevent. A miner started ten minutes
+    // into a day-long stream reported a full day of mining.
+    //
+    // The SSE cost of an ever-growing figure is handled by rounding
+    // to the minute (toMinutes below): a live figure then changes at
+    // most once a minute rather than on every poll.
+    const online = clip(this.deps.history.streamerSpans(s.username, dayAgo), dayAgo, at);
+    // The third clock. streamer_sessions.start_ts is Twitch's own
+    // createdAt, so a channel added to the roster mid-stream opens a
+    // session back-dated to a start we were never present for --
+    // and the miner, up the whole time, agrees. Both existing clocks
+    // are right and the intersection is still wrong: only "when did
+    // we first see this channel" rules out the hours before we
+    // arrived. Recorded just above, so a first-ever poll floors at
+    // `at` and reports zero rather than the stream's whole length.
+    //
+    // Null (no store, or a channel the state pass has never seen)
+    // leaves the older behaviour untouched.
+    const seen = this.deps.streamers?.firstSeen(s.username) ?? null;
+    const floor = seen ?? 0;
+    const mined24h = total(intersect(
+      clip(online, floor, at),
+      clip(this.deps.history.minerSpans(dayAgo), dayAgo, at),
+    ));
+    const minedTotal = total(intersect(
+      clip(this.deps.history.streamerSpans(s.username), floor, at),
+      clip(this.deps.history.minerSpans(), 0, at),
+    ));
+
+    const profile = profiles.get(normaliseUsername(s.username));
+    const drop = drops.get(normaliseUsername(s.username)) ?? null;
+    // Read after the persistence loop above wrote this poll's own
+    // name, so a resolved poll reads back what it just stored and a
+    // failed one reads the last good name instead. Null only when no
+    // poll has ever resolved the channel, which is the card's own cue
+    // to fall back to the login.
+    const known = this.deps.streamers?.get([s.username]).get(s.username) ?? null;
+    return {
+      ...s,
+      // Overrides the spread: `s.displayName` is null whenever the
+      // channel's community block is missing, which would otherwise
+      // visibly rename the card to its lowercase login until the
+      // next good poll.
+      displayName: s.displayName ?? known?.displayName ?? null,
+      gained24h,
+      gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
+      gainedStream:
+        anchor === null || typeof s.points !== "number" ? null : s.points - anchor,
+      spark: downsample(this.deps.history.seriesSince(s.username, dayAgo), dayAgo, at),
+      avatarUrl: profile?.avatarUrl ?? null,
+      drop,
+      game: profile?.game ?? null,
+      streamTitle: profile?.title ?? null,
+      // Damped so a count that drifts every poll does not push an SSE
+      // frame to every browser -- see roundViewers.
+      viewers: roundViewers(profile?.viewers ?? null),
+      liveSince: s.streamStartedAt,
+      lastLive: this.deps.history.lastLive(s.username),
+      lastActivity: this.deps.history.lastActivity(s.username),
+      // An offline channel is never being watched, whatever the last
+      // gain says: the guard keeps a stale event from outliving the
+      // stream it came from when a channel drops inside the window.
+      watching: (() => {
+        if (s.isOnline !== true) return false;
+        const gained = this.deps.history.lastWatchGain(s.username);
+        return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
+      })(),
+      online24h: quantise(total(online)),
+      mined24h: quantise(mined24h),
+      minedTotal: quantise(minedTotal),
+      pointsPerHour:
+        mined24h < MIN_MINED_FOR_RATE_MS || gained24h === null
+          ? null
+          : Math.round((gained24h / (mined24h / HOUR_MS)) * 10) / 10,
+    };
+  }
+
+  /**
+   * Paints the held snapshot from the database, if it has nothing to draw.
+   *
+   * Synchronous by design. /api/streamers reads snapshot() in the same
+   * tick it answers, so a paint that waited on doRefresh's first `await`
+   * would arrive too late and the response would carry an empty roster --
+   * exactly the blank dashboard this work exists to remove. Returns
+   * whether it painted, so the caller knows a fuller frame is still
+   * coming.
+   */
+  async paintLocal(): Promise<boolean> {
+    if (!this.undrawn) return false;
+    // Resolves the roster the caller does not have. Async only because
+    // resolveRoster may fetch the follow list; the derivation itself is
+    // pure SQLite, about two milliseconds for eight channels. A failure
+    // is not worth reporting -- the live refresh that follows hits the
+    // same problem and reports it properly.
+    const roster = this.roster.length > 0
+      ? this.roster
+      : await Promise.resolve(this.deps.getStreamers()).catch(() => []);
+    // Re-checked after the await: a live refresh may have landed while
+    // the roster was resolving, and overwriting its real cards with
+    // database-only ones would drop the dashboard back a step.
+    if (!this.undrawn) return false;
+    return this.paintFrom(roster);
+  }
+
+  /**
+   * The paint itself, given a roster already in hand.
+   *
+   * Separate from paintLocal() so doRefresh can call it without an
+   * await. An extra microtask there would delay the state request by one
+   * turn, which the in-flight coalescing tests detect -- and more to the
+   * point, the early paint must never hold up the call it exists to
+   * cover for.
+   */
+  private paintFrom(roster: string[]): boolean {
+    if (!this.undrawn || roster.length === 0) return false;
+    this.streamers = this.deriveLocal(roster);
+    this.emit("change", this.snapshot());
+    return true;
+  }
+
+  /**
+   * Builds the card set from the database alone, with no Twitch call.
+   *
+   * The dashboard's first paint. state.py issues one GQL call per
+   * streamer, sequentially, so a cold start spends seconds confirming
+   * figures that are already on disk -- the same eight cards build from
+   * SQLite in about two milliseconds. This is emitted first and the live
+   * pass replaces it when it lands.
+   *
+   * Everything Twitch alone can answer is left null, `isOnline` above
+   * all. The database does know which sessions are open, but an open row
+   * only means the channel was live at the *last* poll, which may be
+   * hours old -- the dev database held open rows for three channels that
+   * had since left the roster entirely. Reporting that as "live now"
+   * would put cards under the dashboard's "Live now" heading and then
+   * move them when the truth arrived. Null is the state the UI already
+   * has for "we have not looked": StatusPill renders nothing for it
+   * rather than claiming OFFLINE, which would be just as much of a
+   * claim.
+   */
+  deriveLocal(usernames: string[]): StreamerState[] {
+    const at = this.now();
+    const dayAgo = at - DAY_MS;
+    const known = this.deps.streamers?.get(usernames) ?? new Map();
+    // Empty rather than a lookup: profiles and drops are network-only.
+    // The avatar is the exception and comes off the streamers row below,
+    // where it is cached with a 7-day TTL.
+    const profiles = new Map<string, ProfileRowData>();
+    const drops = new Map<string, DropProgress>();
+
+    return usernames.map((username) => {
+      const row = known.get(username) ?? null;
+      const series = this.deps.history.seriesSince(username, 0);
+
+      // The miner's own verdict, which lands seconds after it starts --
+      // far ahead of the state pass. Used only while recent enough to
+      // mean something: see LIVENESS_TRUST_MS. Null (no verdict, or a
+      // stale one) leaves the field unknown, which the UI renders as no
+      // claim at all rather than as OFFLINE.
+      const verdict = this.deps.history.lastLiveness(username);
+      const isOnline = verdict !== null && at - verdict.ts <= LIVENESS_TRUST_MS
+        ? verdict.online
+        : null;
+
+      // Only for a channel the miner says is live *now*: an open session
+      // row alone proves nothing, since it stays open when the backend
+      // stops. Paired with a fresh ONLINE verdict it is the real start
+      // time, which is what the card's uptime counts from.
+      const openSince = isOnline === true
+        ? this.deps.history.openStreamerSessionStart(username)
+        : null;
+
+      // The raw row the helper would have returned, answered from store.
+      const local: RawStreamerState = {
+        username,
+        channelId: null,
+        displayName: row?.displayName ?? null,
+        points: series.at(-1)?.balance ?? null,
+        isOnline,
+        pointsEnabled: null,
+        streamId: null,
+        streamStartedAt: openSince,
+        multiplier: null,
+        claimPending: false,
+        goal: null,
+      };
+      const card = this.deriveOne(local, at, dayAgo, profiles, drops);
+      // deriveOne reads the avatar off the profile map, which is empty
+      // here; the cached one lives on the streamers row.
+      return { ...card, avatarUrl: row?.avatarUrl ?? null };
+    });
+  }
+
+  /**
+   * Handles a failed refresh. Split out of doRefresh only so the derive
+   * loop above could become its own method; the logic is unchanged.
+   */
+  private handleRefreshError(cause: unknown, epoch: number): void {
+    // A login (or anything else calling clearError) happened while this
       // request was open, so it was answered by the session that has since
       // been replaced. Reporting its failure would put a stale traceback on
       // a dashboard that has just been signed in.
@@ -603,11 +857,10 @@ export class StateService extends EventEmitter {
         // Anything else may well succeed on the next tick, so keep both
         // the message and the last known numbers; snapshot() reports them
         // as stale either way.
-        this.lastError = cause instanceof Error ? cause.message : String(cause);
-        this.sessionDead = false;
-      }
-      this.emit("change", this.snapshot());
+      this.lastError = cause instanceof Error ? cause.message : String(cause);
+      this.sessionDead = false;
     }
+    this.emit("change", this.snapshot());
   }
 
   /** Doorbell: something happened, refresh soon. Bursts coalesce. */
@@ -631,16 +884,26 @@ export class StateService extends EventEmitter {
     }, this.deps.debounceMs ?? 2000);
   }
 
-  start(): void {
-    if (this.ticker) return;
+  /**
+   * Arms the poll and issues the first refresh.
+   *
+   * Returns that refresh so a caller who needs to know when the boot pass
+   * has settled can await it -- index.ts holds its "derive even though
+   * nobody is connected" flag open until then. Ignoring the return keeps
+   * the original fire-and-forget behaviour: doRefresh() never rejects, and
+   * start() must not block boot on a Twitch round trip.
+   */
+  start(): Promise<void> {
+    // Already running: there is no new boot pass to report, and the
+    // caller must not be handed a promise for one that settled long ago.
+    if (this.ticker) return Promise.resolve();
     this.ticker = setInterval(() => void this.refresh(), this.deps.intervalMs ?? 60_000);
     // Arming the interval alone left the first tick a full period away, so
     // for 60s after every restart the dashboard rendered a confident total
     // of 0 built from no data at all. Kick one refresh immediately so the
     // snapshot is either real or explicitly "never updated" -- never a
-    // fabricated zero. Fire-and-forget: doRefresh() never rejects, and
-    // start() must not block boot on a Twitch round trip.
-    void this.refresh();
+    // fabricated zero.
+    return this.refresh();
   }
 
   stop(): void {

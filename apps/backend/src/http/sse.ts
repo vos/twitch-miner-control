@@ -11,15 +11,28 @@ export const HEARTBEAT_MS = 15_000;
 export interface SseHubOptions {
   /** Overridable so tests need not wait a real heartbeat period. */
   heartbeatMs?: number;
+  /** Runs when the first client of an idle period connects. */
+  onFirstClient?: () => void;
 }
 
 export class SseHub {
   private clients = new Set<FastifyReply>();
   private heartbeat: NodeJS.Timeout | null = null;
   private readonly heartbeatMs: number;
+  /**
+   * Called when the client set goes from empty to non-empty.
+   *
+   * The state service skips everything display-only while nobody is
+   * watching (see StateServiceDeps.clientsConnected), so the arrival of
+   * the first client is what turns the rendered fields back on. Without
+   * this the dashboard would show the last pre-idle numbers until the
+   * next 60s tick happened to land.
+   */
+  private readonly onFirstClient: (() => void) | null;
 
   constructor(options: SseHubOptions = {}) {
     this.heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+    this.onFirstClient = options.onFirstClient ?? null;
   }
 
   get clientCount(): number {
@@ -92,7 +105,11 @@ export class SseHub {
         "X-Accel-Buffering": "no",
       });
       reply.raw.write(": connected\n\n");
+      const wasEmpty = this.clients.size === 0;
       this.clients.add(reply);
+      // After the add, so a refresh that completes synchronously already
+      // counts this client as connected.
+      if (wasEmpty) this.onFirstClient?.();
       request.raw.on("close", () => {
         this.clients.delete(reply);
       });

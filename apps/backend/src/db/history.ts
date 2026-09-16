@@ -128,6 +128,53 @@ export class History {
   }
 
   /**
+   * The miner's own most recent verdict on whether this channel is live.
+   *
+   * Upstream logs every channel's state on startup -- "is Online!" /
+   * "is Offline!" -- and the doorbell records those as
+   * STREAMER_ONLINE / STREAMER_OFFLINE attributed to the streamer they
+   * name. The whole roster is reported within about a second of the
+   * miner starting, which is well ahead of the state pass: state.py
+   * issues one GQL call per streamer, sequentially.
+   *
+   * Returns the verdict *and* when it was made, because age is what
+   * decides whether it can be trusted. A verdict has no expiry of its
+   * own -- a channel offline for a week is still offline -- but the
+   * miner only keeps it current while it is running, so a row left by a
+   * miner that has since stopped can be arbitrarily old. The caller
+   * bounds it; see LIVENESS_TRUST_MS in state/service.ts.
+   */
+  lastLiveness(streamer: string): { online: boolean; ts: number } | null {
+    const row = this.db
+      .prepare(
+        "SELECT ts, type FROM events WHERE streamer = ? " +
+          "AND type IN ('STREAMER_ONLINE', 'STREAMER_OFFLINE') " +
+          "ORDER BY ts DESC, id DESC LIMIT 1",
+      )
+      .get(streamer) as { ts: number; type: string } | undefined;
+    if (row === undefined) return null;
+    return { online: row.type === "STREAMER_ONLINE", ts: row.ts };
+  }
+
+  /**
+   * When the streamer's currently-open stream started, or null if none.
+   *
+   * The card counts its uptime from this. Read only alongside a fresh
+   * liveness verdict: an open row on its own survives the backend
+   * stopping, so it says "we never saw this stream end", not "this
+   * stream is running".
+   */
+  openStreamerSessionStart(streamer: string): number | null {
+    const row = this.db
+      .prepare(
+        "SELECT start_ts FROM streamer_sessions WHERE streamer = ? AND end_ts IS NULL " +
+          "ORDER BY start_ts DESC LIMIT 1",
+      )
+      .get(streamer) as { start_ts: number } | undefined;
+    return row?.start_ts ?? null;
+  }
+
+  /**
    * Records the first sighting of a stream. Idempotent per stream.
    *
    * `ON CONFLICT DO NOTHING` is what makes this restart-proof. It is

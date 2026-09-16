@@ -88,7 +88,11 @@ test("emits change only when something actually changed", async () => {
   await service.refresh();
   await service.refresh();
   await service.refresh();
-  expect(changes.length).toBe(2);
+  // Three frames, not two: the first refresh paints from the database
+  // before its round trip (see deriveLocal), then the derived frame
+  // follows. The middle refresh changes nothing and stays silent, which
+  // is what this test is really about.
+  expect(changes.length).toBe(3);
 });
 
 test("state goes stale once the refresh is older than staleAfterMs", async () => {
@@ -259,7 +263,11 @@ test("removing the last streamer clears state, is not stale, and emits change on
   service.on("change", () => changes.push(1));
 
   await service.refresh();
-  expect(changes.length).toBe(1);
+  // Two: the cold-start frame painted from the database, then the
+  // derived one. What this test guards is the count *after* the roster
+  // empties, below.
+  expect(changes.length).toBe(2);
+  const beforeEmptying = changes.length;
 
   roster = [];
   clock += 1;
@@ -269,12 +277,13 @@ test("removing the last streamer clears state, is not stale, and emits change on
   expect(snap.streamers).toEqual([]);
   expect(snap.stale).toBe(false);
   expect(snap.lastUpdated).toBe(clock);
-  expect(changes.length).toBe(2);
+  // Exactly one frame for the emptying itself.
+  expect(changes.length).toBe(beforeEmptying + 1);
 
   // A second empty refresh must not emit again -- nothing changed.
   clock += 1;
   await service.refresh();
-  expect(changes.length).toBe(2);
+  expect(changes.length).toBe(beforeEmptying + 1);
 });
 
 // Fix round 1: a refresh() (or the ring() debounce firing) arriving while
@@ -966,4 +975,417 @@ test("reports a null display name when none was ever resolved", async () => {
   const { service } = make([nameless(100)]);
   await service.refresh();
   expect(service.snapshot().streamers[0].displayName).toBeNull();
+});
+
+// --- Idle refresh: no client connected ------------------------------------
+//
+// The deployment this ships into runs the miner for days with nobody
+// watching. These cover the split: every write that feeds an all-time
+// figure still happens on the idle path, and everything that exists only
+// to be rendered does not.
+
+/** A service whose client-connected answer the test drives. */
+function idle(responses: unknown[], connected: () => boolean) {
+  const queue = [...responses];
+  const request = vi.fn(async () => {
+    const next = queue.shift();
+    if (next instanceof Error) throw next;
+    return next;
+  });
+  const profiles = { resolve: vi.fn(async () => new Map()) };
+  const drops = { resolve: vi.fn(async () => new Map()) };
+  const service = new StateService({
+    client: { request } as never,
+    history,
+    streamers,
+    getStreamers: () => ["alpha"],
+    staleAfterMs: 1000,
+    now: () => clock,
+    profiles: profiles as never,
+    drops: drops as never,
+    clientsConnected: connected,
+  });
+  return { service, request, profiles, drops };
+}
+
+test("idle refresh still records the points history a later client will read", async () => {
+  const { service } = idle([alpha(100), alpha(180)], () => false);
+  await service.refresh();
+  clock += 60_000;
+  await service.refresh();
+
+  // The snapshot is deliberately empty while idle, but the history behind
+  // it is whole: both balances are on disk, so the gain is computable.
+  expect(history.seriesSince("alpha", 0).map((p) => p.balance)).toEqual([100, 180]);
+});
+
+test("idle refresh still opens and closes streamer sessions", async () => {
+  // The clamp in closeStreamerSessionsExcept reads the last point
+  // snapshot, so skipping these while idle would truncate a stream's
+  // online span by however long nobody was watching -- permanently.
+  const { service } = idle([alpha(100, true, "S1"), alpha(120, false)], () => false);
+  await service.refresh();
+  clock += 60_000;
+  await service.refresh();
+
+  const spans = history.streamerSpans("alpha");
+  expect(spans).toHaveLength(1);
+  expect(spans[0].start).toBe(1000);
+  // Closed at our last evidence, not left open.
+  expect(spans[0].end).toBe(clock);
+});
+
+test("idle refresh still beats the miner session heartbeat", async () => {
+  // recoverOpenSessions() sets end_ts = heartbeat after a SIGKILL. A
+  // heartbeat that stalls while idle would discard every minute of real
+  // mining since the last client disconnected.
+  history.openMinerSession(0);
+  const { service } = idle([alpha(100)], () => false);
+  clock = 500_000;
+  await service.refresh();
+
+  history.recoverOpenSessions();
+  expect(history.minerSpans()[0].end).toBe(500_000);
+});
+
+test("idle refresh skips profile and drops lookups", async () => {
+  const { service, profiles, drops } = idle([alpha(100)], () => false);
+  await service.refresh();
+
+  expect(profiles.resolve).not.toHaveBeenCalled();
+  expect(drops.resolve).not.toHaveBeenCalled();
+});
+
+test("idle refresh emits no change event", async () => {
+  const { service } = idle([alpha(100), alpha(200)], () => false);
+  const seen: unknown[] = [];
+  service.on("change", (s) => seen.push(s));
+  await service.refresh();
+  clock += 60_000;
+  await service.refresh();
+
+  expect(seen).toEqual([]);
+});
+
+test("a client connecting gets a full snapshot built from idle history", async () => {
+  // The whole point of the split: the rendered fields are rebuilt on
+  // demand from what the idle path persisted, so days of not watching
+  // cost nothing but the derivation.
+  let connected = false;
+  history.openMinerSession(0);
+  const { service, profiles } = idle(
+    [alpha(100), alpha(180), alpha(260)],
+    () => connected,
+  );
+  await service.refresh();
+  clock += 3_600_000;
+  await service.refresh();
+
+  // Nothing rendered yet.
+  expect(service.snapshot().streamers).toEqual([]);
+
+  // Someone opens the dashboard.
+  connected = true;
+  clock += 60_000;
+  await service.refresh();
+
+  const s = service.snapshot().streamers[0];
+  expect(s.points).toBe(260);
+  // Computed against the balance the *idle* passes recorded, not from
+  // this one poll alone.
+  expect(s.gained24h).toBe(160);
+  expect(s.spark.length).toBeGreaterThan(0);
+  expect(profiles.resolve).toHaveBeenCalledTimes(1);
+});
+
+test("a service with no clientsConnected dep always does the full pass", async () => {
+  // Every existing caller and test omits it; absent, nothing changes.
+  const { service, profiles } = idle([alpha(100)], undefined as never);
+  await service.refresh();
+  expect(service.snapshot().streamers).toHaveLength(1);
+  expect(profiles.resolve).toHaveBeenCalled();
+});
+
+test("an idle refresh still reports a dead session", async () => {
+  // Staleness and auth state drive the header the moment a client
+  // connects, so they must stay truthful while idle.
+  const authError = Object.assign(new Error("auth"), { code: "AUTH" });
+  const { service } = idle([authError], () => false);
+  const seen: unknown[] = [];
+  service.on("auth-error", () => seen.push(true));
+  await service.refresh();
+
+  expect(seen).toHaveLength(1);
+  expect(service.snapshot().stale).toBe(true);
+});
+
+test("start() resolves when the boot refresh has settled", async () => {
+  // index.ts holds its "derive even with nobody connected" flag open
+  // until this promise settles, so a start() that resolved early would
+  // send the first poll of the session down the idle path.
+  const { service } = make([alpha(100)]);
+  await service.start();
+  service.stop();
+  expect(service.snapshot().streamers[0].points).toBe(100);
+});
+
+test("start() on an already-running service issues no second boot pass", async () => {
+  const { service, request } = make([alpha(100), alpha(100)]);
+  await service.start();
+  const after = request.mock.calls.length;
+  await service.start();
+  service.stop();
+  expect(request.mock.calls.length).toBe(after);
+});
+
+test("needsDerive flags a snapshot an idle pass left undrawn", async () => {
+  let connected = true;
+  const { service } = idle([alpha(100), alpha(140), alpha(180)], () => connected);
+  await service.refresh();
+  // A full pass leaves it drawable.
+  expect(service.needsDerive).toBe(false);
+
+  connected = false;
+  await service.refresh();
+  expect(service.needsDerive).toBe(true);
+
+  // And the next full pass clears it again.
+  connected = true;
+  await service.refresh();
+  expect(service.needsDerive).toBe(false);
+});
+
+test("needsDerive stays false for a roster that is simply empty", async () => {
+  // An empty dashboard is a correct rendering of no streamers, so the
+  // route must not stall on a refresh to "fix" it.
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history,
+    getStreamers: () => [],
+    now: () => clock,
+    clientsConnected: () => false,
+  });
+  await service.refresh();
+  expect(service.needsDerive).toBe(false);
+});
+
+test("needsDerive is true before the first refresh has landed", async () => {
+  // Cold start: the empty array means "we have not looked yet", not "no
+  // streamers". Served as a finished answer it made the dashboard leave
+  // its loading skeleton and render a complete-looking empty page for
+  // the whole of a slow boot.
+  const { service } = idle([alpha(100)], () => true);
+  expect(service.needsDerive).toBe(true);
+  await service.refresh();
+  expect(service.needsDerive).toBe(false);
+});
+
+// --- Local-first frame -----------------------------------------------------
+//
+// A cold start waits 3-4s on state.py's per-streamer GQL loop, for data
+// that is mostly already in SQLite. deriveLocal builds the card set from
+// the database alone so the dashboard can paint immediately.
+
+/** Seeds the history a real streamer would have accumulated. */
+function seedHistory(username: string, at: number) {
+  history.openMinerSession(at - DAY);
+  streamers.see(username, at - DAY, "Alpha");
+  history.recordPoints(username, 1000, at - DAY);
+  history.recordPoints(username, 1200, at - DAY / 2);
+  history.recordPoints(username, 1500, at - 60_000);
+  history.openStreamerSession(username, "S1", at - DAY, 1000);
+  history.closeStreamerSessionsExcept(username, null, at - 60_000);
+}
+
+const DAY = 86_400_000;
+
+test("deriveLocal builds cards from the database with no helper call", async () => {
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  const request = vi.fn();
+  const service = new StateService({
+    client: { request } as never,
+    history, streamers,
+    getStreamers: () => ["alpha"],
+    now: () => clock,
+  });
+
+  const cards = service.deriveLocal(["alpha"]);
+  expect(request).not.toHaveBeenCalled();
+  expect(cards).toHaveLength(1);
+  const s = cards[0];
+  expect(s.username).toBe("alpha");
+  expect(s.displayName).toBe("Alpha");
+  expect(s.points).toBe(1500);
+  expect(s.gained24h).toBe(500);
+  expect(s.spark.length).toBeGreaterThan(0);
+  expect(s.minedTotal).toBeGreaterThan(0);
+});
+
+test("deriveLocal does not infer liveness from an open session alone", async () => {
+  // An open session row survives the backend stopping, so on its own it
+  // means "we never saw this stream end", not "this stream is running".
+  // The dev database held three such rows for channels that had left the
+  // roster entirely. Only a *fresh* verdict from the miner promotes a
+  // channel to live; see the LIVENESS_TRUST_MS tests below.
+  clock = 100 * DAY;
+  streamers.see("alpha", clock - DAY, "Alpha");
+  history.recordPoints("alpha", 500, clock - DAY);
+  // Left open: as far as the database knows, alpha is live right now.
+  history.openStreamerSession("alpha", "S1", clock - DAY, 500);
+
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+
+  const s = service.deriveLocal(["alpha"])[0];
+  expect(s.isOnline).toBeNull();
+  expect(s.liveSince).toBeNull();
+  expect(s.streamId).toBeNull();
+  // Follows from isOnline: the miner cannot be watching a channel we
+  // cannot confirm is live.
+  expect(s.watching).toBe(false);
+});
+
+test("deriveLocal leaves every Twitch-only field empty", async () => {
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+
+  const s = service.deriveLocal(["alpha"])[0];
+  expect(s.viewers).toBeNull();
+  expect(s.game).toBeNull();
+  expect(s.streamTitle).toBeNull();
+  expect(s.drop).toBeNull();
+  expect(s.multiplier).toBeNull();
+  expect(s.goal).toBeNull();
+  expect(s.claimPending).toBe(false);
+  expect(s.pointsEnabled).toBeNull();
+  expect(s.gainedStream).toBeNull();
+});
+
+test("deriveLocal serves a cached avatar", async () => {
+  // Cached with a 7-day TTL, so a warm restart needs no network for these.
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  streamers.putProfile("alpha", "https://cdn/alpha.png", clock - 1000);
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+  expect(service.deriveLocal(["alpha"])[0].avatarUrl).toBe("https://cdn/alpha.png");
+});
+
+test("deriveLocal yields a card for a streamer it has never seen", async () => {
+  // A channel added to the roster seconds ago has no rows at all. It must
+  // still get a card -- dropping it would make the roster look shorter
+  // than it is until the Twitch pass lands.
+  clock = 100 * DAY;
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["ghost"], now: () => clock,
+  });
+  const s = service.deriveLocal(["ghost"])[0];
+  expect(s.username).toBe("ghost");
+  expect(s.points).toBeNull();
+  expect(s.gained24h).toBeNull();
+  expect(s.spark).toEqual([]);
+});
+
+test("a cold refresh emits the local frame before the derived one", async () => {
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  const { service } = idle([alpha(1600)], () => true);
+  const frames: number[] = [];
+  service.on("change", (s) => {
+    frames.push(s.streamers[0]?.points ?? -1);
+  });
+
+  await service.refresh();
+
+  // Local first (the stored 1500), then the live figure (1600).
+  expect(frames).toEqual([1500, 1600]);
+});
+
+test("a warm refresh emits no local frame", async () => {
+  // Only a snapshot that has nothing to draw needs the early paint; a
+  // client already holding real cards must not be sent backwards.
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  const { service } = idle([alpha(1600), alpha(1700)], () => true);
+  await service.refresh();
+
+  const frames: number[] = [];
+  service.on("change", (s) => frames.push(s.streamers[0]?.points ?? -1));
+  clock += 60_000;
+  await service.refresh();
+
+  expect(frames).toEqual([1700]);
+});
+
+test("deriveLocal trusts a fresh liveness verdict from the miner", async () => {
+  // Upstream announces every channel's state about a second after the
+  // miner starts, which beats the state pass by seconds on a cold start.
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  history.recordEvent("STREAMER_ONLINE", clock - 60_000, "is Online!", "alpha");
+  history.openStreamerSession("alpha", "S2", clock - 120_000, 1500);
+
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+  const s = service.deriveLocal(["alpha"])[0];
+  expect(s.isOnline).toBe(true);
+  expect(s.liveSince).toBe(clock - 120_000);
+});
+
+test("deriveLocal trusts a fresh offline verdict too", async () => {
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  history.recordEvent("STREAMER_OFFLINE", clock - 60_000, "is Offline!", "alpha");
+
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+  const s = service.deriveLocal(["alpha"])[0];
+  expect(s.isOnline).toBe(false);
+  expect(s.liveSince).toBeNull();
+});
+
+test("deriveLocal ignores a liveness verdict that has gone stale", async () => {
+  // Nothing retracts the last verdict when the miner stops, so an old
+  // ONLINE row can sit there indefinitely. The dev database held
+  // ten-day-old ones for channels that had left the roster entirely.
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  history.recordEvent("STREAMER_ONLINE", clock - 10 * DAY, "is Online!", "alpha");
+  history.openStreamerSession("alpha", "S2", clock - 10 * DAY, 1500);
+
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+  const s = service.deriveLocal(["alpha"])[0];
+  // Unknown, not offline -- we have not looked, and the UI says nothing.
+  expect(s.isOnline).toBeNull();
+  expect(s.liveSince).toBeNull();
+});
+
+test("deriveLocal takes the newest verdict when a channel has flipped", async () => {
+  clock = 100 * DAY;
+  seedHistory("alpha", clock);
+  history.recordEvent("STREAMER_ONLINE", clock - 300_000, "is Online!", "alpha");
+  history.recordEvent("STREAMER_OFFLINE", clock - 30_000, "is Offline!", "alpha");
+
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+  });
+  expect(service.deriveLocal(["alpha"])[0].isOnline).toBe(false);
 });

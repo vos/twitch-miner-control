@@ -83,6 +83,12 @@ test("stop() halts heartbeats", async () => {
   const client = await connect(hub, app);
 
   hub.stop();
+  // A heartbeat written in the instant before stop() is still in flight
+  // to the reader that fills client.text, so sampling immediately races
+  // it and the test fails whenever that frame lands after `settled`.
+  // Drain first: after this pause every pre-stop write has arrived, and
+  // what the assertion measures is purely whether new ones keep coming.
+  await new Promise((r) => setTimeout(r, 60));
   const settled = client.text;
   await new Promise((r) => setTimeout(r, 90));
 

@@ -371,3 +371,20 @@ describe("the Twitch sign-in notice", () => {
     expect(onSignIn).toHaveBeenCalledTimes(1);
   });
 });
+
+test("says it is updating while a Twitch pass is pending", async () => {
+  // The local-first frame is visibly partial -- balances as of the last
+  // poll, no viewer counts or drop progress -- so the readout says so
+  // rather than reporting an age for figures that are about to change.
+  stub({ ...snapshot, pending: true });
+  view();
+  expect(await screen.findByTestId("staleness")).toHaveTextContent(/updating/i);
+});
+
+test("renders the stored figures a pending snapshot carries", async () => {
+  // The point of painting early: these are real numbers off the
+  // backend's own database, not placeholders.
+  stub({ ...snapshot, pending: true });
+  view();
+  expect(await screen.findByTestId("total-points")).toHaveTextContent("123,476");
+});

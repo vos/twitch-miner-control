@@ -168,7 +168,16 @@ export interface ServerDeps {
  */
 export const STATUS_TICK_MS = 5_000;
 
-export function buildServer(deps: ServerDeps): FastifyInstance {
+/**
+ * A Fastify instance plus the one piece of live server state the rest of
+ * the process needs to see: whether anybody is connected.
+ */
+export interface AppServer extends FastifyInstance {
+  /** How many SSE clients are attached right now. */
+  readonly clientCount: number;
+}
+
+export function buildServer(deps: ServerDeps): AppServer {
   // /api/stream hijacks its socket for a live SSE connection that never
   // ends on its own. Node's http.Server#close() waits for every open
   // connection to end before its callback fires -- a hijacked socket
@@ -185,7 +194,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     forceCloseConnections: true,
     trustProxy: deps.trustProxy ?? false,
   });
-  const hub = new SseHub();
+  // The state service runs a reduced pass while nobody is watching, so
+  // the first client to connect has to ask for the full one. Fire and
+  // forget: the refresh emits "change", which reaches this client over
+  // the stream it has just opened.
+  const hub = new SseHub({
+    onFirstClient: () => { void deps.stateService.refresh().catch(() => {}); },
+  });
   let staged: AppConfig | null = null;
 
   /**
@@ -361,7 +376,37 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
     instance.get("/api/status", async () => status());
 
-    instance.get("/api/streamers", async () => deps.stateService.snapshot());
+    // Never waits on Twitch. The held snapshot is returned as-is and the
+    // client is told whether it is drawable yet.
+    //
+    // Waiting here is tempting -- an undrawn snapshot has no gains,
+    // sparklines or avatars -- but it buys nothing. The state pass is
+    // slow by nature: python/helpers/state.py issues one GQL call per
+    // streamer, plus one per live channel for drops, all sequential, so
+    // a roster of eight takes many seconds. The dashboard subscribes to
+    // the SSE "state" event before it fetches (useLiveState.ts), and the
+    // refresh below emits exactly that when it lands, so the data
+    // arrives either way. Blocking only chose which way the wait looked:
+    // a spinner instead of the skeleton the dashboard already draws.
+    //
+    // `pending` is what keeps that skeleton up. Without it the client
+    // cannot tell "no streamers yet" from "this user follows nobody",
+    // and a cold start rendered a finished-looking empty page.
+    instance.get("/api/streamers", async () => {
+      const pending = deps.stateService.needsDerive;
+      if (pending) {
+        // Paint from the database first, synchronously, so this response
+        // carries real cards -- names, cached avatars, balances, gains,
+        // sparklines -- instead of an empty roster. Doing it inside the
+        // refresh below would be too late: that call's first await lands
+        // after this handler has already read the snapshot.
+        await deps.stateService.paintLocal();
+        // Then the live pass, fire and forget. It resolves into an SSE
+        // frame, not this response.
+        void deps.stateService.refresh().catch(() => {});
+      }
+      return { ...deps.stateService.snapshot(), pending };
+    });
 
     // Type, time, and the miner's own formatted line -- which is what
     // names the channel (see history.ts's recordEvent). Rows written
@@ -575,5 +620,13 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
   });
 
-  return app;
+  // The state service consults this to decide whether a refresh needs its
+  // display half. A getter rather than a snapshot value: buildServer is
+  // called once, and the count changes for the life of the process.
+  Object.defineProperty(app, "clientCount", {
+    get: () => hub.clientCount,
+    configurable: true,
+  });
+
+  return app as unknown as AppServer;
 }

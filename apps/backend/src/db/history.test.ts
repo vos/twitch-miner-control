@@ -335,3 +335,49 @@ test("leaves span tables alone when pruning", () => {
   expect(history.streamerSpans("alpha")).toHaveLength(1);
   expect(history.minerSpans()).toHaveLength(1);
 });
+
+// --- Liveness from the miner's own log -------------------------------------
+//
+// The miner announces every channel's state within about a second of
+// starting ("is Online!" / "is Offline!"), which the doorbell records as
+// STREAMER_ONLINE / STREAMER_OFFLINE against the streamer it names. That
+// is minutes -- and on a cold start, seconds -- ahead of the Twitch pass.
+
+test("lastLiveness reports the newest online verdict", () => {
+  history.recordEvent("STREAMER_OFFLINE", 1000, "is Offline!", "forsen");
+  history.recordEvent("STREAMER_ONLINE", 3000, "is Online!", "forsen");
+  expect(history.lastLiveness("forsen")).toEqual({ online: true, ts: 3000 });
+});
+
+test("lastLiveness reports the newest offline verdict", () => {
+  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", "forsen");
+  history.recordEvent("STREAMER_OFFLINE", 3000, "is Offline!", "forsen");
+  expect(history.lastLiveness("forsen")).toEqual({ online: false, ts: 3000 });
+});
+
+test("lastLiveness ignores events that say nothing about liveness", () => {
+  history.recordEvent("GAIN_FOR_WATCH", 5000, "+10", "forsen");
+  history.recordEvent("BONUS_CLAIM", 6000, "claimed", "forsen");
+  expect(history.lastLiveness("forsen")).toBeNull();
+});
+
+test("lastLiveness does not read another streamer's verdict", () => {
+  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", "forsen");
+  expect(history.lastLiveness("alpha")).toBeNull();
+});
+
+test("lastLiveness is null when an event could not be attributed", () => {
+  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", null);
+  expect(history.lastLiveness("someone")).toBeNull();
+});
+
+test("openStreamerSessionStart reports the open stream's start", () => {
+  history.openStreamerSession("forsen", "S1", 5000, 100);
+  expect(history.openStreamerSessionStart("forsen")).toBe(5000);
+});
+
+test("openStreamerSessionStart is null once the session is closed", () => {
+  history.openStreamerSession("forsen", "S1", 5000, 100);
+  history.closeStreamerSessionsExcept("forsen", null, 9000);
+  expect(history.openStreamerSessionStart("forsen")).toBeNull();
+});

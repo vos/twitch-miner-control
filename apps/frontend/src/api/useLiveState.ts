@@ -106,6 +106,21 @@ export interface StateSnapshot {
   lastUpdated: number | null;
   stale: boolean;
   error: string | null;
+  /**
+   * This snapshot was built from the backend's database alone and a
+   * Twitch pass is now running to complete it.
+   *
+   * Everything stored is real -- names, cached avatars, balances, 24h
+   * gains, sparklines, mining totals. What only Twitch can answer is
+   * null: `isOnline`, `viewers`, `game`, `streamTitle`, `drop`. Liveness
+   * in particular is deliberately null rather than guessed from the last
+   * poll, which may be hours stale, so "Live now" is empty rather than
+   * wrong until the pass lands.
+   *
+   * Only ever true on the initial fetch, after a cold start or a stretch
+   * with nobody connected. Absent on SSE frames, which are complete.
+   */
+  pending?: boolean;
 }
 
 /**
@@ -231,6 +246,12 @@ function useLiveConnection(): LiveState {
     let alive = true;
     const unsubscribeState = subscribe("state", (data) => setSnapshot(data as StateSnapshot));
     api.get<StateSnapshot>("/api/streamers")
+      // Adopted even when pending. A pending snapshot is built from the
+      // backend's own database -- names, cached avatars, balances, gains
+      // and sparklines are all real; only what Twitch alone can answer
+      // (liveness above all) is still null. Rendering it beats holding
+      // the skeleton for the seconds the state pass takes, and the SSE
+      // frame that pass emits replaces it in place.
       .then((s) => { if (alive) setSnapshot(s); })
       .catch((cause) => {
         // Surface the failure instead of leaving a blank dashboard with

@@ -74,6 +74,9 @@ export function Streamers() {
   const loadStatus = useCallback(async () => {
     setRefreshing(true);
     try {
+      // A pending snapshot is adopted like any other: its rows carry the
+      // stored state these pills read, and `isOnline: null` renders no
+      // pill rather than a wrong one.
       const snapshot = await api.get<{ streamers: StreamerStatus[] }>("/api/streamers");
       setStatus(new Map(
         snapshot.streamers.map((s) => [s.username.toLowerCase(), s]),

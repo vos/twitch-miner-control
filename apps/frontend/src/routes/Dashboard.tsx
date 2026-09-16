@@ -258,7 +258,11 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
           switch at three different scales was most of why this row read
           as unrelated parts. */}
       <Group justify="space-between" align="center" wrap="wrap" gap="sm">
-        <StalenessBadge lastUpdated={snapshot.lastUpdated} stale={snapshot.stale} />
+        <StalenessBadge
+          lastUpdated={snapshot.lastUpdated}
+          stale={snapshot.stale}
+          pending={snapshot.pending}
+        />
         <Group gap="sm" align="center" wrap="nowrap">
           {/* The control sorts the cards below, and nothing on screen used
               to say so -- a bare dropdown reading "Default" beside a

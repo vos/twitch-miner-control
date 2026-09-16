@@ -19,7 +19,7 @@ import { Streamers } from "./db/streamers.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
 import { LoginStatus } from "./helpers/loginStatus.js";
 import { NdjsonClient } from "./helpers/ndjsonClient.js";
-import { buildServer, updateChecker } from "./http/server.js";
+import { buildServer, updateChecker, type AppServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { ProfileCache } from "./state/profiles.js";
 import { DropsCache } from "./state/drops.js";
@@ -177,6 +177,31 @@ const dropsCache = new DropsCache({
   eligible: (login) => dropsEligible(loadConfig(configPath), login),
 });
 
+/**
+ * Set once buildServer has run, below. The state service is constructed
+ * first -- the server takes it as a dependency -- so the connection count
+ * it needs cannot be read directly at this point; this holder closes the
+ * cycle without making either side optional.
+ */
+let server: AppServer | null = null;
+
+/**
+ * Forces the boot refresh to derive its display fields even though no
+ * client can possibly be connected yet.
+ *
+ * So that the numbers are ready and waiting: whoever opens the dashboard
+ * first is then served from memory instead of paying for a state pass
+ * that could have run while the process was starting anyway. The pass is
+ * one this process makes regardless -- the idle path would still write
+ * every history row -- so deriving on top of it costs only the profile
+ * and drops lookups.
+ *
+ * Cleared when that refresh settles, not when it is issued: `start()`
+ * awaits a helper round trip, so the pass is still in flight long after
+ * the statement that began it returned.
+ */
+let booting = true;
+
 const stateService = new StateService({
   client: helper,
   history,
@@ -184,6 +209,15 @@ const stateService = new StateService({
   getStreamers: resolveStreamers,
   profiles: profileCache,
   drops: dropsCache,
+  // This process normally runs for days with no browser attached. A
+  // refresh with nobody watching still writes the full history (points,
+  // sessions, the miner heartbeat) and then stops before the profile and
+  // drops round trips and the per-streamer derivation, all of which only
+  // feed a frame nobody would receive. See StateServiceDeps.
+  //
+  // `booting` covers the first pass, which is in flight before any
+  // client could exist; after that it is purely the live count.
+  clientsConnected: () => booting || (server?.clientCount ?? 0) > 0,
 });
 
 const staticRoot = resolve(process.env.STATIC_ROOT ?? "./public");
@@ -209,7 +243,7 @@ const loginStatus = new LoginStatus();
 const secureCookie = resolveEnvFlag(process.env.SECURE_COOKIE);
 const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 
-const app = buildServer({
+const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
 });
@@ -219,7 +253,11 @@ const loggedIn = await helper
   .catch(() => ({ loggedIn: false }));
 if (loggedIn.loggedIn) loginStatus.markLoggedIn();
 
-stateService.start();
+server = app;
+// Derives in full, then hands over to the live client count: from the
+// next poll on, a refresh with nobody watching writes history and skips
+// the display half.
+void stateService.start().finally(() => { booting = false; });
 if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
 
 // Children are not killed when this process exits, so a SIGTERM from a
