@@ -148,6 +148,43 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The annotated tag's own message becomes the release's opening
+      # summary. Every release tag here already carries one -- a few lines
+      # on what shipped, written while cutting the tag -- and it is the
+      # one place that cannot drift from the release, because it IS the
+      # release object. A separate changelog file is one more thing to
+      # forget in the commit that bumps the manifest.
+      #
+      # `git tag -l --format=%(contents:body)` drops the first line (the
+      # subject, which merely repeats the version) and any PGP signature,
+      # leaving the prose.
+      #
+      # Only for an *annotated* tag. `contents` falls through to the
+      # commit message for a lightweight one, which would publish the
+      # release commit's internal rationale and its Co-Authored-By
+      # trailer as the announcement. %(objecttype) tells the two apart,
+      # and a lightweight tag deliberately yields an empty body: the step
+      # below then publishes the generated notes alone, exactly as this
+      # workflow did before.
+      - name: Read the tag's message
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # The checkout above fetches the commit, not the tag object the
+          # message lives on.
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag" ]; then
+            body=$(git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME")
+          else
+            echo "::warning::$GITHUB_REF_NAME is a lightweight tag; publishing generated notes only."
+            body=""
+          fi
+          {
+            echo "body<<GIT_TAG_BODY_EOF"
+            printf '%s\n' "$body"
+            echo "GIT_TAG_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # The tag is what triggers this workflow, but a tag is invisible to
       # the REST API's releases/latest -- that endpoint only ever sees a
       # published Release, and answers 404 for a repository that has only
@@ -163,8 +200,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          # Notes are generated from the commits since the previous tag.
-          # The alternative is a hand-written changelog file, which is one
-          # more thing to forget in the same commit that bumps the
-          # manifest -- and the commit subjects are already written.
+          # The tag's prose leads; the commit list follows it. The action
+          # pre-pends `body` to the generated notes rather than replacing
+          # them, so the full "what changed" stays available underneath a
+          # summary that says why it matters.
+          body: ${{ steps.notes.outputs.body }}
+          # Generated from the commits since the previous tag -- the
+          # subjects are already written, so the list costs nothing to
+          # keep.
           generate_release_notes: true
