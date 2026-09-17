@@ -22,9 +22,11 @@ import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer, updateChecker, type AppServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { ProfileCache } from "./state/profiles.js";
+import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
 import { resolveRoster } from "./state/roster.js";
+import { InventoryCache } from "./state/inventory.js";
 import { StateService } from "./state/service.js";
 
 const dataDir = resolve(process.env.DATA_DIR ?? "./data");
@@ -243,10 +245,20 @@ const loginStatus = new LoginStatus();
 const secureCookie = resolveEnvFlag(process.env.SECURE_COOKIE);
 const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 
+// The campaign catalogue outlives a restart on purpose -- campaign
+// metadata stays true across one -- so it is persisted beside the other
+// app data. Progress is not, and lives only in memory.
+const catalogue = new CampaignCatalogue({
+  client: helper,
+  path: join(dataDir, "campaigns.json"),
+});
+const inventoryCache = new InventoryCache({ client: helper });
+
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
+  catalogue, inventory: inventoryCache,
 });
 
 const loggedIn = await helper

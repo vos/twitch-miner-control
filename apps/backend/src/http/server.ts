@@ -14,7 +14,10 @@ import type { LoginStatus } from "../helpers/loginStatus.js";
 import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
+import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
+import { resolveCampaign } from "../state/dropState.js";
 import { gainWindow } from "../state/gains.js";
+import type { InventoryCache } from "../state/inventory.js";
 import type { StateService } from "../state/service.js";
 import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
@@ -160,6 +163,13 @@ export interface ServerDeps {
    * from here, the Python helper writes it directly.
    */
   cookiesDir: string;
+  /**
+   * The drop campaign catalogue, on its own 24h clock. Owned outside the
+   * server because it is persisted and survives a rebuild of the routes.
+   */
+  catalogue: CampaignCatalogue;
+  /** Viewer drop progress, on the ten-minute clock. */
+  inventory: InventoryCache;
   /**
    * Absolute path to the built frontend (`apps/frontend/dist`). When set,
    * the static build is mounted at `/*` and unmatched non-API paths fall
@@ -424,6 +434,35 @@ export function buildServer(deps: ServerDeps): AppServer {
     instance.get("/api/events", async () => ({
       events: deps.history.recentEvents(20),
     }));
+
+    /**
+     * The Drops page's whole payload: the campaign catalogue joined with
+     * this viewer's progress.
+     *
+     * The two ages are reported separately on purpose. They sit on clocks
+     * a day apart, and collapsing them into one "updated N ago" would
+     * describe neither. `progressAvailable` travels with them because an
+     * absent drop means "never started" only when the fetch worked.
+     */
+    async function campaignPayload(refresh: boolean) {
+      const cat = refresh
+        ? await deps.catalogue.refresh()
+        : await deps.catalogue.get();
+      const inv = await deps.inventory.get();
+      return {
+        campaigns: cat.campaigns.map((c) => resolveCampaign(c, inv)),
+        catalogueFetchedAt: cat.fetchedAt,
+        catalogueStale: cat.stale,
+        progressFetchedAt: inv.fetchedAt,
+        progressAvailable: inv.available,
+      };
+    }
+
+    instance.get("/api/campaigns", async () => campaignPayload(false));
+
+    // Bypasses the TTL for a campaign that has just been announced. The
+    // cache rate limits this itself, so a double click costs one sweep.
+    instance.post("/api/campaigns/refresh", async () => campaignPayload(true));
 
     instance.get("/api/followers", async () => deps.helper.request("followers"));
 

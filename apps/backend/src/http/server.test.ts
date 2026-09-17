@@ -10,6 +10,8 @@ import { openDb } from "../db/schema.js";
 import { Streamers } from "../db/streamers.js";
 import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
+import { CampaignCatalogue } from "../state/campaignCatalogue.js";
+import { InventoryCache } from "../state/inventory.js";
 import { StateService } from "../state/service.js";
 import { buildServer } from "./server.js";
 
@@ -51,8 +53,19 @@ async function make(options: { statusTickMs?: number } = {}) {
     // runner's own pid so the route reads a real, live /proc entry.
     livePids: () => [process.pid],
   });
+  // Routed by op: the campaign routes drive two caches through this same
+  // client, and a blanket `{ streamers: [] }` would hand them the wrong
+  // shape. `helperResponses` lets a test override one op.
+  const helperResponses: Record<string, unknown> = {
+    campaigns: { campaigns: [] },
+    inventory: { inventory: {} },
+  };
   const client = {
-    request: vi.fn(async () => ({ streamers: [] })),
+    request: vi.fn(async (op: string) => {
+      const canned = helperResponses[op];
+      if (canned instanceof Error) throw canned;
+      return canned ?? { streamers: [] };
+    }),
     restart: vi.fn(async () => {}),
     on: vi.fn(),
   };
@@ -66,6 +79,11 @@ async function make(options: { statusTickMs?: number } = {}) {
     current: null, start: vi.fn(), cancel: vi.fn(),
   });
   const loginStatus = new LoginStatus();
+  const catalogue = new CampaignCatalogue({
+    client: client as never,
+    path: join(dir, "campaigns.json"),
+  });
+  const inventory = new InventoryCache({ client: client as never });
   const app = buildServer({
     configPath,
     password: PASSWORD,
@@ -78,6 +96,8 @@ async function make(options: { statusTickMs?: number } = {}) {
     loginRunner: loginRunner as never,
     loginStatus,
     cookiesDir,
+    catalogue,
+    inventory,
     staticRoot: PUBLIC_ROOT,
     statusTickMs: options.statusTickMs,
   });
@@ -87,7 +107,7 @@ async function make(options: { statusTickMs?: number } = {}) {
   });
   return {
     app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
-    cookiesDir,
+    cookiesDir, helperResponses,
     cookie: login.cookies[0].value,
   };
 }
@@ -839,6 +859,12 @@ async function makeLive() {
     supervisor: supervisor as never, stateService: state, history,
     helper, loginRunner: loginRunner as never, loginStatus: new LoginStatus(),
     cookiesDir: join(dir, "cookies"),
+    // This server never exercises the campaign routes; the caches are
+    // here only to satisfy the deps contract.
+    catalogue: new CampaignCatalogue({
+      client: helper as never, path: join(dir, "campaigns.json"),
+    }),
+    inventory: new InventoryCache({ client: helper as never }),
   });
   await app.ready();
   const login = await app.inject({
@@ -1200,6 +1226,11 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
     helper: ctx.client as never,
     loginRunner: ctx.loginRunner as never,
     loginStatus: ctx.loginStatus,
+    catalogue: new CampaignCatalogue({
+      client: ctx.client as never,
+      path: join(mkdtempSync(join(tmpdir(), "srv-")), "campaigns.json"),
+    }),
+    inventory: new InventoryCache({ client: ctx.client as never }),
     cookiesDir: ctx.cookiesDir,
     staticRoot: PUBLIC_ROOT,
   });
@@ -1216,4 +1247,90 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
 
   idle.stop();
   await app.close();
+});
+
+const aCampaign = {
+  id: "c1",
+  name: "Campaign One",
+  game: { id: "g1", slug: "a-game", displayName: "A Game" },
+  startsAt: 1_000,
+  endsAt: 9_000,
+  allowChannelIds: [],
+  drops: [
+    { id: "d1", name: "Crate", benefits: ["Crate"],
+      requiredMinutes: 60, requiredSubs: 0 },
+  ],
+};
+
+test("GET /api/campaigns joins the catalogue with viewer progress", async () => {
+  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  ctx.helperResponses["inventory"] = {
+    inventory: { c1: { d1: { minutes: 30, claimed: false, instanceId: null } } },
+  };
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.campaigns[0].drops[0].status).toBe("in-progress");
+  expect(body.campaigns[0].drops[0].minutes).toBe(30);
+  expect(body.campaigns[0].status).toBe("partial");
+});
+
+test("GET /api/campaigns reports the two cache ages separately", async () => {
+  // They are on clocks a day apart, so one merged "updated N ago" would
+  // describe neither.
+  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns", cookies: auth(),
+  });
+  const body = res.json();
+  expect(typeof body.catalogueFetchedAt).toBe("number");
+  expect(typeof body.progressFetchedAt).toBe("number");
+  expect(body.catalogueStale).toBe(false);
+  expect(body.progressAvailable).toBe(true);
+});
+
+test("GET /api/campaigns reports progress unavailable when the fetch fails", async () => {
+  // The campaigns must still render -- only the progress is unknown.
+  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  ctx.helperResponses["inventory"] = new Error("gql exploded");
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.progressAvailable).toBe(false);
+  expect(body.campaigns[0].drops[0].status).toBe("unknown");
+  expect(body.campaigns[0].status).toBe("unknown");
+});
+
+test("POST /api/campaigns/refresh refetches past the TTL", async () => {
+  ctx.helperResponses["campaigns"] = { campaigns: [] };
+  await ctx.app.inject({ method: "GET", url: "/api/campaigns", cookies: auth() });
+  const before = ctx.client.request.mock.calls.filter(
+    (c) => c[0] === "campaigns",
+  ).length;
+  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const after = ctx.client.request.mock.calls.filter(
+    (c) => c[0] === "campaigns",
+  ).length;
+  expect(after).toBeGreaterThan(before);
+  expect(res.json().campaigns[0].id).toBe("c1");
+});
+
+test("GET /api/campaigns requires a session", async () => {
+  const res = await ctx.app.inject({ method: "GET", url: "/api/campaigns" });
+  expect(res.statusCode).toBe(401);
+});
+
+test("POST /api/campaigns/refresh requires a session", async () => {
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh",
+  });
+  expect(res.statusCode).toBe(401);
 });
