@@ -26,6 +26,27 @@ const STATUS: Record<CampaignStatus, { label: string; colour: string }> = {
   unknown: { label: "progress unknown", colour: "gray" },
 };
 
+const ENDED = { label: "ended", colour: "gray" };
+
+/**
+ * The badge a campaign shows.
+ *
+ * The collection state alone knows nothing about the campaign's window,
+ * so an expired campaign announced itself as "not started" -- an
+ * invitation to start something that cannot be started -- or as "in
+ * progress", a claim about something that is no longer happening. Once
+ * the window shuts, that progress is frozen and can never be finished.
+ *
+ * `collected` is the exception and survives: it is a real achievement,
+ * and the deadline passing does not undo it.
+ */
+function badge(status: CampaignStatus, endsAt: number | null) {
+  // A campaign with no end date reported is not an ended one: unknown is
+  // not passed.
+  const over = endsAt !== null && endsAt <= Date.now();
+  return over && status !== "collected" ? ENDED : STATUS[status];
+}
+
 /**
  * One drop campaign, with its drops behind a disclosure.
  *
@@ -36,7 +57,7 @@ const STATUS: Record<CampaignStatus, { label: string; colour: string }> = {
  */
 export function CampaignCard({ campaign }: { campaign: ResolvedCampaign }) {
   const [open, { toggle }] = useDisclosure(false);
-  const status = STATUS[campaign.status];
+  const status = badge(campaign.status, campaign.endsAt);
   const count = campaign.drops.length;
 
   return (

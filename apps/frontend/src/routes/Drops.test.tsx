@@ -272,3 +272,74 @@ test("an ended campaign is still listed, not hidden", async () => {
   renderApp(<Drops />);
   await waitFor(() => expect(screen.getByText("Over Already")).toBeTruthy());
 });
+
+test("campaigns with progress sort above everything live", async () => {
+  // What you have already committed watch time to is what you most need
+  // to see, even when something else expires sooner.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "urgent", name: "Urgent Untouched",
+        status: "untouched", endsAt: Date.now() + 3_600_000 },
+      { ...payload.campaigns[0], id: "started", name: "Started One",
+        status: "partial", endsAt: Date.now() + 7 * 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Started One")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Started One/);
+  expect(cards[1]?.textContent).toMatch(/Urgent Untouched/);
+});
+
+test("collected campaigns are not promoted, having nothing left to do", async () => {
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "done", name: "All Done",
+        status: "collected", endsAt: Date.now() + 7 * 86_400_000 },
+      { ...payload.campaigns[0], id: "soon", name: "Soon One",
+        status: "untouched", endsAt: Date.now() + 3_600_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Soon One")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Soon One/);
+});
+
+test("within the progress tier, the soonest deadline still wins", async () => {
+  // 40/60 minutes expiring tonight outranks 10/60 with a week left.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "later", name: "Later Progress",
+        status: "partial", endsAt: Date.now() + 7 * 86_400_000 },
+      { ...payload.campaigns[0], id: "tonight", name: "Tonight Progress",
+        status: "partial", endsAt: Date.now() + 3_600_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Tonight Progress")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Tonight Progress/);
+});
+
+test("an ended campaign stays at the bottom even with progress on it", async () => {
+  // Frozen progress is not actionable, whatever tier it would otherwise
+  // have earned.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "over", name: "Over With Progress",
+        status: "partial", endsAt: Date.now() - 86_400_000 },
+      { ...payload.campaigns[0], id: "live", name: "Live Untouched",
+        status: "untouched", endsAt: Date.now() + 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Live Untouched")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Live Untouched/);
+  expect(cards[1]?.textContent).toMatch(/Over With Progress/);
+});

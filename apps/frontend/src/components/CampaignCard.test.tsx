@@ -75,3 +75,51 @@ test("says how many drops a campaign has without expanding it", () => {
   renderApp(<CampaignCard campaign={campaign()} />);
   expect(screen.getByTestId("campaign-drop-count").textContent).toMatch(/1 drop/i);
 });
+
+test("an ended campaign with no progress says ended, not not-started", () => {
+  // "NOT STARTED" on a campaign that is over reads as an invitation to
+  // start something that cannot be started.
+  renderApp(<CampaignCard campaign={campaign({
+    status: "untouched", endsAt: Date.now() - 86_400_000,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/ended/i);
+});
+
+test("an ended campaign with partial progress also says ended", () => {
+  // The progress is frozen and can never be finished, so "IN PROGRESS"
+  // is a claim about something that is no longer happening.
+  renderApp(<CampaignCard campaign={campaign({
+    status: "partial", endsAt: Date.now() - 86_400_000,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/ended/i);
+});
+
+test("an ended campaign that was collected still says collected", () => {
+  // A real achievement, and the deadline passing does not undo it.
+  renderApp(<CampaignCard campaign={campaign({
+    status: "collected", endsAt: Date.now() - 86_400_000,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/collected/i);
+});
+
+test("a live campaign keeps its collection state", () => {
+  renderApp(<CampaignCard campaign={campaign({
+    status: "untouched", endsAt: Date.now() + 86_400_000,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/not started/i);
+});
+
+test("a campaign with no end date never reports itself ended", () => {
+  // Unknown deadline is not a passed one.
+  renderApp(<CampaignCard campaign={campaign({
+    status: "untouched", endsAt: null,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/not started/i);
+});
+
+test("an ended campaign whose progress is unknown says ended", () => {
+  renderApp(<CampaignCard campaign={campaign({
+    status: "unknown", endsAt: Date.now() - 86_400_000,
+  })} />);
+  expect(screen.getByTestId("campaign-status").textContent).toMatch(/ended/i);
+});

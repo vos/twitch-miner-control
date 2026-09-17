@@ -95,25 +95,34 @@ export function Drops() {
             c.name.toLowerCase().includes(needle)
             || (c.game?.displayName.toLowerCase().includes(needle) ?? false));
 
-    // Soonest deadline first: the only ordering that answers the
-    // question the page is opened with -- what runs out next. The source
-    // returns its own order, which the user cannot see or reason about.
+    // Three tiers, then soonest deadline within each.
     //
-    // Ended campaigns go to the bottom first, whatever their deadline.
-    // Sorting purely by deadline promotes them to the very top, giving
-    // the most prominent row on the page to the one thing that can no
-    // longer be acted on. They are kept rather than hidden because the
-    // tracker still lists them and a drop already earned is still worth
-    // seeing.
+    //   1. Live, with progress on them -- watch time already committed
+    //      is what you most need to see, even when something else
+    //      expires sooner. `collected` is deliberately NOT promoted:
+    //      it is finished, and lifting it would push campaigns that
+    //      still need something down the page.
+    //   2. Everything else live.
+    //   3. Ended. Sorting purely by deadline put these at the very top,
+    //      handing the most prominent row on the page to the one thing
+    //      that can no longer be acted on -- and an ended campaign is
+    //      bottom tier whatever progress sits on it, because that
+    //      progress is frozen and can never be finished. Kept rather
+    //      than hidden: the tracker still lists them, and a drop already
+    //      earned is worth seeing.
     //
-    // Then: no end date after dated ones -- an unknown deadline is not
-    // an urgent one -- and ties broken by name, so a refresh does not
-    // reshuffle the list.
+    // Within a tier: soonest deadline first, so 40/60 minutes expiring
+    // tonight outranks 10/60 with a week left. No end date sorts after
+    // dated ones -- an unknown deadline is not an urgent one -- and ties
+    // break by name so a refresh does not reshuffle the list.
     const now = Date.now();
-    const ended = (c: ResolvedCampaign) =>
-      c.endsAt !== null && c.endsAt <= now;
+    const tier = (c: ResolvedCampaign) => {
+      if (c.endsAt !== null && c.endsAt <= now) return 2;
+      return c.status === "partial" ? 0 : 1;
+    };
     return [...matched].sort((a, b) => {
-      if (ended(a) !== ended(b)) return ended(a) ? 1 : -1;
+      const byTier = tier(a) - tier(b);
+      if (byTier !== 0) return byTier;
       const byEnd = (a.endsAt ?? Infinity) - (b.endsAt ?? Infinity);
       return byEnd !== 0 ? byEnd : a.name.localeCompare(b.name);
     });
