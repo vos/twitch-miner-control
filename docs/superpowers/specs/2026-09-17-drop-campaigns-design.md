@@ -1,7 +1,7 @@
 # Drop campaigns: browse them, and subscribe to collecting them
 
-Status: proposed
-Date: 2026-09-17
+Status: Phase 1 implemented; Phase 2 deferred
+Date: 2026-09-17 (revised same day, after implementation)
 
 ## Problem
 
@@ -49,55 +49,107 @@ a confident zero, as `StreamerCard.tsx:120` does for points — and it matters m
 here because an absent inventory entry and a failed inventory fetch look
 identical if you are careless.
 
-## What Twitch actually gives us
+## Where the data comes from
 
-This is not the public Helix API. Helix has no drops-campaign endpoint;
-its Drops Entitlements API is for game developers reading entitlements
-they themselves granted. The only route is Twitch's private GraphQL
-layer, authenticated with the miner's session cookie — and the vendored
-miner already speaks it.
+> **Revised 2026-09-17, after implementation.** The original design read
+> the campaign list from Twitch's own GraphQL layer. That turned out to
+> be impossible from a script, and the section below records what was
+> tried and what replaced it. The inventory half is unchanged.
 
-Three operations carry the whole feature, all three already present in
-`vendor/miner`:
+### Twitch's campaign list is gated, and cannot be reached
 
-- **`ViewerDropsDashboard`** (`constants.py:145`) — the query backing
-  `twitch.tv/drops/campaigns`. Returns **every** campaign with an id and
-  status, not only campaigns for channels you follow. Reached through
-  `gql.get_viewer_drops_dashboard()`, used today at `Twitch.py:1361`.
-- **`DropCampaignDetails`** (`constants.py:156`) — batched by id.
-  Yields `name`, `status`, `game` (id/slug/display name), `start_at`,
-  `end_at`, `allow_channel_ids`, and `time_based_drops[]` where each
-  drop carries `name`, `benefits`, `required_minutes_watched`,
-  `required_subs` and its own window. This is the entire browser payload.
-- **`Inventory`** (`constants.py:125`) — global, one call, covering every
-  campaign you have made progress on across all channels. Each
-  `TimeBasedDropInProgress` carries a `SelfEdge` with
-  `current_minutes_watched`, `drop_instance_id` and `is_claimed`.
+`ViewerDropsDashboard` -- the query behind `twitch.tv/drops/campaigns`,
+which the vendored miner calls at `Twitch.py:1361` -- answers HTTP 200
+with the campaigns field nulled and a partial error:
 
-What is **missing**: there is no operation anywhere in `constants.py`
-that lists live channels for a game. `allow_channel_ids` covers
-allowlisted campaigns only; the common case — "any channel streaming this
-game with drops enabled" — has no query behind it. See *The directory
-query* below, which is the load-bearing risk of this design.
+```json
+{"message": "failed integrity check",
+ "path": ["currentUser", "dropCampaigns"],
+ "extensions": {"code": "IntegrityCheckFailed"}}
+```
+
+Authentication is not the problem: `currentUser.id` and `login` resolve
+in the same response. Twitch refuses that one field.
+
+An integrity token can be fetched from `gql.twitch.tv/integrity`, and
+the endpoint issues one -- but the gated query rejects it anyway. The
+integrity response carries `X-Kpsdk-*` headers, meaning the endpoint is
+fronted by **Kasada**, whose challenge requires a browser to execute
+JavaScript proof-of-work. The token it returns is opaque rather than the
+readable JWT upstream's `isBadBot` expects, so the mechanism has changed
+since that code was written -- and upstream's own `post_integrity` is
+**commented out** in `Twitch.py:469`, which is the same conclusion
+reached independently.
+
+Defeating this would mean driving a headless browser against an
+anti-bot system. It breaks on their next update and materially raises
+the ban risk for an account the README already says you should be
+willing to lose. **Rejected.**
+
+### The split: tracker for campaigns, Twitch for progress
+
+**Campaigns** come from a public tracker,
+`twitch-drops.fenrisapps.com/campaigns`, requested with an `RSC: 1`
+header. That returns the page's React Server Component payload, which
+embeds the campaign array using Twitch's own field names --
+`timeBasedDrops`, `requiredMinutesWatched`, `requiresSub`, `startAt`,
+`endAt`, plus a full `game` object. One request yields the whole
+catalogue (71 campaigns / 220 drops when this was written).
+
+**Progress** still comes from Twitch. The `Inventory` query
+(`constants.py:125`) is **not** gated -- verified directly against a
+live session -- and uses the cookie the miner already holds. It is
+global, one call, and covers every campaign started across all channels,
+so the Drops page needs no per-channel query at all.
+
+This split is deliberate and worth preserving: the half that needs
+authentication is the half Twitch still allows, and the half Twitch
+refuses needs no authentication from us.
+
+### What the tracker costs us
+
+**It is an undocumented internal payload, not an API.** There is no
+stability promise, and the RSC format changes when they redeploy their
+frontend. This is the feature's standing fragility, and it is why
+`campaignSource.ts` throws on anything unexpected rather than returning
+an empty list -- see *Honesty* below.
+
+**No `allowChannelIds`.** Twitch's own API carries a campaign's channel
+allowlist; the tracker does not. That removes the one mechanism that
+would have let the subscription engine resolve channels without a
+directory query, so **Phase 2 is harder than this spec originally
+assumed** and is deferred until the browser is running against real
+data.
+
+### Honesty
+
+An empty campaign list means two completely different things, and
+conflating them produced a real bug: the page reported *"No drop
+campaigns are running"* when the source had in fact failed -- a
+confident claim about Twitch assembled from an empty variable.
+
+So: the source throws rather than returning `[]`, the catalogue carries
+`available` and `error` alongside `stale`, and the page reserves "none
+are running" for when it actually knows. This is the same distinction
+already drawn for inventory progress, and for the same reason.
 
 ## Three clocks, not one
 
 The single most important structural decision here. These three facts
 change at wildly different rates, and conflating them produces either a
-stale UI or a request storm against the account you are willing to lose.
+stale UI or a request storm -- against the account you are willing to
+lose, or against a free public tracker.
 
 | Data | TTL | Persisted? | Cost |
 |---|---|---|---|
-| Campaign catalogue | 24h | Yes, disk | 1 dashboard call + batched details |
+| Campaign catalogue | 24h | Yes, disk | 1 tracker request |
 | Inventory progress | 10 min | **No** | 1 global call |
 | Resolved channel pools | timer, ~15 min | Yes, in config | directory calls |
 
 **The catalogue is nearly static.** Campaigns are announced days ahead
-and run for weeks; `required_minutes_watched` for a drop never changes
-once published. A 24h TTL is generous and still correct, and it defuses
-the cost problem: there can be 100+ active campaigns, and fetching
-details for all of them per page load would hammer Twitch. Once a day, it
-does not.
+and run for weeks; a drop's required minutes never change once
+published. A 24h TTL is generous and still correct, and it keeps the
+load on a free public tracker to one request a day.
 
 It is persisted to disk because every field in it stays true across a
 restart. This is the opposite call from `state/drops.ts`, and
