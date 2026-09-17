@@ -120,11 +120,16 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
                 retentionFloor={detail.retentionFloor}
               />
               <StreamHistoryTable sessions={detail.sessions} />
-              <StreamerActivityLog events={detail.events} />
               <CoverageTimeline
                 coverage={detail.coverage}
                 days={COVERAGE_DAYS[range]}
               />
+              {/* Last: it is the only block here that is a feed rather
+                  than a summary, so it is the one a reader scrolls TO
+                  rather than past. Above the coverage strip it pushed
+                  the mined-vs-live comparison -- the thing no other
+                  view in the app shows -- below the fold. */}
+              <StreamerActivityLog events={detail.events} />
             </>
           );
         })()}

@@ -106,7 +106,7 @@ test("shows every block's empty state for a channel with no history", async () =
   expect(await screen.findByTestId("points-chart-empty")).toBeInTheDocument();
   expect(screen.getByTestId("streams-empty")).toBeInTheDocument();
   expect(screen.getByTestId("activity-empty")).toBeInTheDocument();
-  expect(screen.getAllByTestId("coverage-day")).toHaveLength(7);
+  expect(screen.getByTestId("coverage-empty")).toBeInTheDocument();
   expect(screen.queryByRole("alert", { hidden: true })).toBeNull();
 });
 
@@ -168,4 +168,16 @@ test("the dialog's status badge is the same badge as the card's", async () => {
   renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
   const title = await screen.findByTestId("detail-title");
   expect(title.querySelector("[data-testid='live-pill']")?.className).toBe(cardPill);
+});
+
+test("the activity feed sits below the coverage strip", async () => {
+  // Coverage is the block no other view in the app duplicates; the feed
+  // is the one thing here a reader scrolls TO rather than past.
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await screen.findByTestId("coverage-empty");
+  const order = Array.from(
+    document.querySelectorAll('[data-testid="coverage-empty"], [data-testid="activity-empty"]'),
+  ).map((el) => el.getAttribute("data-testid"));
+  expect(order).toEqual(["coverage-empty", "activity-empty"]);
 });
