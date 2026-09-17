@@ -1,5 +1,8 @@
 # Drop Campaigns Implementation Plan
 
+> **Status: complete.** All 15 tasks implemented; see the Phase 2 note
+> below for where the result diverged from what is written here.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a Drops section that lists every running Twitch drop campaign with per-drop progress, and lets the user subscribe to a campaign or game so the app keeps suitable channels in the miner's config automatically.
@@ -1616,10 +1619,24 @@ git commit -m "feat(ui): add a Drops page listing campaigns with progress"
 > `now()`. And Task 9's fixtures in this plan omit `enabled`/`settings`,
 > which the real streamer schema requires and marks `.strict()`.
 >
-> **Tasks 14-15 are not implemented.** The engine is complete and tested
-> but nothing constructs it: there are no subscription routes, no UI, and
-> `index.ts` does not build a `SubscriptionEngine`. It is unreachable
-> code until those land.
+> **Tasks 14-15 landed too, completing the plan.** Two further
+> deviations there: the routes are POST throughout rather than
+> DELETE/PATCH, since every other mutating route in this app is a POST
+> and the api client has no delete helper; and the pending restart rides
+> the status frame as well as its own SSE event, because the event alone
+> only reaches clients already attached, leaving a tab opened
+> mid-countdown with no banner.
+>
+> Verified end to end against the live app: subscribing to a real
+> campaign resolved three live channels, wrote them after the hand-added
+> streamers without touching them, and proposed a deferred restart. A
+> second pass proposed nothing.
+>
+> **Still open:** ranking the pool by viewer count is a guess. A bigger
+> channel is likelier to stay live for a drop's duration, but big
+> channels also raid and end abruptly, and the directory response
+> carries no "how long has this stream been running". Worth revisiting
+> once the picks have been watched in practice.
 
 
 ### Task 9: Config schema for subscriptions
