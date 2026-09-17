@@ -1220,3 +1220,68 @@ def test_campaigns_survives_a_drop_without_benefits():
     drop = out["data"]["campaigns"][0]["drops"][0]
     assert drop["benefits"] == []
     assert drop["requiredSubs"] == 0
+
+
+def _inventory_drop(did="d1", watched=30, claimed=False, instance=None):
+    """A drop as the *inventory* reports it -- progress, via self_edge."""
+    return SimpleNamespace(
+        id=did,
+        self_edge=SimpleNamespace(
+            current_minutes_watched=watched,
+            is_claimed=claimed,
+            drop_instance_id=instance,
+        ),
+    )
+
+
+def _inventory_handler(campaigns=None):
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    h.session.gql.get_inventory = lambda: SimpleNamespace(
+        campaigns=None if campaigns is None else list(campaigns)
+    )
+    return h
+
+
+def test_inventory_keys_progress_by_campaign_and_drop():
+    h = _inventory_handler([
+        SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=30),
+            _inventory_drop("d2", watched=60, instance="i9"),
+        ]),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["ok"] is True
+    assert out["data"]["inventory"]["c1"]["d1"] == {
+        "minutes": 30, "claimed": False, "instanceId": None,
+    }
+    assert out["data"]["inventory"]["c1"]["d2"]["instanceId"] == "i9"
+
+
+def test_inventory_reports_a_claimed_drop():
+    h = _inventory_handler([
+        SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=60, claimed=True, instance="i1"),
+        ]),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["inventory"]["c1"]["d1"]["claimed"] is True
+
+
+def test_inventory_is_empty_when_nothing_started():
+    # Absence means "never began this campaign". The TypeScript side must
+    # not read a FAILED call the same way -- that is `available: false`.
+    h = _inventory_handler(None)
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["inventory"] == {}
+
+
+def test_inventory_skips_a_drop_without_progress():
+    """No self_edge means the parser gave us no progress to report."""
+    h = _inventory_handler([
+        SimpleNamespace(id="c1", time_based_drops=[
+            SimpleNamespace(id="d1"),
+            _inventory_drop("d2", watched=15),
+        ]),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert list(out["data"]["inventory"]["c1"]) == ["d2"]

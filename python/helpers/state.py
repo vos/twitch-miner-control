@@ -325,6 +325,10 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"campaigns": self._campaigns()}}
+            if op == "inventory":
+                self._ensure_token()
+                return {"id": req_id, "ok": True,
+                        "data": {"inventory": self._inventory()}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -531,6 +535,39 @@ class Handler:
                     for d in (getattr(campaign, "time_based_drops", None) or [])
                 ],
             })
+        return out
+
+    def _inventory(self) -> dict:
+        """Global drop progress, keyed campaign id -> drop id.
+
+        One call, covering every campaign we have started across all
+        channels -- which is why the Drops page needs no per-channel
+        query to show progress.
+
+        A campaign absent from here was never started. That reading is
+        only valid when the call SUCCEEDED: a failure makes everything
+        absent, so the caller distinguishes the two with `available`
+        rather than inferring from an empty map (see inventory.ts).
+        """
+        inventory = self.session.gql.get_inventory()
+        out: dict = {}
+        for campaign in getattr(inventory, "campaigns", None) or []:
+            drops: dict = {}
+            for drop in getattr(campaign, "time_based_drops", None) or []:
+                edge = getattr(drop, "self_edge", None)
+                drop_id = getattr(drop, "id", None)
+                if edge is None or drop_id is None:
+                    continue
+                drops[drop_id] = {
+                    "minutes": getattr(edge, "current_minutes_watched", 0) or 0,
+                    "claimed": bool(getattr(edge, "is_claimed", False)),
+                    # Set once Twitch mints an instance: the drop is
+                    # earned and sitting there to be collected.
+                    "instanceId": getattr(edge, "drop_instance_id", None),
+                }
+            campaign_id = getattr(campaign, "id", None)
+            if campaign_id is not None:
+                out[campaign_id] = drops
         return out
 
     def _one(self, username: str) -> dict:
