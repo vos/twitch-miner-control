@@ -22,6 +22,13 @@
   /* Tabular figures so a minute ticking over cannot change the badge's
      width and nudge the name beside it. */
   font-variant-numeric: tabular-nums;
+  /* Pinned rather than inherited, which is what made the same badge
+     render at two sizes: its height fell out of whatever leading the
+     caller passed down -- 1.55 inside a card, 1 inside a Mantine modal
+     title -- so the dashboard drew it 19.5px and the detail dialog
+     18px. Its own line-height makes the box a property of the badge
+     rather than of its surroundings, so the two agree. */
+  line-height: 1.4;
 }
 
 /* The offline counterpart of .pill: same shape and slot, but muted -- it

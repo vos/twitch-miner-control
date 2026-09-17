@@ -1,15 +1,18 @@
 import { Alert, Group, Modal, SegmentedControl, Stack, Text } from "@mantine/core";
+import { IconCoins } from "@tabler/icons-react";
 import { useState } from "react";
 import { useStreamerDetail } from "../api/useStreamerDetail.js";
 import {
   RANGE_KEYS, RANGE_LABELS, rangeWindow, type RangeKey,
 } from "../lib/detailRanges.js";
 import { CoverageTimeline } from "./CoverageTimeline.js";
+import { Gain } from "./Gain.js";
 import { PointsChart } from "./PointsChart.js";
 import { StatusPill } from "./StatusPill.js";
 import { StreamerActivityLog } from "./StreamerActivityLog.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamHistoryTable } from "./StreamHistoryTable.js";
+import classes from "./StreamerDetailModal.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
 const nf = new Intl.NumberFormat("en-US");
@@ -51,6 +54,7 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
       opened={opened}
       onClose={onClose}
       size="xl"
+      classNames={{ body: classes.body }}
       title={
         <Group gap="sm" wrap="nowrap" data-testid="detail-title">
           <StreamerAvatar
@@ -71,16 +75,27 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
       }
     >
       <Stack gap="lg">
-        <Group gap="lg" wrap="wrap">
-          <Text size="sm" data-testid="detail-balance">
-            {s.points === null ? "—" : nf.format(s.points)} points
+        {/* The card's balance treatment, so the dialog opening over a
+            card does not restate the same figure in a different hand.
+            The gain beside it tracks the range control below rather
+            than being pinned to 24h -- see `gained` on the fetch. */}
+        <div className={classes.summary}>
+          <Text className={classes.balance} data-testid="detail-balance">
+            <IconCoins className={classes.coin} stroke={2} aria-hidden />
+            {s.points === null ? "—" : nf.format(s.points)}
           </Text>
-          <Text size="sm" c="dimmed">
-            {s.gained24h === null
-              ? "— 24h"
-              : `${s.gained24h > 0 ? "+" : ""}${nf.format(s.gained24h)} 24h`}
-          </Text>
-        </Group>
+          {/* Null until the fetch lands, which renders the em dash --
+              honest: we do not yet know the gain over this window. The
+              balance beside it comes from the dashboard's snapshot and
+              is already painted. */}
+          <Gain
+            value={detail?.gained ?? null}
+            label={RANGE_LABELS[range]}
+            since={detail?.gainedSince ?? null}
+            size="sm"
+            testId="detail-gain"
+          />
+        </div>
 
         <SegmentedControl
           value={range}

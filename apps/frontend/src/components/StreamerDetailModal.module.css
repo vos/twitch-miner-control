@@ -1,0 +1,52 @@
+/* Gives the body back its top padding.
+
+   Mantine zeroes it whenever the body is not an only child -- which is
+   every modal that HAS a title:
+
+     .mantine-Modal-body:where(:not(:only-child)) { padding-top: 0 }
+
+   That is right for a modal whose body opens with a form control
+   carrying its own label spacing, and wrong here: the balance is a bare
+   line of text, so it landed flush against the sticky header's underside
+   with only the header's own padding between them. Half the body padding
+   rather than all of it -- the header already contributes its own, and a
+   full md on top of that opened a gap wide enough to read as a section
+   break. */
+.body {
+  padding-top: calc(var(--mantine-spacing-md) / 2);
+}
+
+/* The balance and its gain, on one line under the title. */
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 12px;
+  row-gap: 4px;
+}
+
+/* The same balance treatment as the card, one step down: this figure
+   sits under a title rather than being the card's headline, and at the
+   card's 22px it competed with the streamer's name above it. */
+.balance {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Gold, as on the card -- the glyph marks the figure as currency, and
+   the two must not differ when the dialog opens over the card it came
+   from. */
+.coin {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  color: var(--tw-warn);
+  /* The glyph's optical centre sits above its box's; the same nudge the
+     card carries, scaled to this row's type. */
+  transform: translateY(1px);
+}

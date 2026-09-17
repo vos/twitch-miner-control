@@ -10,6 +10,17 @@ export interface StreamerDetail {
   events: { ts: number; type: string; message: string | null }[];
   sessions: DetailSession[];
   coverage: { live: Span[]; mined: Span[] };
+  /**
+   * Points gained over the requested window -- the closing balance less
+   * the balance in force at its start. Null when there is no earlier
+   * balance to measure from. Computed server-side by the same rule as
+   * the card's 24h figure, and deliberately not derived from `series`:
+   * that is clipped to the window, so its first row already carries its
+   * own gain and differencing inside it undercounts.
+   */
+  gained: number | null;
+  /** Start of the window when it is shorter than the range asked for. */
+  gainedSince: number | null;
   firstSeen: number | null;
   /** The oldest point sample that survived pruning, or null. */
   retentionFloor: number | null;
