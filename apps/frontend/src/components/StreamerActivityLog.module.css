@@ -1,0 +1,23 @@
+/* The repeat count on a collapsed run.
+
+   A badge rather than text appended to the label: "streamer offline ×15"
+   as one run of prose reads like the name of an event, and the eye has
+   to parse the whole line to find out it is not. Set apart, the label
+   stays the thing that happened and the count stays a quantity.
+
+   Deliberately quiet -- dimmed on a faint fill, no accent colour. It is
+   a modifier on the row, not a signal of its own; a coloured chip here
+   would outrank the green gain figure to its left, which is the one
+   number in the row a reader actually came for. */
+.count {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--tw-border);
+  color: var(--tw-text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.5;
+  /* Tabular so a two-digit count cannot shift the row's rhythm. */
+  font-variant-numeric: tabular-nums;
+}

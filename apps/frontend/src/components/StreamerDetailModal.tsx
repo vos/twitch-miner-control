@@ -1,5 +1,5 @@
-import { Alert, Group, Modal, SegmentedControl, Stack, Text } from "@mantine/core";
-import { IconCoins } from "@tabler/icons-react";
+import { Alert, Button, Group, Modal, SegmentedControl, Stack, Text } from "@mantine/core";
+import { IconActivity, IconCoins } from "@tabler/icons-react";
 import { useState } from "react";
 import { useStreamerDetail } from "../api/useStreamerDetail.js";
 import {
@@ -42,6 +42,10 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
   const s = streamer ?? shown;
 
   const [range, setRange] = useState<RangeKey>("7d");
+  // The feed is a separate view rather than a fourth block: the dialog is
+  // already long, and this is the one part of it the range control does
+  // not govern -- eventsFor takes a limit, not a window.
+  const [showActivity, setShowActivity] = useState(false);
   const { detail, loading, error } = useStreamerDetail(
     opened && s !== null ? s.username : null,
     range,
@@ -54,7 +58,12 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
       opened={opened}
       onClose={onClose}
       size="xl"
-      classNames={{ body: classes.body }}
+      classNames={{
+        // On the Activity view the feed owns the scrolling, so the
+        // modal itself must not also scroll -- see the CSS.
+        content: showActivity ? classes.contentActivity : undefined,
+        body: showActivity ? `${classes.body} ${classes.bodyActivity}` : classes.body,
+      }}
       title={
         <Group gap="sm" wrap="nowrap" data-testid="detail-title">
           <StreamerAvatar
@@ -71,10 +80,35 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
             lastLive={s.lastLive}
             elapsed={null}
           />
+          {/* In the title rather than above the body: a tab bar there
+              would sit over the range control while governing only one
+              side of it, and would cost a row of the height this move is
+              meant to give back.
+
+              Purple when on, grey when off: the app's accent already
+              means "current" on the nav, and it is the one strong colour
+              in this row that is not already spoken for -- red is the
+              LIVE pill, green is a gain. */}
+          <Button
+            variant={showActivity ? "filled" : "subtle"}
+            color={showActivity ? "twitch" : "gray"}
+            size="compact-xs"
+            leftSection={<IconActivity size={13} stroke={2.5} />}
+            onClick={() => setShowActivity((on) => !on)}
+            className={classes.activityToggle}
+            aria-pressed={showActivity}
+            data-testid="detail-activity-toggle"
+          >
+            Activity
+          </Button>
         </Group>
       }
     >
-      <Stack gap="lg">
+      {/* The flex chain has to run unbroken from the modal content down
+          to the feed's ScrollArea: any link that keeps its intrinsic
+          height stops the feed shrinking, and the overflow reappears as
+          a second scrollbar. */}
+      <Stack gap="lg" style={showActivity ? { flex: 1, minHeight: 0 } : undefined}>
         {/* The card's balance treatment, so the dialog opening over a
             card does not restate the same figure in a different hand.
             The gain beside it tracks the range control below rather
@@ -97,18 +131,30 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
           />
         </div>
 
-        <SegmentedControl
-          value={range}
-          onChange={(value) => setRange(value as RangeKey)}
-          data={RANGE_KEYS.map((key) => ({ value: key, label: RANGE_LABELS[key] }))}
-          size="xs"
-          data-testid="detail-range"
-        />
+        {/* Hidden with the history it governs: left showing over the
+            feed it would offer to narrow a list it has no effect on. */}
+        {!showActivity && (
+          <SegmentedControl
+            value={range}
+            onChange={(value) => setRange(value as RangeKey)}
+            data={RANGE_KEYS.map((key) => ({ value: key, label: RANGE_LABELS[key] }))}
+            size="xs"
+            data-testid="detail-range"
+          />
+        )}
 
         {error !== null && <Alert role="alert" color="red">{error}</Alert>}
         {loading && <Text size="sm" c="dimmed">Loading history…</Text>}
 
-        {detail !== null && (() => {
+        {detail !== null && showActivity && (
+          /* "100%", not a computed height: the body above is a flex
+             column that already stops at the modal's max-height, so the
+             feed fills whatever is left after the header and balance
+             line rather than guessing at their size. */
+          <StreamerActivityLog events={detail.events} maxHeight="100%" fill />
+        )}
+
+        {detail !== null && !showActivity && (() => {
           const { from, to } = rangeWindow(range, Date.now());
           return (
             <>
@@ -124,12 +170,6 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
                 coverage={detail.coverage}
                 days={COVERAGE_DAYS[range]}
               />
-              {/* Last: it is the only block here that is a feed rather
-                  than a summary, so it is the one a reader scrolls TO
-                  rather than past. Above the coverage strip it pushed
-                  the mined-vs-live comparison -- the thing no other
-                  view in the app shows -- below the fold. */}
-              <StreamerActivityLog events={detail.events} />
             </>
           );
         })()}

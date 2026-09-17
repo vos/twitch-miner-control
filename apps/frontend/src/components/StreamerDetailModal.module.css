@@ -50,3 +50,52 @@
      card carries, scaled to this row's type. */
   transform: translateY(1px);
 }
+
+/* The activity toggle, in the title row.
+
+   Beside the pill rather than pushed to the header's far edge. Mantine's
+   title slot is `flex: 0 1 auto`, so it shrinks to its contents and an
+   auto margin has nothing to push against; stretching the slot would
+   work, but it would park a view switch against the close button, where
+   a mis-click costs the whole dialog. Adjacent is also the truer
+   grouping: this control belongs to the title's subject.
+
+   The extra leading space keeps it off the pill, which is a status and
+   must not read as part of a button next to it.
+
+   Subtle until pressed. An always-filled button beside a LIVE badge
+   would read as a second status; the filled state is reserved for
+   "this view is the one you are looking at". */
+.activityToggle {
+  margin-inline-start: 6px;
+  flex-shrink: 0;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* The Activity view owns the dialog's scrolling.
+
+   Mantine's modal content is `overflow-y: auto` under a max-height, and
+   the feed carries its own ScrollArea -- so a feed tall enough to
+   overflow the content box produced two scrollbars side by side, the
+   feed's and the modal's.
+
+   Rather than guess a height that clears the modal's chrome (the first
+   attempt subtracted a magic 260px and still overflowed), the content
+   becomes a flex column that cannot exceed its own max-height, and the
+   feed is the one child allowed to grow. min-height:0 is what lets it
+   shrink below its content -- without it a flex item floors at its
+   intrinsic height and overflows the parent anyway, which is exactly
+   how the second bar appeared. */
+.contentActivity {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bodyActivity {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}

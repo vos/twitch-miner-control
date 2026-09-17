@@ -1,7 +1,9 @@
+import { MantineProvider } from "@mantine/core";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { renderApp } from "../test-utils.js";
+import { theme } from "../theme.js";
 import { StreamerCard } from "./StreamerCard.js";
 import { StreamerDetailModal } from "./StreamerDetailModal.js";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -105,8 +107,10 @@ test("shows every block's empty state for a channel with no history", async () =
   renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
   expect(await screen.findByTestId("points-chart-empty")).toBeInTheDocument();
   expect(screen.getByTestId("streams-empty")).toBeInTheDocument();
-  expect(screen.getByTestId("activity-empty")).toBeInTheDocument();
   expect(screen.getByTestId("coverage-empty")).toBeInTheDocument();
+  // The feed lives behind its own toggle now.
+  await userEvent.click(screen.getByTestId("detail-activity-toggle"));
+  expect(await screen.findByTestId("activity-empty")).toBeInTheDocument();
   expect(screen.queryByRole("alert", { hidden: true })).toBeNull();
 });
 
@@ -170,14 +174,117 @@ test("the dialog's status badge is the same badge as the card's", async () => {
   expect(title.querySelector("[data-testid='live-pill']")?.className).toBe(cardPill);
 });
 
-test("the activity feed sits below the coverage strip", async () => {
-  // Coverage is the block no other view in the app duplicates; the feed
-  // is the one thing here a reader scrolls TO rather than past.
+
+test("the activity feed is hidden until its toggle is pressed", async () => {
+  // The dialog opens on the history view: the feed is the extra thing
+  // you ask for, not a fourth block you scroll past every time.
   stubFetch();
   renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
   await screen.findByTestId("coverage-empty");
-  const order = Array.from(
-    document.querySelectorAll('[data-testid="coverage-empty"], [data-testid="activity-empty"]'),
-  ).map((el) => el.getAttribute("data-testid"));
-  expect(order).toEqual(["coverage-empty", "activity-empty"]);
+  expect(screen.queryByTestId("activity-empty")).toBeNull();
+
+  await userEvent.click(screen.getByTestId("detail-activity-toggle"));
+  expect(await screen.findByTestId("activity-empty")).toBeInTheDocument();
+});
+
+test("the feed replaces the history rather than lengthening the dialog", async () => {
+  // Appending would leave the dialog exactly as long, which is the
+  // problem the toggle exists to solve.
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await screen.findByTestId("coverage-empty");
+
+  await userEvent.click(screen.getByTestId("detail-activity-toggle"));
+  await screen.findByTestId("activity-empty");
+  expect(screen.queryByTestId("coverage-empty")).toBeNull();
+  expect(screen.queryByTestId("points-chart-empty")).toBeNull();
+  expect(screen.queryByTestId("streams-empty")).toBeNull();
+});
+
+test("the range control hides with the history it governs", async () => {
+  // The feed is the last 100 events whatever the range says, so offering
+  // to narrow it would be a control that does nothing.
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await screen.findByTestId("coverage-empty");
+  expect(screen.getByTestId("detail-range")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByTestId("detail-activity-toggle"));
+  await screen.findByTestId("activity-empty");
+  expect(screen.queryByTestId("detail-range")).toBeNull();
+});
+
+test("the toggle reports its state to assistive tech", async () => {
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  const toggle = await screen.findByTestId("detail-activity-toggle");
+  expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
+test("going back to the history restores the view the range was left on", async () => {
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await screen.findByTestId("coverage-empty");
+  await userEvent.click(screen.getByRole("radio", { name: "30 days" }));
+
+  const toggle = screen.getByTestId("detail-activity-toggle");
+  await userEvent.click(toggle);
+  await screen.findByTestId("activity-empty");
+  await userEvent.click(toggle);
+
+  await screen.findByTestId("coverage-empty");
+  expect(screen.getByRole("radio", { name: "30 days" })).toBeChecked();
+});
+
+test("the activity toggle takes the app's accent when it is the active view", async () => {
+  // Grey read as "disabled" rather than "on". Purple is what means
+  // "current" elsewhere in the app, and is the one strong colour in
+  // this row not already spoken for -- red is LIVE, green is a gain.
+  stubFetch();
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  const toggle = await screen.findByTestId("detail-activity-toggle");
+  // Mantine writes the resolved colour into --button-bg on the element's
+  // own style attribute; jsdom does not resolve it any further.
+  expect(toggle.getAttribute("style")).toContain("--button-bg: transparent");
+
+  await userEvent.click(toggle);
+  expect(toggle.getAttribute("style")).toContain("--button-bg: var(--mantine-color-twitch-filled)");
+});
+
+test("the standalone feed is given more height than the inline default", async () => {
+  // 260px is right for one block among several; as the whole view it
+  // left the feed scrolling in a letterbox with empty dialog beneath.
+  stubFetch({ events: [{ ts: Date.now(), type: "GAIN_FOR_CLAIM", message: "+50" }] });
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await userEvent.click(await screen.findByTestId("detail-activity-toggle"));
+  const entry = await screen.findByTestId("activity-entry");
+  // ScrollArea.Autosize puts the cap on its outermost wrapper. "100%"
+  // rather than a computed height: the flex body above already stops at
+  // the modal's max-height, so the feed fills what is left instead of
+  // guessing at the header's size and overflowing.
+  const capped = entry.closest("[style*='max-height']");
+  expect(capped).not.toBeNull();
+  expect(capped?.getAttribute("style")).toContain("max-height: 100%");
+});
+
+test("the activity view lets the feed own the scrolling, not the modal too", async () => {
+  // Two scrollbars appeared when the feed overflowed the modal's own
+  // `overflow-y: auto` content box. The body becomes a flex column that
+  // cannot exceed its max-height, so only the feed scrolls.
+  stubFetch({ events: [{ ts: Date.now(), type: "GAIN_FOR_CLAIM", message: "+50" }] });
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await userEvent.click(await screen.findByTestId("detail-activity-toggle"));
+  await screen.findByTestId("activity-entry");
+  const body = document.querySelector(".mantine-Modal-body");
+  const content = document.querySelector(".mantine-Modal-content");
+  expect(body?.className).toContain("bodyActivity");
+  expect(content?.className).toContain("contentActivity");
+  // The chain must be unbroken: the Stack between body and feed has to
+  // shrink too, or the feed keeps its intrinsic height and the overflow
+  // comes back as a second bar.
+  const stack = body?.querySelector(".mantine-Stack-root") as HTMLElement | null;
+  expect(stack?.getAttribute("style")).toContain("min-height: 0");
+  expect(stack?.getAttribute("style")).toContain("flex: 1");
 });
