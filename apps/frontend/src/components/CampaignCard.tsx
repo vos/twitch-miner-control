@@ -1,0 +1,106 @@
+import { Badge, Card, Collapse, Group, Stack, Text, UnstyledButton } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { IconChevronDown } from "@tabler/icons-react";
+import { formatSpan } from "../lib/formatSpan.js";
+import { DropRow, type ResolvedDrop } from "./DropRow.js";
+
+export type CampaignStatus = "collected" | "partial" | "untouched" | "unknown";
+
+export interface ResolvedCampaign {
+  id: string;
+  name: string;
+  game: { id: string; slug: string; displayName: string } | null;
+  startsAt: number | null;
+  endsAt: number | null;
+  allowChannelIds: string[];
+  drops: ResolvedDrop[];
+  status: CampaignStatus;
+}
+
+const STATUS: Record<CampaignStatus, { label: string; colour: string }> = {
+  collected: { label: "collected", colour: "teal" },
+  partial: { label: "in progress", colour: "orange" },
+  untouched: { label: "not started", colour: "gray" },
+  // Distinct from "not started" on purpose: we could not read the
+  // inventory, which is not the same as knowing nothing was earned.
+  unknown: { label: "progress unknown", colour: "gray" },
+};
+
+/**
+ * One drop campaign, with its drops behind a disclosure.
+ *
+ * Collapsed by default because the campaign list runs to a hundred or
+ * more and every one expanded is unreadable. The collapsed row carries
+ * what the list is actually scanned for -- the game, the deadline, and
+ * whether this campaign is already done.
+ */
+export function CampaignCard({ campaign }: { campaign: ResolvedCampaign }) {
+  const [open, { toggle }] = useDisclosure(false);
+  const status = STATUS[campaign.status];
+  const count = campaign.drops.length;
+
+  return (
+    <Card withBorder padding="sm" data-testid="campaign-card">
+      <UnstyledButton
+        onClick={toggle}
+        aria-expanded={open}
+        aria-label={`${campaign.name}, ${count} drops`}
+      >
+        <Group justify="space-between" wrap="nowrap" gap="xs">
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Text fw={600} size="sm" lineClamp={1}>{campaign.name}</Text>
+            <Group gap="xs">
+              {campaign.game !== null && (
+                <Text size="xs" c="dimmed" data-testid="campaign-game">
+                  {campaign.game.displayName}
+                </Text>
+              )}
+              <Text size="xs" c="dimmed" data-testid="campaign-drop-count">
+                {count === 1 ? "1 drop" : `${count} drops`}
+              </Text>
+              {campaign.endsAt !== null && (
+                <Text size="xs" c="dimmed" data-testid="campaign-ends">
+                  {/* Past tense once the window has shut: a finished
+                      campaign is not "ending in -2d". */}
+                  {campaign.endsAt <= Date.now()
+                    ? "ended"
+                    : `ends in ${formatSpan(campaign.endsAt - Date.now())}`}
+                </Text>
+              )}
+            </Group>
+          </Stack>
+          <Group gap="xs" wrap="nowrap">
+            <Badge
+              size="sm"
+              color={status.colour}
+              variant="light"
+              data-testid="campaign-status"
+            >
+              {status.label}
+            </Badge>
+            <IconChevronDown
+              size={16}
+              style={{ transform: open ? "rotate(180deg)" : undefined }}
+              aria-hidden
+            />
+          </Group>
+        </Group>
+      </UnstyledButton>
+
+      {/* Mounted only while open, rather than left in the DOM and hidden
+          by Collapse's CSS. With a hundred campaigns on the page that is
+          a hundred hidden drop lists a screen reader still walks, and
+          the drops of a collapsed campaign are not on the page in any
+          sense the user would recognise. */}
+      <Collapse in={open}>
+        {open && (
+          <Stack gap="sm" mt="sm">
+            {campaign.drops.map((drop) => (
+              <DropRow key={drop.id} drop={drop} />
+            ))}
+          </Stack>
+        )}
+      </Collapse>
+    </Card>
+  );
+}
