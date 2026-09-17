@@ -151,6 +151,35 @@ React frontend talks to that API and polls for point updates.
   (`miner_config.py`) and helpers for login and state.
 - `vendor/miner` — upstream, as a git submodule, imported directly.
 
+### Drops
+
+The **Drops** page lists every running Twitch drop campaign, what each
+drop awards, how long you have to watch for it, and how far along you
+already are.
+
+Those two halves come from two different places, and the page says so:
+
+- **The campaign list** comes from the
+  [Fenrisapps Twitch Drops Tracker](https://twitch-drops.fenrisapps.com/),
+  not from Twitch. Twitch's own campaign query sits behind Kasada bot
+  detection: it answers `IntegrityCheckFailed` for that one field, and
+  an integrity token does not satisfy it, so a script cannot read it.
+  Getting past that would mean driving a headless browser at an anti-bot
+  system, which breaks on their next change and risks the account.
+- **Your progress** comes from Twitch, using the session the miner
+  already holds. That query is not gated.
+
+Because the list is a third party's, it can differ from what
+`twitch.tv/drops/campaigns` shows you, and it will break if they change
+how their site serves data. The page reports that plainly rather than
+showing an empty list: "the campaign list could not be loaded" is a
+different statement from "no campaigns are running", and only one of
+them is a claim about Twitch.
+
+Campaigns are cached for 24 hours (they barely change once published)
+and your progress for ten minutes; both ages are shown, and **Refresh**
+re-reads the list on demand.
+
 ### Notifications
 
 The miner can push events to Telegram, Discord, Matrix, Pushover, Gotify or a
@@ -285,6 +314,9 @@ This is a control panel only — all the actual mining is upstream's work.
   vendored at `vendor/miner`, which this project imports directly.
 - [rdavydov/Twitch-Channel-Points-Miner-v2](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2),
   the now-archived project mpforce1's fork continues.
+- [Fenrisapps Twitch Drops Tracker](https://twitch-drops.fenrisapps.com/),
+  which the Drops page reads its campaign list from. They do the work of
+  tracking campaigns; this project only displays them.
 
 ## License
 

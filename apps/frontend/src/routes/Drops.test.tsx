@@ -167,3 +167,108 @@ test("a genuinely empty list still says none are running", async () => {
     expect(screen.getByText(/no drop campaigns are running/i)).toBeTruthy());
   expect(screen.queryByTestId("catalogue-unavailable")).toBeNull();
 });
+
+test("says the campaigns are not from Twitch, and links the source", async () => {
+  // Presenting someone else's data as Twitch's own would misrepresent
+  // both, and it explains why this list can differ from
+  // twitch.tv/drops/campaigns.
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("catalogue-source")).toBeTruthy());
+  const note = screen.getByTestId("catalogue-source");
+  expect(note.textContent).toMatch(/not twitch/i);
+  const link = note.querySelector("a");
+  expect(link?.getAttribute("href")).toBe("https://twitch-drops.fenrisapps.com/");
+  expect(link?.getAttribute("target")).toBe("_blank");
+  // Without noreferrer the opened page gets a handle on this one.
+  expect(link?.getAttribute("rel")).toMatch(/noopener/);
+  // The split matters: the campaigns are third-party, the progress is not.
+  expect(note.textContent).toMatch(/progress comes from twitch/i);
+});
+
+test("orders campaigns by the soonest deadline", async () => {
+  // What the page is opened to find out: what runs out next. The source
+  // returns its own order, which the user cannot see or reason about.
+  const at = (days: number) => Date.now() + days * 86_400_000;
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "late", name: "Late One", endsAt: at(9) },
+      { ...payload.campaigns[0], id: "soon", name: "Soon One", endsAt: at(1) },
+      { ...payload.campaigns[0], id: "mid", name: "Mid One", endsAt: at(4) },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Soon One")).toBeTruthy());
+  const names = screen.getAllByTestId("campaign-card")
+    .map((c) => c.querySelector("p, span, div")?.textContent);
+  const order = ["Soon One", "Mid One", "Late One"].map((n) =>
+    names.findIndex((t) => t?.includes(n)));
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+});
+
+test("a campaign with no deadline sorts last, not first", async () => {
+  // Infinity, not 0: an unknown deadline is not an urgent one.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "none", name: "No Deadline", endsAt: null },
+      { ...payload.campaigns[0], id: "soon", name: "Soon One",
+        endsAt: Date.now() + 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Soon One")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Soon One/);
+  expect(cards[1]?.textContent).toMatch(/No Deadline/);
+});
+
+test("campaigns ending together keep a stable order", async () => {
+  // Ties break by name, so a refresh does not reshuffle the list.
+  const same = Date.now() + 86_400_000;
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "b", name: "Bravo", endsAt: same },
+      { ...payload.campaigns[0], id: "a", name: "Alpha", endsAt: same },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Alpha/);
+});
+
+test("an ended campaign sinks to the bottom, not the top", async () => {
+  // Sorting purely by deadline puts expired campaigns in the most
+  // prominent row on the page -- the one thing that can no longer be
+  // acted on.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "over", name: "Over Already",
+        endsAt: Date.now() - 86_400_000 },
+      { ...payload.campaigns[0], id: "soon", name: "Soon One",
+        endsAt: Date.now() + 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Soon One")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Soon One/);
+  expect(cards[1]?.textContent).toMatch(/Over Already/);
+});
+
+test("an ended campaign is still listed, not hidden", async () => {
+  // The tracker still lists them, and a drop already earned is worth
+  // seeing.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "over", name: "Over Already",
+        endsAt: Date.now() - 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Over Already")).toBeTruthy());
+});
