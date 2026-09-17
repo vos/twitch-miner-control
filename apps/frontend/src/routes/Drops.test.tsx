@@ -13,11 +13,11 @@ const payload = {
   campaigns: [
     { id: "c1", name: "Alpha Campaign",
       game: { id: "g1", slug: "alpha-game", displayName: "Alpha Game" },
-      startsAt: 1, endsAt: Date.now() + 86_400_000, allowChannelIds: [],
+      startsAt: 1, endsAt: Date.now() + 86_400_000,
       drops: [aDrop], status: "untouched" },
     { id: "c2", name: "Beta Campaign",
       game: { id: "g2", slug: "beta-game", displayName: "Beta Game" },
-      startsAt: 1, endsAt: Date.now() + 86_400_000, allowChannelIds: [],
+      startsAt: 1, endsAt: Date.now() + 86_400_000,
       drops: [aDrop], status: "partial" },
   ],
   catalogueFetchedAt: Date.now() - 3_600_000,

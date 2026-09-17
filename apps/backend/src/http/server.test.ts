@@ -1261,7 +1261,6 @@ const aCampaign = {
   game: { id: "g1", slug: "a-game", displayName: "A Game" },
   startsAt: 1_000,
   endsAt: 9_000,
-  allowChannelIds: [],
   drops: [
     { id: "d1", name: "Crate", benefits: ["Crate"],
       requiredMinutes: 60, requiredSubs: 0 },

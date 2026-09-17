@@ -15,7 +15,6 @@ const campaign = (over: Partial<Campaign> = {}): Campaign => ({
   game: { id: "g1", slug: "a-game", displayName: "A Game" },
   startsAt: 1_000,
   endsAt: 9_000,
-  allowChannelIds: [],
   drops: [],
   ...over,
 });

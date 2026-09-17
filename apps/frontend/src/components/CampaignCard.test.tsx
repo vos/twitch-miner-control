@@ -10,7 +10,6 @@ const campaign = (over: Partial<ResolvedCampaign> = {}): ResolvedCampaign => ({
   game: { id: "g1", slug: "a-game", displayName: "A Game" },
   startsAt: 1_000,
   endsAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
-  allowChannelIds: [],
   status: "untouched",
   drops: [
     { id: "d1", name: "Crate", benefits: ["Crate"],

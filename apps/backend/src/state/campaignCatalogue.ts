@@ -46,8 +46,6 @@ export interface Campaign {
   game: CampaignGame | null;
   startsAt: number | null;
   endsAt: number | null;
-  /** Empty for an open campaign; non-empty restricts it to these channels. */
-  allowChannelIds: string[];
   drops: CampaignDrop[];
 }
 

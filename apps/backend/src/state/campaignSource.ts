@@ -156,10 +156,6 @@ export function extractCampaigns(body: string): Campaign[] {
         : null,
     startsAt: epochMs(c.startAt),
     endsAt: epochMs(c.endAt),
-    // The source carries no channel allowlist, unlike Twitch's own API.
-    // Empty means "not restricted as far as we know", and anything that
-    // needs a real allowlist cannot get one from here.
-    allowChannelIds: [],
     drops: (c.timeBasedDrops ?? []).map(toDrop),
   }));
 }

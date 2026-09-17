@@ -12,7 +12,6 @@ export interface ResolvedCampaign {
   game: { id: string; slug: string; displayName: string } | null;
   startsAt: number | null;
   endsAt: number | null;
-  allowChannelIds: string[];
   drops: ResolvedDrop[];
   status: CampaignStatus;
 }

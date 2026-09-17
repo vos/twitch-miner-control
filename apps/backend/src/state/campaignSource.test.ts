@@ -56,13 +56,6 @@ test("carries requiresSub through as the sub requirement", () => {
   expect(out?.drops[1]?.requiredSubs).toBe(1);
 });
 
-test("reports no allowlist, because the source does not carry one", () => {
-  // Twitch's own API has allowChannelIds; this source does not. Empty is
-  // the honest answer and means "not restricted, as far as we know".
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.allowChannelIds).toEqual([]);
-});
-
 test("survives a campaign with no game reported", () => {
   const out = extractCampaigns(
     payload(`[{"id":"c1","name":"Bare","startAt":"$D2026-01-01T00:00:00.000Z",
