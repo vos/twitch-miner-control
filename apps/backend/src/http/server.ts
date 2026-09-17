@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { ZodError } from "zod";
-import { type AppConfig, configSchema, usernameSchema } from "../config/schema.js";
+import {
+  type AppConfig, configSchema, subscriptionSchema, usernameSchema,
+} from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { UpdateChecker } from "../config/updateCheck.js";
 import { resolveVersion } from "../config/version.js";
@@ -14,6 +17,8 @@ import type { LoginStatus } from "../helpers/loginStatus.js";
 import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
+import type { SubscriptionEngine } from "../drops/engine.js";
+import type { PendingRestart } from "../drops/pendingRestart.js";
 import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
 import { gainWindow } from "../state/gains.js";
@@ -170,6 +175,18 @@ export interface ServerDeps {
   catalogue: CampaignCatalogue;
   /** Viewer drop progress, on the ten-minute clock. */
   inventory: InventoryCache;
+  /** Resolves subscriptions into channels; driven on its own timer. */
+  engine: Pick<SubscriptionEngine, "pass">;
+  /**
+   * The engine's cancellable restart, surfaced for the dashboard banner.
+   *
+   * The server attaches its own SSE hub to this, since the hub lives in
+   * here -- the caller constructs it without a broadcast and gets one
+   * wired up as a side effect of building the server.
+   */
+  pendingRestart: Pick<PendingRestart, "cancel" | "fireNow" | "state"> & {
+    setBroadcast?: (fn: (event: string, data: unknown) => void) => void;
+  };
   /**
    * Absolute path to the built frontend (`apps/frontend/dist`). When set,
    * the static build is mounted at `/*` and unmatched non-API paths fall
@@ -307,6 +324,10 @@ export function buildServer(deps: ServerDeps): AppServer {
       stale: snapshot.stale,
       error: snapshot.error,
       pendingChanges: staged !== null,
+      // Rides the status frame as well as its own SSE event, so a client
+      // connecting mid-countdown still sees the banner -- the event
+      // alone only reaches clients already attached when it fired.
+      pendingRestart: deps.pendingRestart.state(),
       version: APP_VERSION,
       // Null unless a strictly newer release exists, so the frontend
       // renders the notice iff this is set.
@@ -468,6 +489,120 @@ export function buildServer(deps: ServerDeps): AppServer {
     // Bypasses the TTL for a campaign that has just been announced. The
     // cache rate limits this itself, so a double click costs one sweep.
     instance.post("/api/campaigns/refresh", async () => campaignPayload(true));
+
+    /**
+     * The subscriptions, each with the channels it currently owns.
+     *
+     * `channels` is derived from the streamer list rather than stored on
+     * the subscription, so the two can never drift: what the engine
+     * wrote IS what this reports.
+     */
+    instance.get("/api/subscriptions", async () => {
+      const config = loadConfig(deps.configPath);
+      return {
+        subscriptions: [...config.subscriptions]
+          .sort((a, b) => a.rank - b.rank)
+          .map((sub) => ({
+            ...sub,
+            channels: config.streamers
+              .filter((s) => s.ownedBy === sub.id)
+              .map((s) => s.username),
+          })),
+      };
+    });
+
+    instance.post("/api/subscriptions", async (request, reply) => {
+      const config = loadConfig(deps.configPath);
+      const body = subscriptionSchema
+        .omit({ id: true, rank: true })
+        .safeParse(request.body);
+      if (!body.success) {
+        return reply.code(400).send({ error: "not a valid subscription" });
+      }
+      // One subscription per target: two would resolve the same channels
+      // and fight over ownership on every pass.
+      const clash = config.subscriptions.some(
+        (s) => s.kind === body.data.kind && s.targetId === body.data.targetId,
+      );
+      if (clash) {
+        return reply.code(409).send({ error: "already subscribed to that" });
+      }
+      const subscription = {
+        ...body.data,
+        id: randomUUID(),
+        // Appended last: a new subscription should not outrank the ones
+        // already there without the user saying so.
+        rank: config.subscriptions.length,
+      };
+      saveConfig(deps.configPath, {
+        ...config,
+        subscriptions: [...config.subscriptions, subscription],
+      });
+      return { subscription };
+    });
+
+    instance.post("/api/subscriptions/reorder", async (request, reply) => {
+      const config = loadConfig(deps.configPath);
+      const ids = (request.body as { ids?: unknown }).ids;
+      const known = new Set(config.subscriptions.map((s) => s.id));
+      // The full set, or ranks left out of the list keep stale values
+      // and the order becomes ambiguous.
+      const complete =
+        Array.isArray(ids)
+        && ids.length === known.size
+        && ids.every((id) => typeof id === "string" && known.has(id));
+      if (!complete) {
+        return reply.code(400).send({ error: "ids must list every subscription" });
+      }
+      const rankOf = new Map((ids as string[]).map((id, i) => [id, i]));
+      saveConfig(deps.configPath, {
+        ...config,
+        subscriptions: config.subscriptions.map((s) => ({
+          ...s, rank: rankOf.get(s.id) ?? s.rank,
+        })),
+      });
+      return { ok: true };
+    });
+
+    /**
+     * POST rather than DELETE: every other mutating route in this file
+     * is a POST, and the client has no delete helper.
+     */
+    instance.post("/api/subscriptions/:id/remove", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const config = loadConfig(deps.configPath);
+      if (!config.subscriptions.some((s) => s.id === id)) {
+        return reply.code(404).send({ error: "no such subscription" });
+      }
+      // Both in one write, so the config can never hold a streamer owned
+      // by a subscription that no longer exists.
+      saveConfig(deps.configPath, {
+        ...config,
+        subscriptions: config.subscriptions.filter((s) => s.id !== id),
+        streamers: config.streamers.filter((s) => s.ownedBy !== id),
+      });
+      return { ok: true };
+    });
+
+    /** Re-resolve now rather than waiting out the engine's timer. */
+    instance.post("/api/subscriptions/resolve", async (_request, reply) => {
+      try {
+        await deps.engine.pass();
+      } catch (cause) {
+        return reply.code(500).send({ error: messageOf(cause) });
+      }
+      return { ok: true };
+    });
+
+    instance.post("/api/restart/cancel", async () => {
+      deps.pendingRestart.cancel();
+      return { ok: true };
+    });
+
+    instance.post("/api/restart/now", async () => {
+      await deps.pendingRestart.fireNow();
+      return { ok: true };
+    });
 
     instance.get("/api/followers", async () => deps.helper.request("followers"));
 
@@ -655,6 +790,8 @@ export function buildServer(deps: ServerDeps): AppServer {
     deps.stateService.ring(event, doorbellMessage(body?.message));
     return reply.code(204).send();
   });
+
+  deps.pendingRestart.setBroadcast?.((event, data) => hub.broadcast(event, data));
 
   deps.stateService.on("change", (snapshot) => hub.broadcast("state", snapshot));
   // The activity feed used to poll /api/events every 5s, which re-sent the

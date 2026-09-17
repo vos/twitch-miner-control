@@ -16,7 +16,13 @@ export interface PendingState {
 
 export interface PendingRestartDeps {
   supervisor: { restart(): Promise<void> };
-  broadcast: (event: string, data: unknown) => void;
+  /**
+   * Optional at construction: the SSE hub lives inside the server, which
+   * is built after this, so the server attaches one via setBroadcast().
+   * Until then state changes simply go unannounced -- nobody is
+   * connected yet to hear them.
+   */
+  broadcast?: (event: string, data: unknown) => void;
   now?: () => number;
 }
 
@@ -34,7 +40,16 @@ export class PendingRestart {
   private dueAt: number | null = null;
   private reason: string | null = null;
 
-  constructor(private readonly deps: PendingRestartDeps) {}
+  private broadcast: ((event: string, data: unknown) => void) | undefined;
+
+  constructor(private readonly deps: PendingRestartDeps) {
+    this.broadcast = deps.broadcast;
+  }
+
+  /** Attaches the SSE hub once the server that owns it exists. */
+  setBroadcast(fn: (event: string, data: unknown) => void): void {
+    this.broadcast = fn;
+  }
 
   private clock(): number {
     return this.deps.now ? this.deps.now() : Date.now();
@@ -49,7 +64,7 @@ export class PendingRestart {
   }
 
   private announce(): void {
-    this.deps.broadcast("pending-restart", this.state());
+    this.broadcast?.("pending-restart", this.state());
   }
 
   /**

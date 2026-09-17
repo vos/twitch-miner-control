@@ -90,6 +90,11 @@ async function make(options: { statusTickMs?: number } = {}) {
     path: join(dir, "campaigns.json"),
   });
   const inventory = new InventoryCache({ client: client as never });
+  const engine = { pass: vi.fn(async () => {}) };
+  const pending = {
+    cancel: vi.fn(), fireNow: vi.fn(async () => {}),
+    state: () => ({ pending: false, dueAt: null, reason: null }),
+  };
   const app = buildServer({
     configPath,
     password: PASSWORD,
@@ -104,6 +109,8 @@ async function make(options: { statusTickMs?: number } = {}) {
     cookiesDir,
     catalogue,
     inventory,
+    engine: engine as never,
+    pendingRestart: pending as never,
     staticRoot: PUBLIC_ROOT,
     statusTickMs: options.statusTickMs,
   });
@@ -113,7 +120,7 @@ async function make(options: { statusTickMs?: number } = {}) {
   });
   return {
     app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
-    cookiesDir, helperResponses, setCampaigns, catalogue,
+    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending,
     cookie: login.cookies[0].value,
   };
 }
@@ -871,6 +878,13 @@ async function makeLive() {
       source: async () => [], path: join(dir, "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: helper as never }),
+    // These servers never exercise the subscription routes; the stubs
+    // are here only to satisfy the deps contract.
+    engine: { pass: vi.fn(async () => {}) } as never,
+    pendingRestart: {
+      cancel: vi.fn(), fireNow: vi.fn(async () => {}),
+      state: () => ({ pending: false, dueAt: null, reason: null }),
+    } as never,
   });
   await app.ready();
   const login = await app.inject({
@@ -1237,6 +1251,13 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
       path: join(mkdtempSync(join(tmpdir(), "srv-")), "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: ctx.client as never }),
+    // These servers never exercise the subscription routes; the stubs
+    // are here only to satisfy the deps contract.
+    engine: { pass: vi.fn(async () => {}) } as never,
+    pendingRestart: {
+      cancel: vi.fn(), fireNow: vi.fn(async () => {}),
+      state: () => ({ pending: false, dueAt: null, reason: null }),
+    } as never,
     cookiesDir: ctx.cookiesDir,
     staticRoot: PUBLIC_ROOT,
   });
@@ -1360,4 +1381,165 @@ test("GET /api/campaigns reports a genuinely empty list as available", async () 
   expect(body.campaigns).toEqual([]);
   expect(body.catalogueAvailable).toBe(true);
   expect(body.catalogueError).toBeNull();
+});
+
+// --- subscriptions ---
+
+const withSubs = (subscriptions: unknown[], streamers: unknown[] = []) => {
+  saveConfig(ctx.configPath, {
+    version: 1, username: "alex", followers: true, followersOrder: "ASC",
+    defaults: {}, miner: {},
+    streamers, subscriptions,
+  } as never);
+};
+
+const aSub = (over: object = {}) => ({
+  id: "s1", kind: "campaign", targetId: "c1", label: "Alpha",
+  poolSize: 3, rank: 0, ...over,
+});
+
+test("GET /api/subscriptions lists them with the channels they own", async () => {
+  withSubs([aSub()], [
+    { username: "alpha", enabled: true, settings: {} },
+    { username: "beta", enabled: true, settings: {}, ownedBy: "s1" },
+  ]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const [sub] = res.json().subscriptions;
+  expect(sub.id).toBe("s1");
+  // The channels are derived from ownership, not stored twice.
+  expect(sub.channels).toEqual(["beta"]);
+});
+
+test("POST /api/subscriptions assigns an id and the next rank", async () => {
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(200);
+  const sub = res.json().subscription;
+  expect(sub.id).toBeTruthy();
+  expect(sub.rank).toBe(0);
+  expect(sub.poolSize).toBe(3);
+});
+
+test("a second subscription ranks after the first", async () => {
+  withSubs([aSub({ rank: 0 })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c2", label: "Beta" },
+  });
+  expect(res.json().subscription.rank).toBe(1);
+});
+
+test("subscribing twice to the same target is rejected", async () => {
+  // Two subscriptions to one campaign would resolve the same channels
+  // and fight over ownership on every pass.
+  withSubs([aSub()]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(409);
+});
+
+test("POST /api/subscriptions rejects a malformed body", async () => {
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "streamer", targetId: "c1", label: "x" },
+  });
+  expect(res.statusCode).toBe(400);
+});
+
+test("removing a subscription also drops the streamers it owned", async () => {
+  withSubs([aSub()], [
+    { username: "alpha", enabled: true, settings: {} },
+    { username: "beta", enabled: true, settings: {}, ownedBy: "s1" },
+  ]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/remove", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const saved = loadConfig(ctx.configPath);
+  expect(saved.subscriptions).toEqual([]);
+  // Removed in the same write, so the two can never disagree.
+  expect(saved.streamers.map((s) => s.username)).toEqual(["alpha"]);
+});
+
+test("removing an unknown subscription is a 404", async () => {
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/nope/remove", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(404);
+});
+
+test("reorder rewrites ranks in the given order", async () => {
+  withSubs([aSub({ id: "s1", rank: 0 }), aSub({ id: "s2", targetId: "c2", rank: 1 })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/reorder", cookies: auth(),
+    payload: { ids: ["s2", "s1"] },
+  });
+  expect(res.statusCode).toBe(200);
+  const saved = loadConfig(ctx.configPath);
+  expect(saved.subscriptions.find((s) => s.id === "s2")?.rank).toBe(0);
+  expect(saved.subscriptions.find((s) => s.id === "s1")?.rank).toBe(1);
+});
+
+test("reorder rejects a list that is not the full set", async () => {
+  // A partial list would leave the missing ones with stale ranks.
+  withSubs([aSub({ id: "s1" }), aSub({ id: "s2", targetId: "c2", rank: 1 })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/reorder", cookies: auth(),
+    payload: { ids: ["s1"] },
+  });
+  expect(res.statusCode).toBe(400);
+});
+
+test("POST /api/subscriptions/resolve runs a pass immediately", async () => {
+  withSubs([aSub()]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/resolve", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
+});
+
+test("restart cancel and fire-now reach the pending restart", async () => {
+  const cancel = await ctx.app.inject({
+    method: "POST", url: "/api/restart/cancel", cookies: auth(),
+  });
+  expect(cancel.statusCode).toBe(200);
+  expect(ctx.pending.cancel).toHaveBeenCalledTimes(1);
+
+  const now = await ctx.app.inject({
+    method: "POST", url: "/api/restart/now", cookies: auth(),
+  });
+  expect(now.statusCode).toBe(200);
+  expect(ctx.pending.fireNow).toHaveBeenCalledTimes(1);
+});
+
+test("the subscription routes require a session", async () => {
+  for (const url of [
+    "/api/subscriptions", "/api/subscriptions/reorder",
+    "/api/subscriptions/resolve", "/api/restart/cancel",
+  ]) {
+    const res = await ctx.app.inject({ method: "POST", url });
+    expect(res.statusCode, url).toBe(401);
+  }
+});
+
+test("the status frame carries the pending restart, for a late joiner", async () => {
+  // The SSE event only reaches clients attached when it fired; a browser
+  // opened mid-countdown would otherwise show no banner at all.
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/status", cookies: auth(),
+  });
+  expect(res.json().pendingRestart).toEqual({
+    pending: false, dueAt: null, reason: null,
+  });
 });

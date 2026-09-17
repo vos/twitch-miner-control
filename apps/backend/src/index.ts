@@ -12,7 +12,7 @@ import { resolveStopGraceMs } from "./config/stopGrace.js";
 import { resolveEnvFlag } from "./config/envFlag.js";
 import { resolveMinerLogLevel } from "./config/logLevel.js";
 import { resolveRetentionDays } from "./config/retention.js";
-import { loadConfig } from "./config/store.js";
+import { loadConfig, saveConfig } from "./config/store.js";
 import { History } from "./db/history.js";
 import { openDb } from "./db/schema.js";
 import { Streamers } from "./db/streamers.js";
@@ -22,6 +22,9 @@ import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer, updateChecker, type AppServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { ProfileCache } from "./state/profiles.js";
+import { SubscriptionEngine } from "./drops/engine.js";
+import type { DirectoryChannel } from "./drops/resolution.js";
+import { PendingRestart } from "./drops/pendingRestart.js";
 import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
@@ -258,11 +261,30 @@ const catalogue = new CampaignCatalogue({
 });
 const inventoryCache = new InventoryCache({ client: helper });
 
+// The engine restarts the miner when a subscription resolves to
+// different channels, so the restart is deferred behind a cancellable
+// countdown rather than interrupting whoever is watching. buildServer
+// attaches its SSE hub to this, the hub being inside the server.
+const pendingRestart = new PendingRestart({ supervisor });
+
+const engine = new SubscriptionEngine({
+  loadConfig: () => loadConfig(configPath),
+  saveConfig,
+  configPath,
+  catalogue,
+  directory: (game) =>
+    helper.request<{ channels: DirectoryChannel[] }>("directory", {
+      game: game.name, slug: game.slug, limit: 30,
+    }).then((r) => r.channels),
+  pending: pendingRestart,
+});
+
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
+  engine, pendingRestart,
 });
 
 const loggedIn = await helper
@@ -275,6 +297,9 @@ server = app;
 // next poll on, a refresh with nobody watching writes history and skips
 // the display half.
 void stateService.start().finally(() => { booting = false; });
+// Started after the miner, so the first pass does not race the boot
+// restart. A pass with no subscriptions returns immediately.
+engine.start();
 if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
 
 // Children are not killed when this process exits, so a SIGTERM from a
@@ -287,6 +312,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     shuttingDown = true;
     void (async () => {
       stateService.stop();
+      engine.stop();
       // cancel() itself is synchronous (it only sends signals and arms its
       // own SIGKILL escalation timer), so awaiting it directly awaited
       // nothing -- process.exit(0) below could run before the SIGKILL
