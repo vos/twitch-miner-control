@@ -3,6 +3,9 @@ import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api/client.js";
 import { LiveStateProvider, useLiveState, useStreamEvent } from "./api/useLiveState.js";
+import {
+  RestartBanner, type PendingRestartState,
+} from "./components/RestartBanner.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
@@ -51,6 +54,8 @@ interface Status {
   stats: { cpu: number | null; rssBytes: number } | null;
   version?: string;
   latestVersion?: string | null;
+  /** Optional: a backend predating the drops engine sends no such field. */
+  pendingRestart?: PendingRestartState;
 }
 
 export function App() {
@@ -102,6 +107,9 @@ function Shell() {
   // to offer. The backend does the comparing -- see updateCheck.ts -- so
   // this is only ever a version to show or nothing at all.
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [pendingRestart, setPendingRestart] = useState<PendingRestartState>({
+    pending: false, dueAt: null, reason: null,
+  });
   const [opened, { toggle, close }] = useDisclosure(false);
   // The wide-screen counterpart of `opened`. AppShell keeps the two
   // collapse states apart -- the narrow one slides a drawer over the page,
@@ -139,7 +147,14 @@ function Shell() {
     // Stamped on arrival: the history uses this to tell a fresh
     // reading from a re-render carrying the same one.
     setStats(s.stats === null ? null : { ...s.stats, at: Date.now() });
+    // Carried on the status frame as well as its own event, so a tab
+    // opened mid-countdown shows the banner rather than nothing.
+    if (s.pendingRestart !== undefined) setPendingRestart(s.pendingRestart);
   };
+
+  // The engine pushes this the moment it proposes or cancels, rather
+  // than leaving the banner until the next status tick.
+  useStreamEvent<PendingRestartState>("pending-restart", setPendingRestart);
 
   // The server pushes a status whenever the miner or the Twitch session
   // changes, and on a tick for the process stats. Set once one has arrived,
@@ -223,6 +238,13 @@ function Shell() {
         />
       </AppShell.Navbar>
       <AppShell.Main>
+        {/* Above the screen, not inside one: the restart affects the
+            miner whatever the user happens to be looking at. */}
+        <RestartBanner
+          state={pendingRestart}
+          onCancel={() => { void api.post("/api/restart/cancel"); }}
+          onNow={() => { void api.post("/api/restart/now"); }}
+        />
         {SCREENS[screen].element({
           loginRequired: loginRequired && loginKnown,
           navigate,
