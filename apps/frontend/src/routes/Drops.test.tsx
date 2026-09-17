@@ -22,6 +22,8 @@ const payload = {
   ],
   catalogueFetchedAt: Date.now() - 3_600_000,
   catalogueStale: false,
+  catalogueAvailable: true,
+  catalogueError: null,
   progressFetchedAt: Date.now() - 60_000,
   progressAvailable: true,
 };
@@ -119,4 +121,49 @@ test("an account with no campaigns says so", async () => {
   body = { ...payload, campaigns: [] };
   renderApp(<Drops />);
   await waitFor(() => expect(screen.getByTestId("campaigns-empty")).toBeTruthy());
+});
+
+test("an unreadable campaign list says so instead of claiming none exist", async () => {
+  // The bug this exists to prevent: the page reported "No drop campaigns
+  // are running" when the source had actually failed -- a confident claim
+  // about Twitch made from an empty variable.
+  body = {
+    ...payload, campaigns: [], catalogueAvailable: false,
+    catalogueError: "source format changed",
+  };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByTestId("catalogue-unavailable")).toBeTruthy());
+  expect(screen.queryByText(/no drop campaigns are running/i)).toBeNull();
+});
+
+test("the unavailable banner shows why, for anyone who can act on it", async () => {
+  body = {
+    ...payload, campaigns: [], catalogueAvailable: false,
+    catalogueError: "HTTP 503",
+  };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByTestId("catalogue-unavailable").textContent)
+      .toMatch(/503/));
+});
+
+test("unavailable outranks stale rather than showing both", async () => {
+  body = {
+    ...payload, campaigns: [], catalogueAvailable: false,
+    catalogueStale: true, catalogueError: "down",
+  };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByTestId("catalogue-unavailable")).toBeTruthy());
+  expect(screen.queryByTestId("catalogue-stale")).toBeNull();
+});
+
+test("a genuinely empty list still says none are running", async () => {
+  // Available and empty is a real answer, and must keep reading as one.
+  body = { ...payload, campaigns: [] };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByText(/no drop campaigns are running/i)).toBeTruthy());
+  expect(screen.queryByTestId("catalogue-unavailable")).toBeNull();
 });

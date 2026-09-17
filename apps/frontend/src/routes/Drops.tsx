@@ -13,6 +13,10 @@ export interface CampaignsPayload {
   catalogueFetchedAt: number;
   /** The list could not be refreshed; what is shown is older than its TTL. */
   catalogueStale: boolean;
+  /** False when the campaign list could not be read at all. */
+  catalogueAvailable: boolean;
+  /** Why the last fetch failed, when it did. */
+  catalogueError: string | null;
   /** Epoch ms the progress was fetched. */
   progressFetchedAt: number;
   /** False when the inventory could not be read at all. */
@@ -116,12 +120,29 @@ export function Drops() {
         </Text>
       </Group>
 
-      {data.catalogueStale && (
+      {/* Unavailable outranks stale: when we have never read the list,
+          saying it "may be missing campaigns" understates it -- there is
+          nothing here at all, and the empty state below must not claim
+          otherwise. */}
+      {!data.catalogueAvailable ? (
+        <Alert
+          color="red"
+          icon={<IconAlertTriangle />}
+          data-testid="catalogue-unavailable"
+        >
+          The campaign list could not be loaded, so this page cannot say
+          what is running. This usually means the public drops tracker it
+          reads changed or is down.
+          {data.catalogueError !== null && (
+            <Text size="xs" c="dimmed" mt={4}>{data.catalogueError}</Text>
+          )}
+        </Alert>
+      ) : data.catalogueStale ? (
         <Alert color="yellow" data-testid="catalogue-stale">
           This list could not be refreshed, so it may be missing campaigns
           announced since {age(data.catalogueFetchedAt)}.
         </Alert>
-      )}
+      ) : null}
 
       {!data.progressAvailable && (
         <Alert color="yellow" data-testid="progress-unavailable">
@@ -130,11 +151,17 @@ export function Drops() {
         </Alert>
       )}
 
+      {/* Only claims "none are running" when we actually know. With the
+          list unavailable the banner above has already said why, and
+          repeating a factual-sounding empty state under it would
+          contradict it. */}
       {shown.length === 0 ? (
         <Text c="dimmed" data-testid="campaigns-empty">
-          {data.campaigns.length === 0
-            ? "No drop campaigns are running."
-            : "No campaigns match that filter."}
+          {data.campaigns.length > 0
+            ? "No campaigns match that filter."
+            : data.catalogueAvailable
+              ? "No drop campaigns are running."
+              : "No campaign list to show."}
         </Text>
       ) : (
         <Stack gap="xs">

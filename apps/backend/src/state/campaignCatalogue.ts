@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { fetchCampaigns } from "./campaignSource.js";
 
 /**
  * How long the campaign catalogue is trusted.
@@ -56,10 +57,28 @@ export interface Catalogue {
   fetchedAt: number;
   /** True when the data on hand could not be refreshed. */
   stale: boolean;
+  /**
+   * Whether we have ever successfully read the campaign list.
+   *
+   * False means the list below is empty because we could not fetch it,
+   * not because no campaigns are running -- a distinction the UI has to
+   * make, or it reports a failed source as "no drop campaigns", which is
+   * a confident claim about Twitch that we are in no position to make.
+   */
+  available: boolean;
+  /** Why the last fetch failed, for the page to show. Null when fine. */
+  error: string | null;
 }
 
 export interface CatalogueDeps {
-  client: { request<T>(op: string, params?: object): Promise<T> };
+  /**
+   * Fetches every tracked campaign, throwing on any failure.
+   *
+   * Defaults to the public tracker in campaignSource.ts. Injectable so
+   * tests drive it without a network, and so the source can be swapped
+   * without touching the caching around it.
+   */
+  source?: () => Promise<Campaign[]>;
   /** Where the catalogue is persisted across restarts. */
   path: string;
   now?: () => number;
@@ -88,9 +107,12 @@ export class CampaignCatalogue {
   private fetchedAt = 0;
   private lastRefreshAt = 0;
   private stale = false;
+  private error: string | null = null;
   private inflight: Promise<void> | null = null;
+  private readonly source: () => Promise<Campaign[]>;
 
   constructor(private readonly deps: CatalogueDeps) {
+    this.source = deps.source ?? (() => fetchCampaigns());
     this.load();
   }
 
@@ -130,6 +152,10 @@ export class CampaignCatalogue {
       campaigns: this.campaigns ?? [],
       fetchedAt: this.fetchedAt,
       stale: this.stale,
+      // Campaigns loaded from disk count: they were fetched successfully
+      // once, and their age is reported beside them.
+      available: this.campaigns !== null && this.fetchedAt > 0,
+      error: this.error,
     };
   }
 
@@ -139,19 +165,21 @@ export class CampaignCatalogue {
     if (this.inflight !== null) return this.inflight;
     this.inflight = (async () => {
       try {
-        const res = await this.deps.client.request<{ campaigns: Campaign[] }>(
-          "campaigns",
-        );
-        this.campaigns = res.campaigns ?? [];
+        this.campaigns = await this.source();
         this.fetchedAt = this.now();
         this.stale = false;
+        this.error = null;
         this.persist();
-      } catch {
+      } catch (cause: unknown) {
         // Keep whatever we have and mark it old. fetchedAt is left alone
         // so the age the page shows is the age of the data, not of the
         // attempt that failed to replace it.
+        //
+        // The source throws rather than returning [] precisely so this
+        // lands here: an empty list must never be mistaken for the fact
+        // that no campaigns are running.
         this.stale = true;
-        if (this.campaigns === null) this.campaigns = [];
+        this.error = cause instanceof Error ? cause.message : String(cause);
       } finally {
         this.inflight = null;
       }

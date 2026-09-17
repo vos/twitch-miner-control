@@ -239,52 +239,6 @@ def _next_drop(campaign_ids: list, campaigns: dict) -> dict | None:
     }
 
 
-def _epoch_ms(value) -> int | None:
-    """Epoch ms, or None when absent.
-
-    datetime is not JSON serialisable, so a raw one crossing the NDJSON
-    boundary raises inside serve()'s json.dumps -- the same trap
-    _next_drop documents for endsAt.
-    """
-    return int(value.timestamp() * 1000) if value is not None else None
-
-
-def _campaign_game(game) -> dict | None:
-    """The game a campaign's drops are earned in, or None.
-
-    None rather than a dict of Nones: "we do not know the game" and "the
-    game has no name" are different claims, and the UI filters on this.
-    """
-    if game is None:
-        return None
-    return {
-        "id": getattr(game, "id", None),
-        "slug": getattr(game, "slug", None),
-        "displayName": getattr(game, "display_name", None),
-    }
-
-
-def _campaign_drop(drop) -> dict:
-    """One drop as the details query describes it -- definition only.
-
-    No progress here: that lives in the inventory, on its own clock. This
-    is the half that barely changes once a campaign is published.
-    """
-    return {
-        "id": getattr(drop, "id", None),
-        "name": getattr(drop, "name", None) or "Drop",
-        # Deduped, order preserved. Twitch lists one edge per benefit
-        # instance, so a drop granting two of an item repeats the name
-        # and "Crate, Crate" reads as a bug -- same treatment _next_drop
-        # gives the inventory's copy of this field.
-        "benefits": list(dict.fromkeys(getattr(drop, "benefits", None) or [])),
-        "requiredMinutes": getattr(drop, "required_minutes_watched", 0) or 0,
-        # Non-zero means watching can never finish it: Drop.update sets
-        # is_claimable False whenever subs_required > 0.
-        "requiredSubs": getattr(drop, "required_subs", 0) or 0,
-    }
-
-
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -321,10 +275,6 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"drops": self._drops(req["streamers"])}}
-            if op == "campaigns":
-                self._ensure_token()
-                return {"id": req_id, "ok": True,
-                        "data": {"campaigns": self._campaigns()}}
             if op == "inventory":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
@@ -486,55 +436,6 @@ class Handler:
                 out[login] = None
         if auth_error is not None:
             raise auth_error
-        return out
-
-    def _campaigns(self) -> list:
-        """Every ACTIVE drop campaign, with its drops.
-
-        Two GQL calls. The dashboard is the query backing
-        twitch.tv/drops/campaigns and returns *every* campaign, not only
-        ones for channels we follow -- ids and status only. Details then
-        fill in the rest, batched in chunks of 20 by upstream.
-
-        Deliberately does NOT call get_available_drops: that is keyed by
-        channel and answers "what is this streamer running", a roster
-        question. This op answers "what campaigns exist", which the
-        dashboard answers outright and for one call rather than N.
-
-        Filtering to ACTIVE before asking for details is what keeps this
-        affordable: there can be 100+ campaigns and details are the
-        expensive half.
-        """
-        dashboard = self.session.gql.get_viewer_drops_dashboard()
-        ids = [
-            getattr(c, "id", None)
-            for c in (getattr(dashboard, "campaigns", None) or [])
-            if getattr(c, "status", None) == "ACTIVE"
-        ]
-        ids = [i for i in ids if i is not None]
-        if not ids:
-            return []
-        out = []
-        for response in self.session.gql.get_drop_campaign_details(ids):
-            campaign = getattr(response, "campaign", None)
-            if campaign is None:
-                continue
-            out.append({
-                "id": getattr(campaign, "id", None),
-                "name": getattr(campaign, "name", None) or "Campaign",
-                "game": _campaign_game(getattr(campaign, "game", None)),
-                "startsAt": _epoch_ms(getattr(campaign, "start_at", None)),
-                "endsAt": _epoch_ms(getattr(campaign, "end_at", None)),
-                # Empty means open to any channel streaming the game;
-                # non-empty restricts the campaign to these channels.
-                "allowChannelIds": list(
-                    getattr(campaign, "allow_channel_ids", None) or []
-                ),
-                "drops": [
-                    _campaign_drop(d)
-                    for d in (getattr(campaign, "time_based_drops", None) or [])
-                ],
-            })
         return out
 
     def _inventory(self) -> dict:

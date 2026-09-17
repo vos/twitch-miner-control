@@ -26,13 +26,15 @@ function make(responses: unknown[], path?: string) {
   clock = 1_000_000;
   const file = path ?? join(mkdtempSync(join(tmpdir(), "cat-")), "c.json");
   const queue = [...responses];
-  const request = vi.fn(async () => {
+  // The source throws on failure rather than returning [] -- an empty
+  // list must never be mistaken for "no campaigns are running".
+  const request = vi.fn(async (): Promise<Campaign[]> => {
     const next = queue.shift();
     if (next instanceof Error) throw next;
-    return next ?? { campaigns: [] };
+    return (next ?? []) as Campaign[];
   });
   const cache = new CampaignCatalogue({
-    client: { request } as never,
+    source: request,
     path: file,
     now: () => clock,
   });
@@ -40,7 +42,7 @@ function make(responses: unknown[], path?: string) {
 }
 
 test("fetches once and serves the cached list within the TTL", async () => {
-  const { cache, request } = make([{ campaigns: [campaign()] }]);
+  const { cache, request } = make([[campaign()]]);
   const first = await cache.get();
   clock += CATALOGUE_TTL_MS - 1;
   const second = await cache.get();
@@ -51,8 +53,8 @@ test("fetches once and serves the cached list within the TTL", async () => {
 
 test("refetches once the TTL has elapsed", async () => {
   const { cache, request } = make([
-    { campaigns: [campaign()] },
-    { campaigns: [campaign({ id: "c2" })] },
+    [campaign()],
+    [campaign({ id: "c2" })],
   ]);
   await cache.get();
   clock += CATALOGUE_TTL_MS + 1;
@@ -65,7 +67,7 @@ test("serves the stale cache when a refetch fails, flagged stale", async () => {
   // A campaign list from yesterday is overwhelmingly still correct --
   // emptying the page would be a worse lie than showing its age.
   const { cache } = make([
-    { campaigns: [campaign()] },
+    [campaign()],
     new Error("gql exploded"),
   ]);
   await cache.get();
@@ -77,32 +79,63 @@ test("serves the stale cache when a refetch fails, flagged stale", async () => {
   expect(after.fetchedAt).toBe(1_000_000);
 });
 
-test("a first fetch that fails yields an empty, stale catalogue", async () => {
-  const { cache } = make([new Error("gql exploded")]);
+test("a first fetch that fails reports unavailable, not an empty list", async () => {
+  // The whole point of the honesty fix: an empty catalogue we never
+  // managed to load must not render as "no drop campaigns are running".
+  const { cache } = make([new Error("source exploded")]);
   const out = await cache.get();
   expect(out.campaigns).toEqual([]);
   expect(out.stale).toBe(true);
+  expect(out.available).toBe(false);
+  expect(out.error).toMatch(/source exploded/);
+});
+
+test("a successful fetch is available with no error", async () => {
+  const { cache } = make([[campaign()]]);
+  const out = await cache.get();
+  expect(out.available).toBe(true);
+  expect(out.error).toBeNull();
+});
+
+test("a genuinely empty list is available, unlike a failure", async () => {
+  // No campaigns running is a real answer; failing to ask is not.
+  const { cache } = make([[]]);
+  const out = await cache.get();
+  expect(out.campaigns).toEqual([]);
+  expect(out.available).toBe(true);
+  expect(out.error).toBeNull();
+});
+
+test("data from disk stays available when a later refetch fails", async () => {
+  const { cache } = make([[campaign()], new Error("source exploded")]);
+  await cache.get();
+  clock += CATALOGUE_TTL_MS + 1;
+  const out = await cache.get();
+  expect(out.available).toBe(true);
+  expect(out.stale).toBe(true);
+  expect(out.error).toMatch(/source exploded/);
 });
 
 test("a later success clears the stale flag", async () => {
   const { cache } = make([
     new Error("gql exploded"),
-    { campaigns: [campaign()] },
+    [campaign()],
   ]);
   await cache.get();
   clock += CATALOGUE_TTL_MS + 1;
   const out = await cache.get();
   expect(out.stale).toBe(false);
+  expect(out.error).toBeNull();
   expect(out.campaigns).toEqual([campaign()]);
 });
 
 test("survives a restart by reloading from disk", async () => {
   // Campaign metadata stays true across a restart, unlike progress --
   // which is why this one is persisted and inventory is not.
-  const { cache, path } = make([{ campaigns: [campaign()] }]);
+  const { cache, path } = make([[campaign()]]);
   await cache.get();
   const revived = new CampaignCatalogue({
-    client: { request: vi.fn(async () => ({ campaigns: [] })) } as never,
+    source: vi.fn(async () => []),
     path,
     now: () => clock,
   });
@@ -111,12 +144,12 @@ test("survives a restart by reloading from disk", async () => {
 });
 
 test("a reloaded catalogue still expires on its original age", async () => {
-  const { cache, path } = make([{ campaigns: [campaign()] }]);
+  const { cache, path } = make([[campaign()]]);
   await cache.get();
   clock += CATALOGUE_TTL_MS + 1;
-  const request = vi.fn(async () => ({ campaigns: [campaign({ id: "c2" })] }));
+  const request = vi.fn(async () => [campaign({ id: "c2" })]);
   const revived = new CampaignCatalogue({
-    client: { request } as never,
+    source: request,
     path,
     now: () => clock,
   });
@@ -126,8 +159,8 @@ test("a reloaded catalogue still expires on its original age", async () => {
 
 test("refresh bypasses the TTL", async () => {
   const { cache, request } = make([
-    { campaigns: [campaign()] },
-    { campaigns: [campaign({ id: "c2" })] },
+    [campaign()],
+    [campaign({ id: "c2" })],
   ]);
   await cache.get();
   clock += REFRESH_MIN_INTERVAL_MS + 1;
@@ -140,8 +173,8 @@ test("refresh is rate limited so a double click costs one sweep", async () => {
   // There can be 100+ campaigns behind one refresh; two in a row would
   // be two full detail sweeps against the account.
   const { cache, request } = make([
-    { campaigns: [campaign()] },
-    { campaigns: [campaign({ id: "c2" })] },
+    [campaign()],
+    [campaign({ id: "c2" })],
   ]);
   await cache.refresh();
   const second = await cache.refresh();
@@ -151,8 +184,8 @@ test("refresh is rate limited so a double click costs one sweep", async () => {
 
 test("refresh works again once the interval has passed", async () => {
   const { cache, request } = make([
-    { campaigns: [campaign()] },
-    { campaigns: [campaign({ id: "c2" })] },
+    [campaign()],
+    [campaign({ id: "c2" })],
   ]);
   await cache.refresh();
   clock += REFRESH_MIN_INTERVAL_MS + 1;
@@ -162,7 +195,7 @@ test("refresh works again once the interval has passed", async () => {
 
 test("concurrent gets collapse onto a single request", async () => {
   // Two page loads must not each trigger a detail sweep.
-  const { cache, request } = make([{ campaigns: [campaign()] }]);
+  const { cache, request } = make([[campaign()]]);
   const [a, b] = await Promise.all([cache.get(), cache.get()]);
   expect(request).toHaveBeenCalledTimes(1);
   expect(a.campaigns).toEqual(b.campaigns);
@@ -172,7 +205,7 @@ test("a corrupt cache file is ignored rather than fatal", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cat-"));
   const path = join(dir, "c.json");
   writeFileSync(path, "{ not json");
-  const { cache } = make([{ campaigns: [campaign()] }], path);
+  const { cache } = make([[campaign()]], path);
   const out = await cache.get();
   expect(out.campaigns).toEqual([campaign()]);
 });

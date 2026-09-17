@@ -453,6 +453,11 @@ export function buildServer(deps: ServerDeps): AppServer {
         campaigns: cat.campaigns.map((c) => resolveCampaign(c, inv)),
         catalogueFetchedAt: cat.fetchedAt,
         catalogueStale: cat.stale,
+        // Distinguishes "no campaigns are running" from "we could not
+        // read the list at all" -- without this the page reports a dead
+        // source as a fact about Twitch.
+        catalogueAvailable: cat.available,
+        catalogueError: cat.error,
         progressFetchedAt: inv.fetchedAt,
         progressAvailable: inv.available,
       };

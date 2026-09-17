@@ -10,7 +10,7 @@ import { openDb } from "../db/schema.js";
 import { Streamers } from "../db/streamers.js";
 import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
-import { CampaignCatalogue } from "../state/campaignCatalogue.js";
+import { CampaignCatalogue, type Campaign } from "../state/campaignCatalogue.js";
 import { InventoryCache } from "../state/inventory.js";
 import { StateService } from "../state/service.js";
 import { buildServer } from "./server.js";
@@ -57,9 +57,12 @@ async function make(options: { statusTickMs?: number } = {}) {
   // client, and a blanket `{ streamers: [] }` would hand them the wrong
   // shape. `helperResponses` lets a test override one op.
   const helperResponses: Record<string, unknown> = {
-    campaigns: { campaigns: [] },
     inventory: { inventory: {} },
   };
+  // What the campaign source yields; a test may swap it, or make it
+  // throw to exercise the unavailable path.
+  let campaignSource: () => Campaign[] = () => [];
+  const setCampaigns = (next: () => Campaign[]) => { campaignSource = next; };
   const client = {
     request: vi.fn(async (op: string) => {
       const canned = helperResponses[op];
@@ -79,8 +82,11 @@ async function make(options: { statusTickMs?: number } = {}) {
     current: null, start: vi.fn(), cancel: vi.fn(),
   });
   const loginStatus = new LoginStatus();
+  // The catalogue no longer goes through the helper: campaigns come from
+  // a public tracker over plain HTTPS, while progress still comes from
+  // Twitch through the helper below.
   const catalogue = new CampaignCatalogue({
-    client: client as never,
+    source: async () => campaignSource(),
     path: join(dir, "campaigns.json"),
   });
   const inventory = new InventoryCache({ client: client as never });
@@ -107,7 +113,7 @@ async function make(options: { statusTickMs?: number } = {}) {
   });
   return {
     app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
-    cookiesDir, helperResponses,
+    cookiesDir, helperResponses, setCampaigns, catalogue,
     cookie: login.cookies[0].value,
   };
 }
@@ -862,7 +868,7 @@ async function makeLive() {
     // This server never exercises the campaign routes; the caches are
     // here only to satisfy the deps contract.
     catalogue: new CampaignCatalogue({
-      client: helper as never, path: join(dir, "campaigns.json"),
+      source: async () => [], path: join(dir, "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: helper as never }),
   });
@@ -1227,7 +1233,7 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
     loginRunner: ctx.loginRunner as never,
     loginStatus: ctx.loginStatus,
     catalogue: new CampaignCatalogue({
-      client: ctx.client as never,
+      source: async () => [],
       path: join(mkdtempSync(join(tmpdir(), "srv-")), "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: ctx.client as never }),
@@ -1263,7 +1269,7 @@ const aCampaign = {
 };
 
 test("GET /api/campaigns joins the catalogue with viewer progress", async () => {
-  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  ctx.setCampaigns(() => [aCampaign]);
   ctx.helperResponses["inventory"] = {
     inventory: { c1: { d1: { minutes: 30, claimed: false, instanceId: null } } },
   };
@@ -1280,7 +1286,7 @@ test("GET /api/campaigns joins the catalogue with viewer progress", async () => 
 test("GET /api/campaigns reports the two cache ages separately", async () => {
   // They are on clocks a day apart, so one merged "updated N ago" would
   // describe neither.
-  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  ctx.setCampaigns(() => [aCampaign]);
   const res = await ctx.app.inject({
     method: "GET", url: "/api/campaigns", cookies: auth(),
   });
@@ -1293,7 +1299,7 @@ test("GET /api/campaigns reports the two cache ages separately", async () => {
 
 test("GET /api/campaigns reports progress unavailable when the fetch fails", async () => {
   // The campaigns must still render -- only the progress is unknown.
-  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  ctx.setCampaigns(() => [aCampaign]);
   ctx.helperResponses["inventory"] = new Error("gql exploded");
   const res = await ctx.app.inject({
     method: "GET", url: "/api/campaigns", cookies: auth(),
@@ -1306,20 +1312,16 @@ test("GET /api/campaigns reports progress unavailable when the fetch fails", asy
 });
 
 test("POST /api/campaigns/refresh refetches past the TTL", async () => {
-  ctx.helperResponses["campaigns"] = { campaigns: [] };
+  let calls = 0;
+  ctx.setCampaigns(() => { calls += 1; return []; });
   await ctx.app.inject({ method: "GET", url: "/api/campaigns", cookies: auth() });
-  const before = ctx.client.request.mock.calls.filter(
-    (c) => c[0] === "campaigns",
-  ).length;
-  ctx.helperResponses["campaigns"] = { campaigns: [aCampaign] };
+  const before = calls;
+  ctx.setCampaigns(() => { calls += 1; return [aCampaign]; });
   const res = await ctx.app.inject({
     method: "POST", url: "/api/campaigns/refresh", cookies: auth(),
   });
   expect(res.statusCode).toBe(200);
-  const after = ctx.client.request.mock.calls.filter(
-    (c) => c[0] === "campaigns",
-  ).length;
-  expect(after).toBeGreaterThan(before);
+  expect(calls).toBeGreaterThan(before);
   expect(res.json().campaigns[0].id).toBe("c1");
 });
 
@@ -1333,4 +1335,30 @@ test("POST /api/campaigns/refresh requires a session", async () => {
     method: "POST", url: "/api/campaigns/refresh",
   });
   expect(res.statusCode).toBe(401);
+});
+
+test("GET /api/campaigns reports a dead source as unavailable, not as none", async () => {
+  // The bug this exists to prevent: a failed campaign fetch rendering as
+  // "No drop campaigns are running", which is a claim about Twitch we
+  // are in no position to make.
+  ctx.setCampaigns(() => { throw new Error("source format changed"); });
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const body = res.json();
+  expect(body.campaigns).toEqual([]);
+  expect(body.catalogueAvailable).toBe(false);
+  expect(body.catalogueError).toMatch(/source format changed/);
+});
+
+test("GET /api/campaigns reports a genuinely empty list as available", async () => {
+  ctx.setCampaigns(() => []);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns", cookies: auth(),
+  });
+  const body = res.json();
+  expect(body.campaigns).toEqual([]);
+  expect(body.catalogueAvailable).toBe(true);
+  expect(body.catalogueError).toBeNull();
 });

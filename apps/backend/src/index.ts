@@ -245,11 +245,15 @@ const loginStatus = new LoginStatus();
 const secureCookie = resolveEnvFlag(process.env.SECURE_COOKIE);
 const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 
-// The campaign catalogue outlives a restart on purpose -- campaign
-// metadata stays true across one -- so it is persisted beside the other
-// app data. Progress is not, and lives only in memory.
+// Two sources, deliberately split. The campaign list comes from a public
+// tracker over plain HTTPS (see campaignSource.ts: Twitch's own dashboard
+// query is behind Kasada bot detection and cannot be reached from a
+// script), while progress still comes from Twitch through the helper --
+// the Inventory query is not gated and uses the session we already hold.
+//
+// The catalogue outlives a restart on purpose, since campaign metadata
+// stays true across one; progress does not, and lives only in memory.
 const catalogue = new CampaignCatalogue({
-  client: helper,
   path: join(dataDir, "campaigns.json"),
 });
 const inventoryCache = new InventoryCache({ client: helper });
