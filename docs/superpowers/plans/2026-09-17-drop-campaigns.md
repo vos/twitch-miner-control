@@ -1588,6 +1588,40 @@ git commit -m "feat(ui): add a Drops page listing campaigns with progress"
 
 # PHASE 2 — The Subscription Engine
 
+> **Deviations, recorded 2026-09-17 after implementing Tasks 9-13.**
+> The plan was written before the campaign source moved off Twitch, and
+> three of its assumptions no longer hold.
+>
+> **`allowChannelIds` is gone.** Twitch's campaign API carries a channel
+> allowlist; the public tracker the catalogue now reads does not. Task
+> 12's two-path resolution (allowlist, else directory) collapses to one,
+> and the directory is the single point of failure rather than a
+> fallback. Removed from the codebase in its own commit before Task 9.
+>
+> **The directory query is confirmed reachable**, so Task 12's framing of
+> it as "the design's load-bearing risk" overstates it: `DirectoryPage_Game`
+> answers normally and `systemFilters: ["DROPS_ENABLED"]` makes Twitch do
+> the drops filtering server-side. The hash is still ours to maintain and
+> will rotate eventually, which is what `degraded` exists for. Matching
+> the stream's tags instead is NOT viable -- the drops tag is localised
+> per channel ("DropsAktiviert", "DropyZapnute").
+>
+> **Game subscriptions resolve without a campaign.** The plan treated
+> every subscription as campaign-backed; a game subscription is not tied
+> to one campaign's lifetime, so it neither needs a catalogue entry nor
+> is ever ended by one going missing.
+>
+> Also: `PendingRestart`'s public method is `fireNow()`, not `now()`, so
+> it cannot collide with the private clock helper every cache here calls
+> `now()`. And Task 9's fixtures in this plan omit `enabled`/`settings`,
+> which the real streamer schema requires and marks `.strict()`.
+>
+> **Tasks 14-15 are not implemented.** The engine is complete and tested
+> but nothing constructs it: there are no subscription routes, no UI, and
+> `index.ts` does not build a `SubscriptionEngine`. It is unreachable
+> code until those land.
+
+
 ### Task 9: Config schema for subscriptions
 
 **Files:**
