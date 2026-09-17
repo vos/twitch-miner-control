@@ -172,6 +172,39 @@ export function minerFromPython(raw: Record<string, unknown>) {
   return renameKeys(raw, back, nestedBack, (k) => back[k] ?? k);
 }
 
+/**
+ * One standing instruction to collect a campaign's drops.
+ *
+ * Stores intent, never channels. The channels it currently resolves to
+ * live in `streamers`, marked with `ownedBy`, and are rewritten whenever
+ * resolution produces a different set -- so a subscription survives its
+ * channels going offline, ending their streams, or being replaced.
+ */
+export const subscriptionSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["campaign", "game"]),
+  /** A campaign id, or a game id, per `kind`. */
+  targetId: z.string().min(1),
+  /**
+   * Display name, cached here so the subscriptions list reads correctly
+   * before the campaign catalogue has loaded -- and still reads
+   * correctly once a campaign ends and leaves the catalogue entirely.
+   */
+  label: z.string().min(1),
+  /**
+   * How many channels to keep in the config for this subscription.
+   *
+   * Three by default: enough that one channel ending its stream is
+   * absorbed by the miner's own selector without a restart, few enough
+   * that several subscriptions do not crowd out the roster.
+   */
+  poolSize: z.number().int().min(1).max(10).default(3),
+  /** Lower ranks fill the miner's watch slots first. */
+  rank: z.number().int().min(0),
+}).strict();
+
+export type Subscription = z.infer<typeof subscriptionSchema>;
+
 export const configSchema = z
   .object({
     version: z.literal(1),
@@ -186,11 +219,26 @@ export const configSchema = z
           username: usernameSchema,
           enabled: z.boolean(),
           settings: settingsSchema,
+          /**
+           * The subscription that added this streamer, when one did.
+           *
+           * Absent means the user added it by hand, and the engine never
+           * touches those. Python ignores the field -- build_streamers
+           * reads only username/settings/enabled.
+           */
+          ownedBy: z.string().min(1).optional(),
         }).strict(),
       )
       .refine(
         (list) => new Set(list.map((s) => s.username.toLowerCase())).size === list.length,
         { message: "duplicate streamer" },
+      ),
+    subscriptions: z
+      .array(subscriptionSchema)
+      .default([])
+      .refine(
+        (list) => new Set(list.map((s) => s.id)).size === list.length,
+        { message: "duplicate subscription" },
       ),
   })
   .strict();

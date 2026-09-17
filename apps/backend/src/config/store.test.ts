@@ -48,6 +48,74 @@ describe("schema", () => {
     expect(configSchema.safeParse(bad).success).toBe(false);
   });
 
+  test("defaults subscriptions to an empty list", () => {
+    const parsed = configSchema.parse(valid);
+    expect(parsed.subscriptions).toEqual([]);
+  });
+
+  test("accepts a campaign subscription with a default pool size", () => {
+    const parsed = configSchema.parse({
+      ...valid,
+      subscriptions: [{ id: "s1", kind: "campaign", targetId: "c1",
+                        label: "Alpha Campaign", rank: 0 }],
+    });
+    expect(parsed.subscriptions[0]?.poolSize).toBe(3);
+  });
+
+  test("accepts a game subscription", () => {
+    const parsed = configSchema.parse({
+      ...valid,
+      subscriptions: [{ id: "s1", kind: "game", targetId: "g1",
+                        label: "Once Human", rank: 0 }],
+    });
+    expect(parsed.subscriptions[0]?.kind).toBe("game");
+  });
+
+  test("rejects a pool size outside 1-10", () => {
+    const bad = {
+      ...valid,
+      subscriptions: [{ id: "s1", kind: "campaign", targetId: "c1",
+                        label: "x", rank: 0, poolSize: 99 }],
+    };
+    expect(configSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("rejects an unknown subscription kind", () => {
+    const bad = {
+      ...valid,
+      subscriptions: [{ id: "s1", kind: "streamer", targetId: "c1",
+                        label: "x", rank: 0 }],
+    };
+    expect(configSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("rejects duplicate subscription ids", () => {
+    // Ownership is keyed by id; two subscriptions sharing one would make
+    // "which streamers does this own" unanswerable.
+    const bad = {
+      ...valid,
+      subscriptions: [
+        { id: "s1", kind: "campaign", targetId: "c1", label: "a", rank: 0 },
+        { id: "s1", kind: "campaign", targetId: "c2", label: "b", rank: 1 },
+      ],
+    };
+    expect(configSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("a streamer may record the subscription that added it", () => {
+    const parsed = configSchema.parse({
+      ...valid,
+      streamers: [{ username: "alpha", enabled: true, settings: {},
+                    ownedBy: "s1" }],
+    });
+    expect(parsed.streamers[0]?.ownedBy).toBe("s1");
+  });
+
+  test("a hand-added streamer has no owner", () => {
+    const parsed = configSchema.parse(valid);
+    expect(parsed.streamers[0]?.ownedBy).toBeUndefined();
+  });
+
   test("rejects duplicate streamers", () => {
     const bad = {
       ...valid,
@@ -130,7 +198,10 @@ describe("store", () => {
 
   test("round-trips a saved config", () => {
     saveConfig(path, valid as AppConfig);
-    expect(loadConfig(path)).toEqual(valid);
+    // `subscriptions` is defaulted by the schema, so a config saved
+    // without one loads back with an empty list -- which is the point of
+    // the default, and what every pre-existing config on disk gets.
+    expect(loadConfig(path)).toEqual({ ...valid, subscriptions: [] });
   });
 
   test("writes snake_case keys that Python accepts", () => {
