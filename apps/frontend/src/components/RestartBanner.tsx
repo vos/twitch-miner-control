@@ -51,6 +51,10 @@ export function RestartBanner({ state, onCancel, onNow }: {
       color="orange"
       icon={<IconRefreshAlert />}
       data-testid="restart-banner"
+      // Capped like the screens below it, so the actions stay beside the
+      // message instead of drifting to the far edge of a wide window.
+      maw={900}
+      mb="md"
     >
       <Group justify="space-between" wrap="wrap" gap="sm">
         <div>

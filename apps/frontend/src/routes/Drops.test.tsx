@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Drops } from "./Drops.js";
@@ -342,4 +342,98 @@ test("an ended campaign stays at the bottom even with progress on it", async () 
   const cards = screen.getAllByTestId("campaign-card");
   expect(cards[0]?.textContent).toMatch(/Live Untouched/);
   expect(cards[1]?.textContent).toMatch(/Over With Progress/);
+});
+
+// --- subscriptions ---
+
+const asSub = (over: object = {}) => ({
+  id: "s1", kind: "campaign", targetId: "c1", label: "Alpha Campaign",
+  poolSize: 3, rank: 0, channels: [], ...over,
+});
+
+/** Routes the stub by URL, so the page can read two endpoints. */
+function withSubs(subscriptions: unknown[]) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions }
+      : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+}
+
+test("subscribing posts the campaign the button belongs to", async () => {
+  withSubs([]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  // Found via the card, not by index: the list is sorted by deadline, so
+  // the first Subscribe button is not necessarily the first fixture.
+  const card = screen.getAllByTestId("campaign-card")
+    .find((c) => c.textContent?.includes("Beta Campaign"))!;
+  await userEvent.click(
+    within(card).getByRole("button", { name: /^subscribe$/i }),
+  );
+  await waitFor(() => {
+    const post = calls.find(
+      (c) => c.url === "/api/subscriptions" && c.init?.method === "POST",
+    );
+    expect(post).toBeTruthy();
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({
+      kind: "campaign", targetId: "c2", label: "Beta Campaign",
+    });
+  });
+});
+
+test("an already-subscribed campaign offers unsubscribe instead", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /unsubscribe/i })).toBeTruthy());
+});
+
+test("the subscriptions panel lists the channels each one resolved to", async () => {
+  withSubs([asSub({ channels: ["beta", "gamma"] })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const panel = screen.getByTestId("subscriptions");
+  expect(panel.textContent).toMatch(/beta/);
+  expect(panel.textContent).toMatch(/gamma/);
+});
+
+test("a subscription with no channels yet says so", async () => {
+  // Blank space would read as a rendering fault rather than as "the
+  // engine has not resolved this one yet".
+  withSubs([asSub({ channels: [] })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.getByTestId("subscriptions").textContent)
+    .toMatch(/no channels yet/i);
+});
+
+test("the panel is hidden when nothing is subscribed", async () => {
+  withSubs([]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  expect(screen.queryByTestId("subscriptions")).toBeNull();
+});
+
+test("re-resolve asks the engine for a pass now", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: /re-resolve/i }));
+  await waitFor(() => expect(calls.some(
+    (c) => c.url === "/api/subscriptions/resolve",
+  )).toBe(true));
+});
+
+test("unsubscribing posts the removal", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /unsubscribe/i })).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: /unsubscribe/i }));
+  await waitFor(() => expect(calls.some(
+    (c) => c.url === "/api/subscriptions/s1/remove",
+  )).toBe(true));
 });

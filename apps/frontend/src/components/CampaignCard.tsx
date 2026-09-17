@@ -1,4 +1,6 @@
-import { Badge, Card, Collapse, Group, Stack, Text, UnstyledButton } from "@mantine/core";
+import {
+  Badge, Button, Card, Collapse, Group, Stack, Text, UnstyledButton,
+} from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { IconChevronDown } from "@tabler/icons-react";
 import { formatSpan } from "../lib/formatSpan.js";
@@ -54,64 +56,87 @@ function badge(status: CampaignStatus, endsAt: number | null) {
  * what the list is actually scanned for -- the game, the deadline, and
  * whether this campaign is already done.
  */
-export function CampaignCard({ campaign }: { campaign: ResolvedCampaign }) {
+export function CampaignCard({ campaign, subscribed, onSubscribe, onUnsubscribe }: {
+  campaign: ResolvedCampaign;
+  /** Whether a subscription already targets this campaign. */
+  subscribed?: boolean;
+  onSubscribe?: () => void;
+  onUnsubscribe?: () => void;
+}) {
   const [open, { toggle }] = useDisclosure(false);
   const status = badge(campaign.status, campaign.endsAt);
   const count = campaign.drops.length;
 
   return (
     <Card withBorder padding="sm" data-testid="campaign-card">
-      <UnstyledButton
-        onClick={toggle}
-        aria-expanded={open}
-        aria-label={`${campaign.name}, ${count} drops`}
-      >
-        <Group justify="space-between" wrap="nowrap" gap="xs">
-          <Stack gap={2} style={{ minWidth: 0 }}>
-            <Text fw={600} size="sm" lineClamp={1}>{campaign.name}</Text>
-            <Group gap="xs">
-              {campaign.game !== null && (
-                <Text size="xs" c="dimmed" data-testid="campaign-game">
-                  {campaign.game.displayName}
+      {/* The subscribe button is a SIBLING of the disclosure button, not
+          a child. Nesting one interactive element inside another is
+          invalid, needs stopPropagation to stop a subscribe also
+          expanding the card, and leaves a keyboard user no way to reach
+          the inner control. */}
+      <Group justify="space-between" wrap="nowrap" gap="xs" align="center">
+        <UnstyledButton
+          onClick={toggle}
+          aria-expanded={open}
+          aria-label={`${campaign.name}, ${count} drops`}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          <Group justify="space-between" wrap="nowrap" gap="xs">
+            <Stack gap={2} style={{ minWidth: 0 }}>
+              <Text fw={600} size="sm" lineClamp={1}>{campaign.name}</Text>
+              <Group gap="xs">
+                {campaign.game !== null && (
+                  <Text size="xs" c="dimmed" data-testid="campaign-game">
+                    {campaign.game.displayName}
+                  </Text>
+                )}
+                <Text size="xs" c="dimmed" data-testid="campaign-drop-count">
+                  {count === 1 ? "1 drop" : `${count} drops`}
                 </Text>
-              )}
-              <Text size="xs" c="dimmed" data-testid="campaign-drop-count">
-                {count === 1 ? "1 drop" : `${count} drops`}
-              </Text>
-              {campaign.endsAt !== null && (
-                <Text size="xs" c="dimmed" data-testid="campaign-ends">
-                  {/* Past tense once the window has shut: a finished
-                      campaign is not "ending in -2d". */}
-                  {campaign.endsAt <= Date.now()
-                    ? "ended"
-                    : `ends in ${formatSpan(campaign.endsAt - Date.now())}`}
-                </Text>
-              )}
+                {campaign.endsAt !== null && (
+                  <Text size="xs" c="dimmed" data-testid="campaign-ends">
+                    {/* Past tense once the window has shut: a finished
+                        campaign is not "ending in -2d". */}
+                    {campaign.endsAt <= Date.now()
+                      ? "ended"
+                      : `ends in ${formatSpan(campaign.endsAt - Date.now())}`}
+                  </Text>
+                )}
+              </Group>
+            </Stack>
+            <Group gap="xs" wrap="nowrap">
+              <Badge
+                size="sm"
+                color={status.colour}
+                variant="light"
+                data-testid="campaign-status"
+              >
+                {status.label}
+              </Badge>
+              <IconChevronDown
+                size={16}
+                style={{ transform: open ? "rotate(180deg)" : undefined }}
+                aria-hidden
+              />
             </Group>
-          </Stack>
-          <Group gap="xs" wrap="nowrap">
-            <Badge
-              size="sm"
-              color={status.colour}
-              variant="light"
-              data-testid="campaign-status"
-            >
-              {status.label}
-            </Badge>
-            <IconChevronDown
-              size={16}
-              style={{ transform: open ? "rotate(180deg)" : undefined }}
-              aria-hidden
-            />
           </Group>
-        </Group>
-      </UnstyledButton>
+        </UnstyledButton>
 
-      {/* keepMounted={false} rather than Mantine's default: with a
-          hundred campaigns on the page, keeping every collapsed drop
-          list in the DOM leaves a hundred hidden lists for a screen
-          reader to walk. Unmounting after the exit animation drops them
-          without cutting the transition short. */}
+        {onSubscribe !== undefined && (
+          <Button
+            size="compact-xs"
+            variant={subscribed === true ? "light" : "filled"}
+            color={subscribed === true ? "gray" : "orange"}
+            onClick={() => {
+              if (subscribed === true) onUnsubscribe?.();
+              else onSubscribe();
+            }}
+          >
+            {subscribed === true ? "Unsubscribe" : "Subscribe"}
+          </Button>
+        )}
+      </Group>
+
       <Collapse expanded={open} keepMounted={false}>
         <Stack gap="sm" mt="sm">
           {campaign.drops.map((drop) => (

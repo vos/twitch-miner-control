@@ -1,5 +1,5 @@
 import {
-  Alert, Anchor, Button, Group, Loader, Stack, Text, TextInput,
+  Alert, Anchor, Button, Card, Group, Loader, Stack, Text, TextInput,
 } from "@mantine/core";
 import {
   IconAlertTriangle, IconExternalLink, IconRefresh, IconSearch,
@@ -8,6 +8,18 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
 import { formatSpan } from "../lib/formatSpan.js";
+
+/** A subscription as the API reports it, with its resolved channels. */
+export interface SubscriptionRow {
+  id: string;
+  kind: "campaign" | "game";
+  targetId: string;
+  label: string;
+  poolSize: number;
+  rank: number;
+  /** Logins the engine currently has in the config for this one. */
+  channels: string[];
+}
 
 export interface CampaignsPayload {
   campaigns: ResolvedCampaign[];
@@ -59,6 +71,8 @@ export function Drops() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("");
+  const [subs, setSubs] = useState<SubscriptionRow[]>([]);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -71,6 +85,37 @@ export function Drops() {
       });
     return () => { live = false; };
   }, []);
+
+  async function loadSubs() {
+    try {
+      const res = await api.get<{ subscriptions?: SubscriptionRow[] }>(
+        "/api/subscriptions",
+      );
+      // Guarded rather than trusted: a backend predating the engine, or
+      // any response without the field, must leave the panel empty
+      // rather than putting undefined where an array is expected and
+      // taking the whole page down on the next render.
+      setSubs(Array.isArray(res.subscriptions) ? res.subscriptions : []);
+    } catch {
+      // The campaign list is the page's job; a subscriptions panel that
+      // cannot load must not take the whole screen down with it.
+    }
+  }
+
+  useEffect(() => { void loadSubs(); }, []);
+
+  /** Runs a subscription mutation, then re-reads the list it changed. */
+  async function mutate(run: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await run();
+      await loadSubs();
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : "that did not work");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function refresh() {
     setRefreshing(true);
@@ -230,6 +275,50 @@ export function Drops() {
           list unavailable the banner above has already said why, and
           repeating a factual-sounding empty state under it would
           contradict it. */}
+      {subs.length > 0 && (
+        <Card withBorder padding="sm" data-testid="subscriptions">
+          <Group justify="space-between" align="center" mb="xs">
+            <Text fw={600} size="sm">Subscriptions</Text>
+            <Button
+              size="compact-xs"
+              variant="default"
+              loading={busy}
+              onClick={() => void mutate(
+                () => api.post("/api/subscriptions/resolve"),
+              )}
+            >
+              Re-resolve now
+            </Button>
+          </Group>
+          <Stack gap="xs">
+            {subs.map((sub) => (
+              <Group key={sub.id} justify="space-between" wrap="nowrap" gap="xs">
+                <div style={{ minWidth: 0 }}>
+                  <Text size="sm" lineClamp={1}>{sub.label}</Text>
+                  <Text size="xs" c="dimmed">
+                    {/* Blank space would read as a rendering fault
+                        rather than as "not resolved yet". */}
+                    {sub.channels.length === 0
+                      ? "no channels yet"
+                      : `watching ${sub.channels.join(", ")}`}
+                  </Text>
+                </div>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="gray"
+                  onClick={() => void mutate(
+                    () => api.post(`/api/subscriptions/${sub.id}/remove`),
+                  )}
+                >
+                  Remove
+                </Button>
+              </Group>
+            ))}
+          </Stack>
+        </Card>
+      )}
+
       {shown.length === 0 ? (
         <Text c="dimmed" data-testid="campaigns-empty">
           {data.campaigns.length > 0
@@ -240,9 +329,30 @@ export function Drops() {
         </Text>
       ) : (
         <Stack gap="xs">
-          {shown.map((campaign) => (
-            <CampaignCard key={campaign.id} campaign={campaign} />
-          ))}
+          {shown.map((campaign) => {
+            const sub = subs.find(
+              (x) => x.kind === "campaign" && x.targetId === campaign.id,
+            );
+            return (
+              <CampaignCard
+                key={campaign.id}
+                campaign={campaign}
+                subscribed={sub !== undefined}
+                onSubscribe={() => void mutate(() => api.post(
+                  "/api/subscriptions",
+                  { kind: "campaign", targetId: campaign.id,
+                    label: campaign.name },
+                ))}
+                onUnsubscribe={() => {
+                  if (sub !== undefined) {
+                    void mutate(() => api.post(
+                      `/api/subscriptions/${sub.id}/remove`,
+                    ));
+                  }
+                }}
+              />
+            );
+          })}
         </Stack>
       )}
     </Stack>
