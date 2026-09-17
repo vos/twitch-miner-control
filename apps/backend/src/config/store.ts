@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   defaults: {},
   miner: {},
   streamers: [],
+  subscriptions: [],
 };
 
 export function loadConfig(path: string): AppConfig {

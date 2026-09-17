@@ -31,6 +31,7 @@ const valid = {
   defaults: { makePredictions: false },
   miner: {},
   streamers: [{ username: "alpha", enabled: true, settings: {} }],
+  subscriptions: [],
 };
 
 describe("schema", () => {
@@ -198,10 +199,15 @@ describe("store", () => {
 
   test("round-trips a saved config", () => {
     saveConfig(path, valid as AppConfig);
-    // `subscriptions` is defaulted by the schema, so a config saved
-    // without one loads back with an empty list -- which is the point of
-    // the default, and what every pre-existing config on disk gets.
-    expect(loadConfig(path)).toEqual({ ...valid, subscriptions: [] });
+    expect(loadConfig(path)).toEqual(valid);
+  });
+
+  test("a config saved before subscriptions existed loads with an empty list", () => {
+    // Every config already on disk predates the field, so the default is
+    // what makes them loadable at all.
+    const { subscriptions: _omitted, ...older } = valid;
+    writeFileSync(path, JSON.stringify(older));
+    expect(loadConfig(path).subscriptions).toEqual([]);
   });
 
   test("writes snake_case keys that Python accepts", () => {

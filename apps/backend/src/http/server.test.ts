@@ -1079,7 +1079,7 @@ test("GET /api/events returns recent events newest first", async () => {
 function seedCookie(username = "alex"): string {
   saveConfig(ctx.configPath, {
     version: 1, username, followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {},
+    defaults: {}, miner: {}, subscriptions: [],
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   const file = join(ctx.cookiesDir, `${username}.pkl`);
@@ -1155,7 +1155,7 @@ test("a successful login clears a stale error from the signed-out session", asyn
   );
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {},
+    defaults: {}, miner: {}, subscriptions: [],
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   await ctx.state.refresh();
@@ -1180,7 +1180,7 @@ test("a successful login starts the miner", async () => {
   // logout/login round trip left it stopped with no hint why.
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {},
+    defaults: {}, miner: {}, subscriptions: [],
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
 
