@@ -87,19 +87,17 @@ export function CampaignCard({ campaign }: { campaign: ResolvedCampaign }) {
         </Group>
       </UnstyledButton>
 
-      {/* Mounted only while open, rather than left in the DOM and hidden
-          by Collapse's CSS. With a hundred campaigns on the page that is
-          a hundred hidden drop lists a screen reader still walks, and
-          the drops of a collapsed campaign are not on the page in any
-          sense the user would recognise. */}
-      <Collapse in={open}>
-        {open && (
-          <Stack gap="sm" mt="sm">
-            {campaign.drops.map((drop) => (
-              <DropRow key={drop.id} drop={drop} />
-            ))}
-          </Stack>
-        )}
+      {/* keepMounted={false} rather than Mantine's default: with a
+          hundred campaigns on the page, keeping every collapsed drop
+          list in the DOM leaves a hundred hidden lists for a screen
+          reader to walk. Unmounting after the exit animation drops them
+          without cutting the transition short. */}
+      <Collapse expanded={open} keepMounted={false}>
+        <Stack gap="sm" mt="sm">
+          {campaign.drops.map((drop) => (
+            <DropRow key={drop.id} drop={drop} />
+          ))}
+        </Stack>
       </Collapse>
     </Card>
   );

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { CampaignCard, type ResolvedCampaign } from "./CampaignCard.js";
@@ -60,11 +60,15 @@ test("an unknown verdict is not rendered as untouched", () => {
 });
 
 test("drops are hidden until the card is expanded", async () => {
-  // The list runs long; every campaign open at once is unreadable.
+  // The list runs long; every campaign open at once is unreadable. The
+  // drops are genuinely unmounted while collapsed (keepMounted={false}),
+  // not merely hidden, so a screen reader does not walk a hundred of
+  // them -- which is also why the expansion has to be awaited: the
+  // content mounts with the enter transition rather than synchronously.
   renderApp(<CampaignCard campaign={campaign()} />);
   expect(screen.queryByTestId("drop-row")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: /crate|drop|expand/i }));
-  expect(screen.getByTestId("drop-row")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: /campaign one/i }));
+  await waitFor(() => expect(screen.getByTestId("drop-row")).toBeTruthy());
 });
 
 test("says how many drops a campaign has without expanding it", () => {

@@ -10,6 +10,7 @@ import { Sidebar } from "./components/Sidebar.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
 import { Dashboard } from "./routes/Dashboard.js";
+import { Drops } from "./routes/Drops.js";
 import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
 import { Settings } from "./routes/Settings.js";
@@ -29,6 +30,7 @@ const SCREENS = {
     ),
   },
   streamers: { label: "Streamers", element: () => <Streamers /> },
+  drops: { label: "Drops", element: () => <Drops /> },
   logs: { label: "Logs", element: () => <Logs /> },
   settings: { label: "Settings", element: () => <Settings /> },
   account: { label: "Twitch account", element: () => <TwitchLogin /> },
