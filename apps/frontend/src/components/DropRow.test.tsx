@@ -69,3 +69,19 @@ test("a drop awarding nothing named omits the benefits line", () => {
   renderApp(<DropRow drop={drop({ benefits: [] })} />);
   expect(screen.queryByTestId("drop-benefits")).toBeNull();
 });
+
+test("a benefit that only repeats the drop's name is not shown twice", () => {
+  // "Hazmat Suit / Hazmat Suit" reads as a rendering fault rather than
+  // as detail about the reward.
+  renderApp(
+    <DropRow drop={drop({ name: "Hazmat Suit", benefits: ["Hazmat Suit"] })} />,
+  );
+  expect(screen.queryByTestId("drop-benefits")).toBeNull();
+});
+
+test("a benefit differing from the name is still shown", () => {
+  renderApp(
+    <DropRow drop={drop({ name: "Starter Pack", benefits: ["Hazmat Suit"] })} />,
+  );
+  expect(screen.getByTestId("drop-benefits").textContent).toBe("Hazmat Suit");
+});

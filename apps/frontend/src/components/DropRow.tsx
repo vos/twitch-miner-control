@@ -47,6 +47,11 @@ export function DropRow({ drop }: { drop: ResolvedDrop }) {
   const showBar = drop.status === "in-progress";
   const unknown = drop.status === "unknown";
   const muted = drop.status === "claimed" || drop.status === "unobtainable";
+  const listed = drop.benefits.join(", ");
+  const benefits =
+    listed === "" || listed.toLowerCase() === drop.name.toLowerCase()
+      ? null
+      : listed;
 
   return (
     <Stack gap={2} data-testid="drop-row" data-status={drop.status}>
@@ -64,9 +69,12 @@ export function DropRow({ drop }: { drop: ResolvedDrop }) {
         </Badge>
       </Group>
 
-      {drop.benefits.length > 0 && (
+      {/* Dropped when it would only repeat the name: a drop called
+          "Hazmat Suit" awarding a "Hazmat Suit" renders the same words
+          twice, which reads as a rendering fault rather than detail. */}
+      {benefits !== null && (
         <Text size="xs" c="dimmed" data-testid="drop-benefits">
-          {drop.benefits.join(", ")}
+          {benefits}
         </Text>
       )}
 
