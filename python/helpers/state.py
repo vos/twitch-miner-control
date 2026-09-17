@@ -3,6 +3,7 @@
 One request per stdin line, one response per stdout line. Reads go through
 the miner's own GQL layer so persisted-query hashes stay upstream's problem.
 """
+import copy
 import json
 import os
 import re
@@ -239,6 +240,53 @@ def _next_drop(campaign_ids: list, campaigns: dict) -> dict | None:
     }
 
 
+# The directory query, which lists live channels for a game.
+#
+# THIS HASH IS OURS, NOT UPSTREAM'S. The vendored miner has no
+# directory operation, so unlike every other query in this file the
+# persisted-query hash below is not maintained for us and Twitch will
+# eventually rotate it. When that happens this op starts failing and the
+# TypeScript side reports subscriptions as degraded (see resolution.ts),
+# keeping whatever pool it already had rather than emptying it. Replacing
+# the hash is the fix, and this is the only place it appears.
+#
+# `systemFilters: ["DROPS_ENABLED"]` makes Twitch do the drops filtering
+# server-side. The alternative -- matching the stream's tags -- does not
+# work: the drops tag is localised per channel ("DropsAktiviert",
+# "DropyZapnute"), so a tag match would silently miss most of them.
+_DIRECTORY_QUERY = {
+    "operationName": "DirectoryPage_Game",
+    "extensions": {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash":
+                "df4bb6cc45055237bfaf3ead608bbafb79815c7100b6ee126719fac3762ddf8b",
+        }
+    },
+}
+
+
+def _directory_channel(edge) -> dict | None:
+    """One live channel from a directory edge, or None when unusable.
+
+    A node without a broadcaster cannot be watched, so it is dropped
+    rather than reported with an empty login.
+    """
+    node = edge.get("node") if isinstance(edge, dict) else None
+    if not isinstance(node, dict):
+        return None
+    caster = node.get("broadcaster")
+    if not isinstance(caster, dict) or not caster.get("login"):
+        return None
+    return {
+        "login": caster["login"],
+        "channelId": caster.get("id") or "",
+        # Zero rather than dropping the channel: an unreported audience
+        # is a missing figure, not a reason to ignore a live stream.
+        "viewers": node.get("viewersCount") or 0,
+    }
+
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -279,6 +327,11 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"inventory": self._inventory()}}
+            if op == "directory":
+                self._ensure_token()
+                return {"id": req_id, "ok": True,
+                        "data": {"channels": self._directory(
+                            req["game"], req["slug"], req.get("limit", 30))}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -470,6 +523,43 @@ class Handler:
             if campaign_id is not None:
                 out[campaign_id] = drops
         return out
+
+    def _directory(self, game: str, slug: str, limit: int) -> list:
+        """Live channels streaming a game with drops enabled, by viewers.
+
+        Raises rather than returning [] on failure. An empty list is the
+        claim that nobody is streaming this game, and a query that did
+        not complete is in no position to make it -- the caller turns the
+        raise into a degraded resolution that keeps its existing pool.
+        """
+        request = copy.deepcopy(_DIRECTORY_QUERY)
+        request["variables"] = {
+            "imageWidth": 50,
+            # The query needs both: the display name and the URL slug.
+            "name": game,
+            "slug": slug,
+            "options": {
+                "sort": "RELEVANCE",
+                "recommendationsContext": {"platform": "web"},
+                "requestID": "JIRA-VXP-2397",
+                "tags": [],
+                "systemFilters": ["DROPS_ENABLED"],
+            },
+            "sortTypeIsRecency": False,
+            "limit": limit,
+        }
+
+        def parse(payload):
+            data = (payload or {}).get("data") or {}
+            game_node = data.get("game") or {}
+            streams = game_node.get("streams") or {}
+            return streams.get("edges") or []
+
+        edges = self.session.gql.post_gql_request_single(
+            _DIRECTORY_QUERY["operationName"], request, parse
+        )
+        channels = [_directory_channel(e) for e in edges]
+        return [c for c in channels if c is not None]
 
     def _one(self, username: str) -> dict:
         context = self.session.gql.get_channel_points_context(username)

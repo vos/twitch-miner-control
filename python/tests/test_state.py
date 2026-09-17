@@ -1146,3 +1146,79 @@ def test_inventory_skips_a_drop_without_progress():
     ])
     out = h.handle({"id": 1, "op": "inventory"})
     assert list(out["data"]["inventory"]["c1"]) == ["d2"]
+
+
+def _directory_handler(edges=None, error=None):
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    captured = {}
+
+    def fake_post(operation_name, request_json, parse):
+        captured["op"] = operation_name
+        captured["json"] = request_json
+        if error is not None:
+            raise error
+        return parse({"data": {"game": {"streams": {"edges": list(edges or [])}}}})
+
+    h.session.gql.post_gql_request_single = fake_post
+    return h, captured
+
+
+def _edge(login="alpha", cid="42", viewers=100):
+    return {"node": {"id": "s1", "viewersCount": viewers,
+                     "broadcaster": {"id": cid, "login": login}}}
+
+
+def test_directory_lists_live_channels_for_a_game():
+    h, captured = _directory_handler([
+        _edge("alpha", "42", 500), _edge("beta", "43", 20),
+    ])
+    out = h.handle({"id": 1, "op": "directory",
+                    "game": "Once Human", "slug": "once-human", "limit": 30})
+    assert out["ok"] is True
+    assert out["data"]["channels"] == [
+        {"login": "alpha", "channelId": "42", "viewers": 500},
+        {"login": "beta", "channelId": "43", "viewers": 20},
+    ]
+
+
+def test_directory_asks_twitch_to_filter_by_drops():
+    """Twitch filters server-side, so we never match localised tags like
+    'DropsAktiviert' or 'DropyZapnute' ourselves."""
+    h, captured = _directory_handler([_edge()])
+    h.handle({"id": 1, "op": "directory",
+              "game": "Once Human", "slug": "once-human", "limit": 30})
+    options = captured["json"]["variables"]["options"]
+    assert options["systemFilters"] == ["DROPS_ENABLED"]
+    assert captured["json"]["variables"]["name"] == "Once Human"
+    assert captured["json"]["variables"]["slug"] == "once-human"
+
+
+def test_directory_is_empty_when_nobody_is_live():
+    h, _ = _directory_handler([])
+    out = h.handle({"id": 1, "op": "directory",
+                    "game": "Once Human", "slug": "once-human", "limit": 30})
+    assert out["data"]["channels"] == []
+
+
+def test_directory_skips_an_edge_with_no_broadcaster():
+    h, _ = _directory_handler([{"node": {"id": "s1", "viewersCount": 5}}, _edge()])
+    out = h.handle({"id": 1, "op": "directory",
+                    "game": "Once Human", "slug": "once-human", "limit": 30})
+    assert [c["login"] for c in out["data"]["channels"]] == ["alpha"]
+
+
+def test_directory_reports_zero_viewers_rather_than_dropping_a_channel():
+    h, _ = _directory_handler([_edge("alpha", "42", None)])
+    out = h.handle({"id": 1, "op": "directory",
+                    "game": "Once Human", "slug": "once-human", "limit": 30})
+    assert out["data"]["channels"][0]["viewers"] == 0
+
+
+def test_directory_propagates_a_failure_rather_than_saying_nobody_is_live():
+    """An empty list is a claim that no channel is streaming the game.
+    A failed query is in no position to make it."""
+    h, _ = _directory_handler(error=RuntimeError("gql exploded"))
+    out = h.handle({"id": 1, "op": "directory",
+                    "game": "Once Human", "slug": "once-human", "limit": 30})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
