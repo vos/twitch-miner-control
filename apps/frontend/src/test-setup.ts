@@ -1,3 +1,4 @@
+import { configure } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 // jsdom does not implement matchMedia, but Mantine's provider queries it on
@@ -54,3 +55,18 @@ if (typeof window !== "undefined" && !window.ResizeObserver) {
   }
   window.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
 }
+
+// Testing Library keeps its own async timeout and does NOT read vitest's
+// `testTimeout` -- so findBy*/waitFor expired after 1s while the test
+// itself still had plenty of budget left. That 1s is the real source of
+// this suite's "a random unrelated test failed" flakiness: several suites
+// legitimately do a second or more of work per test (a Settings screen
+// mounts a form of Mantine controls; the dashboard's detail dialog sits
+// behind a dynamic import), so on a four-core box whatever is nearest the
+// line fails as soon as anything else wants CPU. Reproduced by
+// oversubscribing the cores 3:1, which fails reliably at 1s and passes at
+// 5s.
+//
+// A ceiling for a stuck query, not a budget: every wait still resolves the
+// moment its condition holds, so passing tests are no slower.
+configure({ asyncUtilTimeout: 5_000 });

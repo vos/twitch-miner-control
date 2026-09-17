@@ -20,12 +20,18 @@ if (mode === "instant") {
   process.stderr.write("KeyError: 'username'\n");
   process.exit(1);
 }
-process.stdout.write("miner started\n");
 if (mode === "stubborn") {
   process.on("SIGTERM", () => process.stdout.write("ignoring SIGTERM\n"));
 } else {
   process.on("SIGTERM", () => { process.stdout.write("shutting down\n"); process.exit(0); });
 }
+// Announced AFTER the handler is installed, never before: spawn() resolves
+// once the OS has the process, which can be before this script body has
+// run at all. A test that treated an earlier "started" line as readiness
+// could still land its SIGTERM on Node's default disposition -- killing a
+// "stubborn" child in ~19ms and failing an assertion about a grace period
+// the supervisor never got to serve.
+process.stdout.write("miner started\n");
 if (mode === "delayed_crash") {
   const dieAfter = Number(process.env.DIE_AFTER_MS ?? 700);
   setTimeout(() => {

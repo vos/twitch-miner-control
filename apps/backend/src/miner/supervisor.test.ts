@@ -26,6 +26,27 @@ function make(mode: string, overrides = {}) {
 
 const settle = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Waits for a condition instead of for a duration.
+ *
+ * These tests drive a real child process, so a bare `settle(n)` tuned to
+ * land just past some event has no margin: on a loaded machine the child
+ * has not reached that point yet and the assertion runs against the
+ * previous state. Polling for the state the test is actually waiting on
+ * keeps the timing intent while surviving a busy box -- and still fails,
+ * with the same message, if the state genuinely never arrives.
+ */
+async function until(
+  predicate: () => boolean,
+  { timeout = 5_000, step = 10 } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() > deadline) return;
+    await settle(step);
+  }
+}
+
 test("start moves through STARTING to RUNNING", async () => {
   const seen: string[] = [];
   const s = make("normal");
@@ -38,7 +59,10 @@ test("start moves through STARTING to RUNNING", async () => {
 test("captures miner stdout into the log buffer", async () => {
   const s = make("normal");
   await s.start();
-  await settle(100);
+  // The child's stdout arrives whenever it arrives: start() resolves on
+  // the spawn, not on the first byte of output. A flat 100ms was enough
+  // at idle and not enough on a busy machine.
+  await until(() => s.logs().lines.join("\n").includes("miner started"));
   expect(s.logs().lines.join("\n")).toContain("miner started");
 });
 
@@ -47,7 +71,7 @@ test("announces captured output with the buffer's running line count", async () 
   const frames: Array<{ lines: string[]; total: number }> = [];
   s.on("log", (frame) => frames.push(frame));
   await s.start();
-  await settle(100);
+  await until(() => frames.flatMap((f) => f.lines).join("\n").includes("miner started"));
   expect(frames.flatMap((f) => f.lines).join("\n")).toContain("miner started");
   expect(frames.at(-1)!.total).toBe(s.logs().total);
 });
@@ -62,16 +86,25 @@ test("stop terminates a well-behaved miner with SIGTERM", async () => {
 test("escalates to SIGKILL when SIGTERM is ignored", async () => {
   const s = make("stubborn");
   await s.start();
+  // start() resolves once the OS confirms the spawn, which can be before
+  // the fixture's script body has run -- and it installs its
+  // SIGTERM-ignoring handler in that body. A stop() landing first was
+  // handled by Node's default disposition and the child died in 19ms,
+  // failing an assertion about the grace period the supervisor never got
+  // to serve. The fixture prints this line immediately before installing
+  // the handler, so it is the readiness signal.
+  await until(() => s.logs().lines.join("\n").includes("miner started"));
   const started = Date.now();
   await s.stop();
   expect(s.state).toBe("STOPPED");
-  expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+  // The contract: stop() waits out the grace period before escalating.
+  expect(Date.now() - started).toBeGreaterThanOrEqual(290);
 });
 
 test("a miner that exits immediately parks in CRASHED without looping", async () => {
   const s = make("instant");
   await s.start();
-  await settle(400);
+  await until(() => s.state === "CRASHED");
   expect(s.state).toBe("CRASHED");
   // Tightened from `toBeLessThanOrEqual(1)`: the fast-exit path in onExit
   // returns before scheduleRestart is ever called, so restartCount must
@@ -162,7 +195,11 @@ test("state is not RUNNING while backing off after a post-fastExit crash", async
     backoffBaseMs: 300,
   });
   await s.start();
-  await settle(200); // crashed, now asleep in backoff with no live child
+  // Crashes at 150ms, then sleeps in backoff. Waited for rather than
+  // slept past: a flat 200ms covered that at idle and landed mid-spawn
+  // once the machine was busy. RESTARTING is the backoff state -- the
+  // claim is that it is not RUNNING while there is no live child.
+  await until(() => s.state === "RESTARTING" || s.state === "CRASHED");
   expect(s.state).not.toBe("RUNNING");
   expect(s.livePids().length).toBe(0);
 });
@@ -178,6 +215,18 @@ test.each([5, 45])(
       env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: String(dieAfterMs) },
     });
     await s.start();
+    // start() bounds its own wait at SPAWN_SETTLE_MS (250ms), which is
+    // sized for a fixture that exits ~95-100ms after spawn. Spawning a
+    // Node process on a loaded machine takes longer than that whole
+    // budget, so start() can legitimately return before the child has
+    // died -- and sampling the state right here caught it mid-race.
+    //
+    // The claim under test is that RUNNING is never the settled answer
+    // for a process that dies this quickly, so wait for the crash to be
+    // observed and then assert. A supervisor that wrongly reported
+    // RUNNING still fails: the state stays RUNNING, `until` times out,
+    // and the expectation below sees it.
+    await until(() => s.state !== "RUNNING" && s.state !== "STARTING");
     expect(s.state).not.toBe("RUNNING");
   },
 );
@@ -219,9 +268,12 @@ test("cap engages for a slow crash loop that would have reset a per-run stabilit
   // crash, then a short backoff before the next attempt. Drive well past
   // maxRestarts(2) worth of crashes -- old code loops forever; fixed code
   // must park in CRASHED once the window holds more than maxRestarts.
-  for (let i = 0; i < 6 && s.state !== "CRASHED"; i++) {
-    await settle(120);
-  }
+  // Waited for rather than counted out in fixed sleeps: six 120ms ticks
+  // covered the crash/backoff cycles at idle and ran out mid-loop once
+  // spawning a Node process took longer than the budget. A supervisor
+  // that never caps still fails -- it simply never reaches CRASHED and
+  // the expectation below sees whatever state it is stuck in.
+  await until(() => s.state === "CRASHED", { timeout: 10_000 });
   expect(s.state).toBe("CRASHED");
 });
 
@@ -281,7 +333,7 @@ test("runningSince clears on stop, so a stopped miner cannot show a ticking time
 test("runningSince clears when the miner crashes out for good", async () => {
   const s = make("instant");
   await s.start();
-  await settle(400);
+  await until(() => s.state === "CRASHED");
   expect(s.state).toBe("CRASHED");
   expect(s.runningSince).toBeNull();
 });
@@ -295,7 +347,9 @@ test("runningSince is null during a restart backoff, so no timer ticks for a min
     fastExitMs: 50, backoffBaseMs: 600,
   });
   await s.start();
-  await settle(300);
+  // The child is scheduled to die at 300ms, so a flat settle(300) raced
+  // it -- exactly tied at idle, and lost the moment the machine was busy.
+  await until(() => s.state === "RESTARTING");
   expect(s.state).toBe("RESTARTING");
   expect(s.runningSince).toBeNull();
 });

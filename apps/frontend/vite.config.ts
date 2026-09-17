@@ -26,6 +26,20 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Generous deliberately. Several suites legitimately take a second or
+    // more of real work per test -- a Settings screen mounts a form of
+    // Mantine controls, the dashboard's detail dialog is behind a
+    // dynamic import -- and the library defaults are 1s for findBy* and
+    // 5s for a test. On a four-core box that leaves no headroom: whatever
+    // is closest to the line fails as soon as anything else competes for
+    // CPU, which reads as "a random unrelated test broke" on every
+    // feature branch. Reproduced by oversubscribing the cores 3:1.
+    //
+    // These are ceilings for a stuck test, not budgets to spend: nothing
+    // waits longer than it needs to, because every wait is a findBy/
+    // waitFor that resolves as soon as its condition holds.
+    testTimeout: 15_000,
+    hookTimeout: 15_000,
     // Each test file still gets its own jsdom, but inside a VM context in a
     // reused worker rather than a fresh one -- building those environments
     // was over a third of the suite's run time. `isolate: false` is not an

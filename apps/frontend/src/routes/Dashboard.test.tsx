@@ -390,9 +390,16 @@ test("renders the stored figures a pending snapshot carries", async () => {
 });
 
 test("opens the clicked streamer's detail dialog", async () => {
+  // The dialog is behind React.lazy, so the click is followed by a real
+  // dynamic import. Warming it first means this test waits on the render
+  // it is actually asserting about rather than on module resolution --
+  // the slowest step here, and the one that pushed it past the timeout
+  // whenever the machine was busy.
+  await import("../components/StreamerDetailModal.js");
   const empty = {
     series: [], events: [], sessions: [],
     coverage: { live: [], mined: [] }, firstSeen: null, retentionFloor: null,
+    gained: null, gainedSince: null,
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
     ok: true, status: 200,

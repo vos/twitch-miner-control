@@ -1,4 +1,4 @@
-import { act, screen } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { RECONNECT_DELAY_MS } from "./api/useLiveState.js";
@@ -60,10 +60,19 @@ test("flags the account nav row when the Twitch session needs attention", async 
 test("leaves the account row unflagged once a Twitch session is established", async () => {
   stub(false);
   view();
-  // Let the app settle before asserting absence, so this isn't trivially
-  // true of an unrendered tree.
+  // `loginRequired` starts true and is corrected by the first /api/status
+  // response (app.tsx), so the badge is legitimately present for the
+  // first render or two. Waiting only for the nav to exist asserted
+  // absence before that fetch had resolved -- true at idle, false the
+  // moment the machine was busy enough to reorder the two.
+  //
+  // waitFor retries until the badge has actually gone, which is the
+  // claim being made. The findBy above it stays: it fails loudly on an
+  // unrendered tree, where waitFor alone would pass vacuously.
   await screen.findByRole("button", { name: /dashboard/i });
-  expect(screen.queryByTestId("nav-login-required")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.queryByTestId("nav-login-required")).not.toBeInTheDocument();
+  });
 });
 
 test("the account nav row switches to the Twitch account screen", async () => {
@@ -137,8 +146,13 @@ test("holds the notice back until /api/status has actually answered", async () =
     close() {}
   });
   view();
+  // Same race as the nav badge above: the notice is keyed on state that
+  // the first /api/status response clears, so absence has to be waited
+  // for rather than sampled once the nav exists.
   await screen.findByRole("button", { name: /dashboard/i });
-  expect(screen.queryByTestId("login-required-notice")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.queryByTestId("login-required-notice")).not.toBeInTheDocument();
+  });
 });
 
 test("the notice leads to the Twitch account screen", async () => {
