@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CampaignCard, type ResolvedCampaign } from "./CampaignCard.js";
 import { renderApp } from "../test-utils.js";
 
@@ -85,8 +85,8 @@ test("an ended campaign with no progress says ended, not not-started", () => {
 });
 
 test("an ended campaign with partial progress also says ended", () => {
-  // The progress is frozen and can never be finished, so "IN PROGRESS"
-  // is a claim about something that is no longer happening.
+  // The progress is frozen and can never be finished, so "in progress"
+  // would claim something is happening that is not.
   renderApp(<CampaignCard campaign={campaign({
     status: "partial", endsAt: Date.now() - 86_400_000,
   })} />);
@@ -121,4 +121,38 @@ test("an ended campaign whose progress is unknown says ended", () => {
     status: "unknown", endsAt: Date.now() - 86_400_000,
   })} />);
   expect(screen.getByTestId("campaign-status").textContent).toMatch(/ended/i);
+});
+
+test("shows an inline notice on the row while it is working", () => {
+  // On the row, so the feedback cannot be mistaken for another
+  // campaign's.
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={() => {}}
+                          busy="Finding channels…" />);
+  expect(screen.getByTestId("campaign-busy").textContent)
+    .toMatch(/finding channels/i);
+});
+
+test("no notice when the card is idle", () => {
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={() => {}} />);
+  expect(screen.queryByTestId("campaign-busy")).toBeNull();
+});
+
+test("the button itself shows it is working", () => {
+  // The button is what was clicked; leaving it inert while a notice
+  // appears elsewhere reads as the click not registering.
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={() => {}}
+                          busy="Finding channels…" />);
+  const btn = screen.getByRole("button", { name: /subscribe/i });
+  expect(btn.getAttribute("data-loading")).toBe("true");
+});
+
+test("a busy card cannot be clicked again", async () => {
+  // A second subscribe while the first is in flight would race. Asserted
+  // on the effect rather than the attribute: Mantine sets the native
+  // `disabled`, not data-disabled.
+  const onSubscribe = vi.fn();
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={onSubscribe}
+                          busy="Finding channels…" />);
+  await userEvent.click(screen.getByRole("button", { name: /subscribe/i }));
+  expect(onSubscribe).not.toHaveBeenCalled();
 });

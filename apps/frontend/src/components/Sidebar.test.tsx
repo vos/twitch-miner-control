@@ -86,9 +86,8 @@ test("shows no badge on a dev build", () => {
 
 test("every screen the app defines is reachable from the nav", () => {
   // ITEMS is maintained separately from app.tsx's SCREENS map, and only
-  // the type ties them together -- a screen registered in SCREENS with
-  // no entry here compiles fine and is simply unreachable, which is how
-  // the Drops screen shipped invisible the first time.
+  // the type ties them together: a screen registered in SCREENS with no
+  // entry here compiles, tests green, and is unreachable in the app.
   view("1.3.0");
   for (const label of [
     "Dashboard", "Streamers", "Drops", "Logs", "Settings", "Twitch account",

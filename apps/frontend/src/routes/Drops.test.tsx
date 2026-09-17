@@ -351,14 +351,25 @@ const asSub = (over: object = {}) => ({
   poolSize: 3, rank: 0, channels: [], ...over,
 });
 
-/** Routes the stub by URL, so the page can read two endpoints. */
-function withSubs(subscriptions: unknown[]) {
+/** Routes the stub by URL, so the page can read three endpoints. */
+function withSubs(
+  subscriptions: unknown[],
+  restart: { pending: boolean } = { pending: false },
+) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
-    const payload = url.startsWith("/api/subscriptions")
-      ? { subscriptions }
-      : body;
-    return { ok: true, status: 200, json: async () => payload };
+    if (url.startsWith("/api/subscriptions")) {
+      return { ok: true, status: 200, json: async () => ({ subscriptions }) };
+    }
+    if (url.startsWith("/api/status")) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ pendingRestart: {
+          pending: restart.pending, dueAt: null, reason: null,
+        } }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => body };
   }));
 }
 
@@ -400,16 +411,6 @@ test("the subscriptions panel lists the channels each one resolved to", async ()
   expect(panel.textContent).toMatch(/gamma/);
 });
 
-test("a subscription with no channels yet says so", async () => {
-  // Blank space would read as a rendering fault rather than as "the
-  // engine has not resolved this one yet".
-  withSubs([asSub({ channels: [] })]);
-  renderApp(<Drops />);
-  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
-  expect(screen.getByTestId("subscriptions").textContent)
-    .toMatch(/no channels yet/i);
-});
-
 test("the panel is hidden when nothing is subscribed", async () => {
   withSubs([]);
   renderApp(<Drops />);
@@ -436,4 +437,217 @@ test("unsubscribing posts the removal", async () => {
   await waitFor(() => expect(calls.some(
     (c) => c.url === "/api/subscriptions/s1/remove",
   )).toBe(true));
+});
+
+test("resolved channels are not called watched until the miner restarts", async () => {
+  // The channels sit in the config doing nothing until then, so calling
+  // them "watching" would be a claim about the miner that is not true.
+  withSubs([asSub({ channels: ["beta"] })], { pending: true });
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const panel = screen.getByTestId("subscriptions");
+  expect(panel.textContent).toMatch(/after the restart/i);
+  expect(panel.textContent).toMatch(/beta/);
+});
+
+test("once nothing is pending the channels read as watched", async () => {
+  withSubs([asSub({ channels: ["beta"] })], { pending: false });
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.getByTestId("subscriptions").textContent).toMatch(/watching beta/i);
+});
+
+test("the panel explains when the engine re-checks", async () => {
+  // Otherwise the fifteen-minute cadence is invisible and the page looks
+  // static when it is not.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.getByTestId("subscriptions").textContent)
+    .toMatch(/every 15 minutes/i);
+});
+
+test("subscribing shows the wait on the row that was clicked", async () => {
+  // Inline, so the feedback lands where the click did and cannot be
+  // mistaken for another campaign's.
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/subscriptions" && init?.method === "POST") await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  const card = screen.getAllByTestId("campaign-card")
+    .find((c) => c.textContent?.includes("Alpha Campaign"))!;
+  await userEvent.click(within(card).getByRole("button", { name: /^subscribe$/i }));
+
+  await waitFor(() =>
+    expect(within(card).getByTestId("campaign-busy")).toBeTruthy());
+  expect(within(card).getByTestId("campaign-busy").textContent)
+    .toMatch(/finding channels/i);
+  release!();
+  await waitFor(() =>
+    expect(within(card).queryByTestId("campaign-busy")).toBeNull());
+});
+
+test("only the clicked campaign shows the wait", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/subscriptions" && init?.method === "POST") await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  const clicked = cards.find((c) => c.textContent?.includes("Alpha Campaign"))!;
+  const other = cards.find((c) => c.textContent?.includes("Beta Campaign"))!;
+  await userEvent.click(within(clicked).getByRole("button", { name: /^subscribe$/i }));
+
+  await waitFor(() =>
+    expect(within(clicked).getByTestId("campaign-busy")).toBeTruthy());
+  expect(within(other).queryByTestId("campaign-busy")).toBeNull();
+  release!();
+});
+test("the banner names what is happening for a re-resolve", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/subscriptions/resolve") await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [asSub()] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: /re-resolve/i }));
+  await waitFor(() =>
+    expect(screen.getByTestId("resolving").textContent).toMatch(/re-checking/i));
+  release!();
+});
+
+test("no banner when nothing is running", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.queryByTestId("resolving")).toBeNull();
+});
+
+
+test("a subscription with nobody live says so, rather than searching forever", async () => {
+  // A campaign whose game has no live drops-enabled streamers resolves
+  // to an empty pool. "finding channels…" there is a lie that never
+  // resolves; the engine already looked and found nothing.
+  withSubs([asSub({ channels: [] })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.getByTestId("subscriptions").textContent)
+    .toMatch(/nobody is streaming/i);
+});
+
+test("Remove is disabled while a removal is in flight", async () => {
+  // Clicking twice would fire a second POST against a subscription the
+  // first call is already deleting.
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url.endsWith("/remove")) await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [asSub(), asSub({ id: "s2", targetId: "c2", label: "Beta" })] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const removes = within(screen.getByTestId("subscriptions"))
+    .getAllByRole("button", { name: /^remove$/i });
+  await userEvent.click(removes[0]!);
+
+  await waitFor(() => expect(screen.getByTestId("resolving")).toBeTruthy());
+  const after = within(screen.getByTestId("subscriptions"))
+    .getAllByRole("button", { name: /^remove$/i });
+  // Every Remove, not just the one clicked: they share one busy state
+  // and a second removal cannot be meaningfully started mid-flight.
+  for (const b of after) expect(b.hasAttribute("disabled")).toBe(true);
+  release!();
+});
+
+test("Re-resolve is disabled while a removal is in flight", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url.endsWith("/remove")) await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [asSub()] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(
+    within(screen.getByTestId("subscriptions"))
+      .getByRole("button", { name: /^remove$/i }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /re-resolve/i })
+      .hasAttribute("disabled")).toBe(true));
+  release!();
+});
+
+test("removing from the panel also freezes that campaign's card button", async () => {
+  // The panel and the card act on the same subscription, so leaving the
+  // card live invites a second delete of something already going.
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url.endsWith("/remove")) await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [asSub({ targetId: "c1" })] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(
+    within(screen.getByTestId("subscriptions"))
+      .getByRole("button", { name: /^remove$/i }),
+  );
+  await waitFor(() => expect(screen.getByTestId("resolving")).toBeTruthy());
+  const card = screen.getAllByTestId("campaign-card")
+    .find((c) => c.textContent?.includes("Alpha Campaign"))!;
+  expect(within(card).getByRole("button", { name: /unsubscribe/i })
+    .hasAttribute("disabled")).toBe(true);
+  release!();
 });

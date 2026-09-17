@@ -72,7 +72,19 @@ export function Drops() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("");
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
-  const [busy, setBusy] = useState(false);
+  /**
+   * What is running, and which campaign it belongs to.
+   *
+   * `key` is the campaign id whose row shows the notice, so the feedback
+   * lands where the click did and cannot be mistaken for another
+   * campaign's. Panel actions carry the campaign they act on, which is
+   * what stops that campaign's card offering the same action twice.
+   */
+  const [busy, setBusy] = useState<{ key: string; label: string } | null>(null);
+  // Whether a restart is waiting. Channels already resolved are not
+  // being watched until it happens, and the panel must not claim
+  // otherwise.
+  const [restartPending, setRestartPending] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -91,10 +103,9 @@ export function Drops() {
       const res = await api.get<{ subscriptions?: SubscriptionRow[] }>(
         "/api/subscriptions",
       );
-      // Guarded rather than trusted: a backend predating the engine, or
-      // any response without the field, must leave the panel empty
-      // rather than putting undefined where an array is expected and
-      // taking the whole page down on the next render.
+      // Guarded rather than trusted: a response without the field would
+      // otherwise put undefined where an array is expected and take the
+      // whole page down on the next render.
       setSubs(Array.isArray(res.subscriptions) ? res.subscriptions : []);
     } catch {
       // The campaign list is the page's job; a subscriptions panel that
@@ -104,16 +115,39 @@ export function Drops() {
 
   useEffect(() => { void loadSubs(); }, []);
 
-  /** Runs a subscription mutation, then re-reads the list it changed. */
-  async function mutate(run: () => Promise<unknown>) {
-    setBusy(true);
+  // Read once on mount and refreshed after any mutation: the shell owns
+  // the live SSE version for its banner, and this page only needs to
+  // know whether the channels it lists are live yet.
+  async function loadRestart() {
+    try {
+      const s = await api.get<{ pendingRestart?: { pending: boolean } }>(
+        "/api/status",
+      );
+      setRestartPending(s.pendingRestart?.pending === true);
+    } catch {
+      // Leave it as it was; the wording degrades to the optimistic case.
+    }
+  }
+
+  useEffect(() => { void loadRestart(); }, []);
+
+  /**
+   * Runs a subscription mutation, then re-reads the list it changed.
+   *
+   * `key` decides where the notice appears and `label` what it says.
+   * Resolving asks Twitch for a game's live channels, which takes
+   * seconds rather than milliseconds, so the wait needs saying.
+   */
+  async function mutate(key: string, label: string, run: () => Promise<unknown>) {
+    setBusy({ key, label });
     try {
       await run();
       await loadSubs();
+      await loadRestart();
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "that did not work");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -143,18 +177,14 @@ export function Drops() {
     // Three tiers, then soonest deadline within each.
     //
     //   1. Live, with progress on them -- watch time already committed
-    //      is what you most need to see, even when something else
-    //      expires sooner. `collected` is deliberately NOT promoted:
-    //      it is finished, and lifting it would push campaigns that
-    //      still need something down the page.
+    //      outranks anything else, even something expiring sooner.
+    //      `collected` is not promoted: it is finished, and lifting it
+    //      would push campaigns that still need something down the page.
     //   2. Everything else live.
-    //   3. Ended. Sorting purely by deadline put these at the very top,
-    //      handing the most prominent row on the page to the one thing
-    //      that can no longer be acted on -- and an ended campaign is
-    //      bottom tier whatever progress sits on it, because that
-    //      progress is frozen and can never be finished. Kept rather
-    //      than hidden: the tracker still lists them, and a drop already
-    //      earned is worth seeing.
+    //   3. Ended, whatever progress sits on it, because that progress is
+    //      frozen and can never be finished. Kept rather than hidden:
+    //      the tracker still lists them and a drop already earned is
+    //      worth seeing.
     //
     // Within a tier: soonest deadline first, so 40/60 minutes expiring
     // tonight outranks 10/60 with a week left. No end date sorts after
@@ -184,11 +214,12 @@ export function Drops() {
   if (data === null) return <Loader />;
 
   return (
-    // Capped like Settings (maw 760 there), a little wider because each
-    // row carries a name, a game, a count and a deadline. Left to fill
-    // the window, the badge on the right drifts a screen away from the
-    // name on the left and the row stops reading as one thing.
-    <Stack gap="md" maw={900} pb={80}>
+    // Capped a little wider than Settings' 760, because each row carries
+    // a name, a game, a count and a deadline; left to fill the window,
+    // the badge on the right drifts a screen away from the name on the
+    // left. The bottom padding clears the pinned restart banner, which
+    // would otherwise half-cover the last campaign.
+    <Stack gap="md" maw={900} pb={140}>
       {/* align flex-end, not the default centre: the filter input is
           taller than the button because of its label, so centring drops
           the button below the input's baseline. */}
@@ -277,37 +308,69 @@ export function Drops() {
           contradict it. */}
       {subs.length > 0 && (
         <Card withBorder padding="sm" data-testid="subscriptions">
-          <Group justify="space-between" align="center" mb="xs">
+          <Group justify="space-between" align="center" mb={4}>
             <Text fw={600} size="sm">Subscriptions</Text>
             <Button
               size="compact-xs"
               variant="default"
-              loading={busy}
+              loading={busy !== null}
               onClick={() => void mutate(
+                "panel",
+                "Re-checking channels…",
                 () => api.post("/api/subscriptions/resolve"),
               )}
             >
               Re-resolve now
             </Button>
           </Group>
+          {/* The cadence is otherwise invisible, and a page that looks
+              static when it is not invites clicking Re-resolve to check. */}
+          {busy !== null ? (
+            <Group gap="xs" wrap="nowrap" mb="xs" data-testid="resolving">
+              <Loader size="xs" />
+              <Text size="xs" c="dimmed">{busy.label}</Text>
+            </Group>
+          ) : (
+            <Text size="xs" c="dimmed" mb="xs">
+              Channels are re-checked every 15 minutes, and the miner
+              restarts when they change.
+            </Text>
+          )}
           <Stack gap="xs">
             {subs.map((sub) => (
               <Group key={sub.id} justify="space-between" wrap="nowrap" gap="xs">
                 <div style={{ minWidth: 0 }}>
                   <Text size="sm" lineClamp={1}>{sub.label}</Text>
                   <Text size="xs" c="dimmed">
-                    {/* Blank space would read as a rendering fault
-                        rather than as "not resolved yet". */}
+                    {/* Three different states, and saying the wrong one
+                        is a claim about the miner that is not true:
+                        the engine looked and found nobody live, resolved
+                        but not watched until the pending restart lands,
+                        or genuinely being watched now.
+                        An empty pool is an answer, not a wait -- the
+                        engine resolves on subscribe, so "finding
+                        channels…" here would never resolve. */}
                     {sub.channels.length === 0
-                      ? "no channels yet"
-                      : `watching ${sub.channels.join(", ")}`}
+                      ? "nobody is streaming this right now"
+                      : restartPending
+                        ? `after the restart: ${sub.channels.join(", ")}`
+                        : `watching ${sub.channels.join(", ")}`}
                   </Text>
                 </div>
                 <Button
                   size="compact-xs"
                   variant="subtle"
                   color="gray"
+                  // Every Remove goes inert, not just the one clicked:
+                  // a second removal mid-flight would post against a
+                  // subscription the first call is already deleting.
+                  loading={busy !== null}
+                  // Keyed to the campaign, not "panel": the card for
+                  // this same subscription must go inert too, or it
+                  // offers a second delete of what is already going.
                   onClick={() => void mutate(
+                    sub.targetId,
+                    "Unsubscribing…",
                     () => api.post(`/api/subscriptions/${sub.id}/remove`),
                   )}
                 >
@@ -338,14 +401,18 @@ export function Drops() {
                 key={campaign.id}
                 campaign={campaign}
                 subscribed={sub !== undefined}
-                onSubscribe={() => void mutate(() => api.post(
-                  "/api/subscriptions",
-                  { kind: "campaign", targetId: campaign.id,
-                    label: campaign.name },
-                ))}
+                busy={busy?.key === campaign.id ? busy.label : undefined}
+                onSubscribe={() => void mutate(
+                  campaign.id,
+                  "Finding channels to watch…",
+                  () => api.post("/api/subscriptions", {
+                    kind: "campaign", targetId: campaign.id,
+                    label: campaign.name,
+                  }),
+                )}
                 onUnsubscribe={() => {
                   if (sub !== undefined) {
-                    void mutate(() => api.post(
+                    void mutate(campaign.id, "Unsubscribing…", () => api.post(
                       `/api/subscriptions/${sub.id}/remove`,
                     ));
                   }
@@ -355,6 +422,7 @@ export function Drops() {
           })}
         </Stack>
       )}
+
     </Stack>
   );
 }

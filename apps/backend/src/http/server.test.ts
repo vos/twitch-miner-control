@@ -82,9 +82,8 @@ async function make(options: { statusTickMs?: number } = {}) {
     current: null, start: vi.fn(), cancel: vi.fn(),
   });
   const loginStatus = new LoginStatus();
-  // The catalogue no longer goes through the helper: campaigns come from
-  // a public tracker over plain HTTPS, while progress still comes from
-  // Twitch through the helper below.
+  // Campaigns come from a public tracker over plain HTTPS; progress
+  // still comes from Twitch through the helper below.
   const catalogue = new CampaignCatalogue({
     source: async () => campaignSource(),
     path: join(dir, "campaigns.json"),
@@ -1542,4 +1541,29 @@ test("the status frame carries the pending restart, for a late joiner", async ()
   expect(res.json().pendingRestart).toEqual({
     pending: false, dueAt: null, reason: null,
   });
+});
+
+test("subscribing resolves straight away rather than waiting for the timer", async () => {
+  // A button press that visibly does nothing for fifteen minutes reads
+  // as broken, so the route runs a pass itself.
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
+});
+
+test("a failed resolve still leaves the subscription created", async () => {
+  // The subscription is saved either way; the next pass picks it up.
+  // Failing the request would leave the user unsure whether it existed.
+  withSubs([]);
+  ctx.engine.pass.mockRejectedValueOnce(new Error("directory down"));
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(loadConfig(ctx.configPath).subscriptions).toHaveLength(1);
 });

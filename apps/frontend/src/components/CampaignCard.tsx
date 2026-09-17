@@ -1,5 +1,5 @@
 import {
-  Badge, Button, Card, Collapse, Group, Stack, Text, UnstyledButton,
+  Badge, Button, Card, Collapse, Group, Loader, Stack, Text, UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { IconChevronDown } from "@tabler/icons-react";
@@ -32,14 +32,14 @@ const ENDED = { label: "ended", colour: "gray" };
 /**
  * The badge a campaign shows.
  *
- * The collection state alone knows nothing about the campaign's window,
- * so an expired campaign announced itself as "not started" -- an
- * invitation to start something that cannot be started -- or as "in
- * progress", a claim about something that is no longer happening. Once
- * the window shuts, that progress is frozen and can never be finished.
+ * Ended overrides the collection state, which knows nothing about the
+ * campaign's window: "not started" on an expired campaign invites
+ * starting something that cannot be started, and "in progress" claims
+ * something is happening that is not -- once the window shuts that
+ * progress is frozen and can never be finished.
  *
- * `collected` is the exception and survives: it is a real achievement,
- * and the deadline passing does not undo it.
+ * `collected` survives it: a real achievement, which the deadline
+ * passing does not undo.
  */
 function badge(status: CampaignStatus, endsAt: number | null) {
   // A campaign with no end date reported is not an ended one: unknown is
@@ -56,12 +56,22 @@ function badge(status: CampaignStatus, endsAt: number | null) {
  * what the list is actually scanned for -- the game, the deadline, and
  * whether this campaign is already done.
  */
-export function CampaignCard({ campaign, subscribed, onSubscribe, onUnsubscribe }: {
+export function CampaignCard({
+  campaign, subscribed, onSubscribe, onUnsubscribe, busy,
+}: {
   campaign: ResolvedCampaign;
   /** Whether a subscription already targets this campaign. */
   subscribed?: boolean;
   onSubscribe?: () => void;
   onUnsubscribe?: () => void;
+  /**
+   * What this card is waiting on, or undefined when idle.
+   *
+   * Shown on the row itself: resolving asks Twitch for a game's live
+   * channels and takes seconds, and feedback where the click happened
+   * cannot be mistaken for another campaign's.
+   */
+  busy?: string;
 }) {
   const [open, { toggle }] = useDisclosure(false);
   const status = badge(campaign.status, campaign.endsAt);
@@ -69,11 +79,9 @@ export function CampaignCard({ campaign, subscribed, onSubscribe, onUnsubscribe 
 
   return (
     <Card withBorder padding="sm" data-testid="campaign-card">
-      {/* The subscribe button is a SIBLING of the disclosure button, not
-          a child. Nesting one interactive element inside another is
-          invalid, needs stopPropagation to stop a subscribe also
-          expanding the card, and leaves a keyboard user no way to reach
-          the inner control. */}
+      {/* The subscribe button is a sibling of the disclosure button:
+          nesting one interactive element inside another is invalid and
+          leaves a keyboard user no way to reach the inner control. */}
       <Group justify="space-between" wrap="nowrap" gap="xs" align="center">
         <UnstyledButton
           onClick={toggle}
@@ -122,11 +130,18 @@ export function CampaignCard({ campaign, subscribed, onSubscribe, onUnsubscribe 
           </Group>
         </UnstyledButton>
 
+        {/* No explicit colour: the theme's primary is Twitch purple, so
+            subscribing inherits the brand, leaving orange to mean "drop
+            in progress" on the badge beside it. Subscribed goes neutral,
+            unsubscribing not being an action to encourage. */}
         {onSubscribe !== undefined && (
           <Button
             size="compact-xs"
-            variant={subscribed === true ? "light" : "filled"}
-            color={subscribed === true ? "gray" : "orange"}
+            variant={subscribed === true ? "default" : "filled"}
+            // The button is what was clicked; leaving it inert while a
+            // notice appears reads as the click not registering. Also
+            // stops a second click racing the first.
+            loading={busy !== undefined}
             onClick={() => {
               if (subscribed === true) onUnsubscribe?.();
               else onSubscribe();
@@ -136,6 +151,13 @@ export function CampaignCard({ campaign, subscribed, onSubscribe, onUnsubscribe 
           </Button>
         )}
       </Group>
+
+      {busy !== undefined && (
+        <Group gap="xs" wrap="nowrap" mt="xs" data-testid="campaign-busy">
+          <Loader size="xs" />
+          <Text size="xs" c="dimmed">{busy}</Text>
+        </Group>
+      )}
 
       <Collapse expanded={open} keepMounted={false}>
         <Stack gap="sm" mt="sm">

@@ -11,13 +11,12 @@ import type { Campaign, CampaignDrop } from "./campaignCatalogue.js";
  *    "path":["currentUser","dropCampaigns"],
  *    "extensions":{"code":"IntegrityCheckFailed"}}
  *
- * An integrity token can be obtained from gql.twitch.tv/integrity, but
- * the gated query rejects it anyway: the endpoint is fronted by Kasada
- * (X-Kpsdk-* response headers), whose challenge needs a browser to
- * execute it. Upstream hit the same wall -- their post_integrity is
- * commented out in Twitch.py. Beating it would mean running a headless
- * browser against an anti-bot system, which is both fragile and a good
- * way to get the account banned.
+ * An integrity token from gql.twitch.tv/integrity does not satisfy it:
+ * the endpoint is fronted by Kasada (X-Kpsdk-* response headers), whose
+ * challenge needs a browser to execute. Upstream hit the same wall --
+ * their post_integrity is commented out in Twitch.py. Beating it means
+ * driving a headless browser at an anti-bot system, which is fragile
+ * and a good way to get the account banned.
  *
  * So the catalogue comes from a public tracker instead, and progress
  * still comes from Twitch: the Inventory query is NOT gated and works

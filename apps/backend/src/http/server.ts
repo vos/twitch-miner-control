@@ -538,6 +538,13 @@ export function buildServer(deps: ServerDeps): AppServer {
         ...config,
         subscriptions: [...config.subscriptions, subscription],
       });
+      // Resolved now rather than on the engine's next quarter-hour pass:
+      // a button press that visibly does nothing for fifteen minutes
+      // reads as broken. Failures are swallowed on purpose -- the
+      // subscription is already saved and the next pass will pick it up,
+      // so failing the request would leave the user unsure whether it
+      // exists at all.
+      await deps.engine.pass().catch(() => {});
       return { subscription };
     });
 
