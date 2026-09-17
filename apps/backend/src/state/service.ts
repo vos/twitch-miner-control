@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { History } from "../db/history.js";
 import type { Streamers } from "../db/streamers.js";
 import { attribute } from "./attribute.js";
-import { downsample } from "./gains.js";
+import { downsample, gainWindow } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
 import type { ProfileRowData } from "./profiles.js";
@@ -413,37 +413,6 @@ export class StateService extends EventEmitter {
     return this.inFlight;
   }
 
-  /**
-   * The baseline a gain is measured from, plus the moment it describes.
-   *
-   * Prefers the balance in force at `from` -- a full window. When the
-   * streamer has been tracked for less than that, falls back to its
-   * earliest snapshot: a partial window is a real number over a real span,
-   * and withholding it left a new streamer showing nothing for a day
-   * despite the history to compute it sitting in the table.
-   *
-   * Returns null only when the sole snapshot is the one this very tick
-   * just wrote. There is no *elapsed* time then, so any figure would be a
-   * confident "+0" about a window that has not happened yet -- the one
-   * case the em dash is actually telling the truth about.
-   */
-  private gainWindow(
-    username: string,
-    from: number,
-  ): { ts: number | null; balance: number } | null {
-    const earliest = this.deps.history.earliestSample(username);
-    if (earliest === null || earliest.ts >= this.now()) return null;
-    if (earliest.ts <= from) {
-      const past = this.deps.history.balanceAt(username, from);
-      // A full window needs no span: the label is simply "24h". Reporting
-      // the cutoff here would encode "now" into a derived field, so every
-      // tick would differ from the last and wake every SSE client with a
-      // payload nothing actually changed in.
-      if (past !== null) return { ts: null, balance: past };
-    }
-    return earliest;
-  }
-
   private async doRefresh(): Promise<void> {
     const usernames = await this.deps.getStreamers();
     this.roster = usernames;
@@ -616,7 +585,7 @@ export class StateService extends EventEmitter {
     const anchor = s.streamId === null
       ? null
       : this.deps.history.streamAnchor(s.username, s.streamId);
-    const window = this.gainWindow(s.username, dayAgo);
+    const window = gainWindow(this.deps.history, s.username, dayAgo, this.now());
     const gained24h =
       window === null || typeof s.points !== "number"
         ? null

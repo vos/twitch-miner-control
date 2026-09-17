@@ -1,4 +1,47 @@
-import type { PointSample } from "../db/history.js";
+import type { History, PointSample } from "../db/history.js";
+
+/** The subset of History a gain window reads. */
+type GainSource = Pick<History, "earliestSample" | "balanceAt">;
+
+/**
+ * The baseline a gain is measured from, plus the moment it describes.
+ *
+ * Prefers the balance in force at `from` -- a full window. When the
+ * streamer has been tracked for less than that, falls back to its
+ * earliest snapshot: a partial window is a real number over a real span,
+ * and withholding it left a new streamer showing nothing for a day
+ * despite the history to compute it sitting in the table.
+ *
+ * Returns null only when the sole snapshot is at or after `now`. There is
+ * no *elapsed* time then, so any figure would be a confident "+0" about a
+ * window that has not happened yet -- the one case the em dash is
+ * actually telling the truth about.
+ *
+ * `ts` is null for a full window, and the real start for a short one, so
+ * a caller can label three hours as "3h" rather than "24h". Never the
+ * cutoff itself: that would encode "now" into a derived field, so every
+ * tick would differ from the last and wake every SSE client with a
+ * payload nothing actually changed in.
+ *
+ * Shared by the dashboard's gained24h and the detail dialog's per-range
+ * gain. One implementation deliberately: the two figures sit on screen
+ * together when the dialog is open over the card, and a second copy of
+ * this rule would let them disagree about the same channel.
+ */
+export function gainWindow(
+  history: GainSource,
+  username: string,
+  from: number,
+  now: number,
+): { ts: number | null; balance: number } | null {
+  const earliest = history.earliestSample(username);
+  if (earliest === null || earliest.ts >= now) return null;
+  if (earliest.ts <= from) {
+    const past = history.balanceAt(username, from);
+    if (past !== null) return { ts: null, balance: past };
+  }
+  return earliest;
+}
 
 /**
  * Reduces a change-only series to a fixed-length array of balances for a

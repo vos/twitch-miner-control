@@ -378,6 +378,46 @@ test("GET /api/history reports the oldest kept sample as the retention floor", a
   expect(res.json().retentionFloor).toBe(5000);
 });
 
+test("GET /api/history measures the window gain from the balance before it", async () => {
+  // The baseline is the balance in force at `from`, which is a sample
+  // OUTSIDE the window. Differencing the returned series instead would
+  // report 30 here (50 - 20) and lose the step from 10 to 20.
+  ctx.history.recordPoints("alpha", 10, 1000);
+  ctx.history.recordPoints("alpha", 20, 6000);
+  ctx.history.recordPoints("alpha", 50, 8000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=5000&to=9000", cookies: auth(),
+  });
+  const body = res.json();
+  expect(body.gained).toBe(40);
+  // A full window: the dialog labels it with the range it asked for.
+  expect(body.gainedSince).toBeNull();
+});
+
+test("GET /api/history reports the real start of a window it has less history than", async () => {
+  // Tracked since 5000 but asked for a window starting at 0: the gain is
+  // real over a real span, and gainedSince is what lets the dialog say
+  // so rather than claiming the whole range.
+  ctx.history.recordPoints("alpha", 10, 5000);
+  ctx.history.recordPoints("alpha", 70, 8000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=9000", cookies: auth(),
+  });
+  const body = res.json();
+  expect(body.gained).toBe(60);
+  expect(body.gainedSince).toBe(5000);
+});
+
+test("GET /api/history leaves the gain null when there is no earlier balance", async () => {
+  // One sample, at the very end of the window: there is no elapsed time
+  // to have earned anything in, so "+0" would be a confident wrong claim.
+  ctx.history.recordPoints("alpha", 10, 9000);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/history?streamer=alpha&from=0&to=9000", cookies: auth(),
+  });
+  expect(res.json().gained).toBeNull();
+});
+
 test("GET /api/history returns empty blocks for an untracked streamer", async () => {
   const res = await ctx.app.inject({
     method: "GET", url: "/api/history?streamer=nobody&from=0&to=99999", cookies: auth(),

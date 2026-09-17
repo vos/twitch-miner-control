@@ -14,6 +14,7 @@ import type { LoginStatus } from "../helpers/loginStatus.js";
 import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
+import { gainWindow } from "../state/gains.js";
 import type { StateService } from "../state/service.js";
 import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
@@ -474,8 +475,23 @@ export function buildServer(deps: ServerDeps): AppServer {
         return { streamId: s.streamId, start: s.start, end: s.end, mined, earned };
       });
       const liveSpans = deps.history.streamerSpans(login, from);
+      // The window's gain, by the same rule the dashboard card uses for
+      // its 24h figure -- the closing balance less the balance in force
+      // at `from`. NOT the first and last samples of `series`: that
+      // series is clipped to the window, so its first row already
+      // includes its own gain and differencing inside it undercounts by
+      // exactly that much. The baseline is the balance *before* the
+      // window, which is a row `series` does not contain.
+      const window = gainWindow(deps.history, login, from, to);
+      const closing = deps.history.balanceAt(login, to);
       return {
         series: deps.history.pointsSeries(login, from, to),
+        gained: window === null || closing === null ? null : closing - window.balance,
+        // Null for a full window (the label is just the range), the real
+        // start when the channel has been tracked for less than it -- so
+        // three days under a "30 days" range says "3d" instead of
+        // claiming a month of history it does not have.
+        gainedSince: window?.ts ?? null,
         events: deps.history.eventsFor(login, 100),
         sessions,
         coverage: {
