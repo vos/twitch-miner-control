@@ -85,3 +85,63 @@ export function coverageRows(
   }
   return rows;
 }
+
+/** A rendered row: either one day, or a stretch of days with no stream. */
+export type CoverageEntry =
+  | { kind: "day"; day: CoverageDay }
+  | { kind: "gap"; days: number; from: number; to: number };
+
+/**
+ * Minimum consecutive quiet days before they are collapsed into one line.
+ *
+ * Two, because collapsing a single day saves nothing: "1 day dark" is
+ * wider than the date it would replace, and the row is spent either way.
+ */
+const MIN_GAP = 2;
+
+/**
+ * Trims and collapses the days a channel did not stream.
+ *
+ * The strip is a calendar, and under the longer ranges most of it can be
+ * empty -- a channel streaming twice a week fills two rows of fourteen
+ * and spends the other twelve on em dashes. Simply dropping them would
+ * break what the strip is: consecutive rows would no longer be
+ * consecutive days, so a fortnight of silence would read exactly like
+ * daily streaming.
+ *
+ * So the ends are trimmed -- there is nothing before a channel's first
+ * stream to describe -- and an interior run becomes one line that says
+ * how long it was. The gap stays visible and stops costing a row a day.
+ *
+ * Quiet means `liveMs === 0`: the channel did not stream at all. A day it
+ * streamed and we mined none of is emphatically NOT quiet -- that row is
+ * the whole point of the block.
+ */
+export function collapseQuietDays(rows: CoverageDay[]): CoverageEntry[] {
+  const active = rows.map((r) => r.liveMs > 0);
+  const first = active.indexOf(true);
+  // No day in the window saw a stream: the caller says so itself rather
+  // than rendering a single gap line describing the entire range.
+  if (first === -1) return [];
+  const last = active.lastIndexOf(true);
+
+  const out: CoverageEntry[] = [];
+  for (let i = first; i <= last; i += 1) {
+    if (active[i]) {
+      out.push({ kind: "day", day: rows[i] });
+      continue;
+    }
+    // A run of quiet days, bounded by the active days on either side --
+    // `last` guarantees there is one ahead, so this never runs off.
+    let end = i;
+    while (!active[end + 1]) end += 1;
+    const days = end - i + 1;
+    if (days >= MIN_GAP) {
+      out.push({ kind: "gap", days, from: rows[i].dayStart, to: rows[end].dayStart });
+    } else {
+      for (let j = i; j <= end; j += 1) out.push({ kind: "day", day: rows[j] });
+    }
+    i = end;
+  }
+  return out;
+}

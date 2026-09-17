@@ -1,0 +1,14 @@
+/* The rule either side of "N days dark".
+
+   A centred label between two hairlines rather than another dated row:
+   the entry stands for days that are not on the calendar any more, so it
+   must not look like one of the days that still are. The rule reads as a
+   seam in the strip, which is what it is. */
+.gapRule {
+  flex: 1;
+  height: 1px;
+  background: var(--tw-border);
+  /* The strip's own rows are full-strength against the track; this is a
+     divider between them, so it sits back. */
+  opacity: 0.6;
+}

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { coverageRows } from "./coverageRows.js";
+import { collapseQuietDays, coverageRows } from "./coverageRows.js";
 
 const HOUR = 3_600_000;
 // 22:00 local, whatever the machine's zone: late enough that "a few hours
@@ -67,4 +67,52 @@ test("rows stay on consecutive local midnights across a DST change", () => {
     expect(dates.every((d) => d.getHours() === 0 && d.getMinutes() === 0)).toBe(true);
     expect(new Set(dates.map((d) => d.toDateString())).size).toBe(14);
   }
+});
+
+/** A row as collapseQuietDays sees it: only the fields it reads. */
+const day = (offset: number, liveMs = 0) => ({
+  dayStart: new Date(1970, 0, 10 - offset).getTime(),
+  live: [], mined: [], liveMs, minedMs: 0,
+});
+
+test("collapse keeps a run of days that all have activity", () => {
+  const rows = [day(2, HOUR), day(1, HOUR), day(0, HOUR)];
+  expect(collapseQuietDays(rows).map((e) => e.kind)).toEqual(["day", "day", "day"]);
+});
+
+test("collapse drops quiet days at the ends rather than showing empty rows", () => {
+  // The strip should open on the first day worth looking at, not on a
+  // week of em dashes before the channel's first stream.
+  const rows = [day(4), day(3), day(2, HOUR), day(1), day(0)];
+  const out = collapseQuietDays(rows);
+  expect(out).toHaveLength(1);
+  expect(out[0]).toMatchObject({ kind: "day" });
+});
+
+test("collapse replaces an interior run of quiet days with one gap entry", () => {
+  const rows = [day(5, HOUR), day(4), day(3), day(2), day(1), day(0, HOUR)];
+  const out = collapseQuietDays(rows);
+  expect(out.map((e) => e.kind)).toEqual(["day", "gap", "day"]);
+  expect(out[1]).toMatchObject({ kind: "gap", days: 4 });
+});
+
+test("collapse leaves a single quiet day as its own row", () => {
+  // One dark day between two streaming days costs a row either way, and
+  // "1 day dark" is longer than the date it replaces.
+  const rows = [day(2, HOUR), day(1), day(0, HOUR)];
+  expect(collapseQuietDays(rows).map((e) => e.kind)).toEqual(["day", "day", "day"]);
+});
+
+test("collapse counts a day as quiet on live time, not mined time", () => {
+  // A day the channel streamed and we mined none of it is the single
+  // most important row in the block -- it is what the gap between the
+  // two tones exists to show, and must never be collapsed away.
+  const rows = [day(2, HOUR), day(1, 5 * HOUR), day(0, HOUR)];
+  const out = collapseQuietDays(rows);
+  expect(out.map((e) => e.kind)).toEqual(["day", "day", "day"]);
+});
+
+test("collapse returns nothing when no day in the window has activity", () => {
+  // The caller renders its own empty state rather than a lone gap line.
+  expect(collapseQuietDays([day(2), day(1), day(0)])).toEqual([]);
 });

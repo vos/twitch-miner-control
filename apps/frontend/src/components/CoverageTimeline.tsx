@@ -1,10 +1,25 @@
 import { Group, Stack, Text } from "@mantine/core";
-import { coverageRows, type Span } from "../lib/coverageRows.js";
+import { collapseQuietDays, coverageRows, type Span } from "../lib/coverageRows.js";
 import { formatWorked } from "../lib/formatWorked.js";
+import classes from "./CoverageTimeline.module.css";
 
 /** The band's coordinate space; it renders fluid via preserveAspectRatio. */
 const TRACK_WIDTH = 100;
 const TRACK_HEIGHT = 10;
+
+/**
+ * Short of full strength.
+ *
+ * --tw-success is a saturated neon green, sized for a sparkline stroke or
+ * a few characters of gain text. Here it fills whole rows at once, and a
+ * miner up for days turned the strip into a solid block of it.
+ *
+ * Dimmed, the band still reads as the emphatic half of the pair against
+ * the 0.35 live tone beneath it -- which is the comparison this block
+ * exists to make -- without glowing. Opacity rather than a second green
+ * token, so --tw-success stays the one success colour the app has.
+ */
+const MINED_OPACITY = 0.75;
 
 /**
  * A day-by-day strip of when this channel was live, and how much of that
@@ -20,7 +35,9 @@ export function CoverageTimeline({ coverage, days }: {
   coverage: { live: Span[]; mined: Span[] };
   days: number;
 }) {
-  const rows = coverageRows(coverage.live, coverage.mined, days, Date.now());
+  const entries = collapseQuietDays(
+    coverageRows(coverage.live, coverage.mined, days, Date.now()),
+  );
 
   return (
     <Stack gap="xs">
@@ -31,10 +48,24 @@ export function CoverageTimeline({ coverage, days }: {
         <Text size="xs" c="dimmed">mined / live</Text>
       </Group>
 
-      {rows.map((row) => (
-        <Group key={row.dayStart} gap="sm" wrap="nowrap" data-testid="coverage-day">
+      {entries.length === 0 && (
+        <Text size="xs" c="dimmed" data-testid="coverage-empty">
+          This channel has not streamed in this window.
+        </Text>
+      )}
+
+      {entries.map((entry) => entry.kind === "gap" ? (
+        <Group key={entry.from} gap="sm" wrap="nowrap" data-testid="coverage-gap">
+          <div className={classes.gapRule} />
+          <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>
+            {entry.days} days dark
+          </Text>
+          <div className={classes.gapRule} />
+        </Group>
+      ) : (
+        <Group key={entry.day.dayStart} gap="sm" wrap="nowrap" data-testid="coverage-day">
           <Text size="xs" c="dimmed" style={{ width: 52, flexShrink: 0 }}>
-            {new Date(row.dayStart).toLocaleDateString(undefined,
+            {new Date(entry.day.dayStart).toLocaleDateString(undefined,
               { month: "short", day: "numeric" })}
           </Text>
           <svg
@@ -50,7 +81,7 @@ export function CoverageTimeline({ coverage, days }: {
               x={0} y={0} width={TRACK_WIDTH} height={TRACK_HEIGHT}
               fill="var(--tw-border)" fillOpacity={0.35} rx={1}
             />
-            {row.live.map((band, i) => (
+            {entry.day.live.map((band, i) => (
               <rect
                 key={`live-${i}`}
                 data-testid="live-band"
@@ -62,7 +93,7 @@ export function CoverageTimeline({ coverage, days }: {
                 fillOpacity={0.35}
               />
             ))}
-            {row.mined.map((band, i) => (
+            {entry.day.mined.map((band, i) => (
               <rect
                 key={`mined-${i}`}
                 data-testid="mined-band"
@@ -71,6 +102,7 @@ export function CoverageTimeline({ coverage, days }: {
                 width={Math.max(0.4, (band.endFraction - band.startFraction) * TRACK_WIDTH)}
                 height={TRACK_HEIGHT}
                 fill="var(--tw-success)"
+                fillOpacity={MINED_OPACITY}
               />
             ))}
           </svg>
@@ -81,9 +113,9 @@ export function CoverageTimeline({ coverage, days }: {
             {/* A day the channel never streamed has nothing to report --
                 "0m / 0m" reads as a failure to mine rather than as an
                 absence of anything to mine. */}
-            {row.liveMs === 0
+            {entry.day.liveMs === 0
               ? "—"
-              : `${formatWorked(row.minedMs)} / ${formatWorked(row.liveMs)}`}
+              : `${formatWorked(entry.day.minedMs)} / ${formatWorked(entry.day.liveMs)}`}
           </Text>
         </Group>
       ))}
