@@ -1,5 +1,6 @@
 import { Group, ScrollArea, Stack, Text } from "@mantine/core";
 import { collapseActivity } from "../lib/collapseActivity.js";
+import { formatClock } from "../lib/formatClock.js";
 import classes from "./StreamerActivityLog.module.css";
 
 const nf = new Intl.NumberFormat("en-US");
@@ -9,9 +10,6 @@ export interface ActivityEvent {
   type: string;
   message: string | null;
 }
-
-const time = (ts: number) =>
-  new Date(ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 const dayKey = (ts: number) =>
   new Date(ts).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
@@ -114,7 +112,7 @@ export function StreamerActivityLog({ events, maxHeight = 260, fill = false }: {
                     </span>
                   )}
                   <div style={{ flex: 1 }} />
-                  <Text size="xs" c="dimmed">{time(row.ts)}</Text>
+                  <Text size="xs" c="dimmed">{formatClock(row.ts)}</Text>
                 </Group>
               ))}
             </Stack>

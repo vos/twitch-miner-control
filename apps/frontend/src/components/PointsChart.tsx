@@ -3,6 +3,7 @@ import { Group, SegmentedControl, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { bucketPoints, type PointSample } from "../lib/bucketPoints.js";
 import type { RangeKey } from "../lib/detailRanges.js";
+import { formatClock, formatDateHour, formatDay } from "../lib/formatClock.js";
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -14,15 +15,14 @@ const CHART_HEIGHT = 240;
 
 /** Precise to the bucket: 7d buckets are six hours wide, so a date alone
  *  labels four neighbouring points identically. */
-const LABEL: Record<RangeKey, Intl.DateTimeFormatOptions> = {
-  "24h": { hour: "numeric", minute: "2-digit" },
-  "7d": { month: "short", day: "numeric", hour: "numeric" },
-  "30d": { month: "short", day: "numeric" },
-  all: { month: "short", day: "numeric" },
+const LABEL: Record<RangeKey, (ts: number) => string> = {
+  "24h": formatClock,
+  "7d": formatDateHour,
+  "30d": formatDay,
+  all: formatDay,
 };
 
-const dateLabel = (ts: number, range: RangeKey) =>
-  new Date(ts).toLocaleString(undefined, LABEL[range]);
+const dateLabel = (ts: number, range: RangeKey) => LABEL[range](ts);
 
 /**
  * One channel's balance over time, and the gains that moved it.
