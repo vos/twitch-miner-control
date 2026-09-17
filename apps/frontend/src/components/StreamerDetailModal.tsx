@@ -38,7 +38,17 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
   // its selection on close, and unmounting in that same render would cut
   // the exit transition and skip Mantine returning focus to the card.
   const [shown, setShown] = useState(streamer);
-  if (streamer !== null && streamer !== shown) setShown(streamer);
+  // Only a DIFFERENT channel is worth a state update. The dashboard
+  // derives this prop with `snapshot.streamers.find(...)` and rebuilds
+  // the snapshot on every SSE frame, so the old reference test was true
+  // on every frame for an unchanged channel -- a render-phase setState
+  // firing several times a minute to store an equivalent object.
+  //
+  // `shown` is therefore only a fallback for the closing animation, and
+  // never what a live figure is read from: `streamer ?? shown` prefers
+  // the fresh prop whenever there is one, so points and the LIVE clock
+  // keep ticking while the dialog is open.
+  if (streamer !== null && streamer.username !== shown?.username) setShown(streamer);
   const s = streamer ?? shown;
 
   const [range, setRange] = useState<RangeKey>("7d");

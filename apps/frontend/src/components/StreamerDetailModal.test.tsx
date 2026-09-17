@@ -269,6 +269,44 @@ test("the standalone feed is given more height than the inline default", async (
   expect(capped?.getAttribute("style")).toContain("max-height: 100%");
 });
 
+test("an SSE frame for the same channel does not reset the dialog's own state", async () => {
+  // The dashboard rebuilds its snapshot on every frame, so this prop is
+  // a fresh object several times a minute. Deriving state from it by
+  // reference re-ran a render-phase setState for nothing; the range the
+  // user picked must survive those frames untouched.
+  stubFetch();
+  const { rerender } = renderApp(
+    <StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />,
+  );
+  await screen.findByTestId("coverage-empty");
+  await userEvent.click(screen.getByRole("radio", { name: "30 days" }));
+
+  // A new object, same channel -- exactly what .find() returns per frame.
+  rerender(
+    <MantineProvider theme={theme} forceColorScheme="dark">
+      <StreamerDetailModal streamer={streamer({ points: 1234 })} opened onClose={() => {}} />
+    </MantineProvider>,
+  );
+  expect(screen.getByRole("radio", { name: "30 days" })).toBeChecked();
+});
+
+test("live figures still follow the snapshot while the dialog is open", async () => {
+  // The flip side: `shown` must not become the source of truth, or the
+  // balance and LIVE clock would freeze the moment the dialog opened.
+  stubFetch();
+  const { rerender } = renderApp(
+    <StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />,
+  );
+  expect(await screen.findByTestId("detail-balance")).toHaveTextContent("1,000");
+
+  rerender(
+    <MantineProvider theme={theme} forceColorScheme="dark">
+      <StreamerDetailModal streamer={streamer({ points: 2500 })} opened onClose={() => {}} />
+    </MantineProvider>,
+  );
+  expect(screen.getByTestId("detail-balance")).toHaveTextContent("2,500");
+});
+
 test("the activity view lets the feed own the scrolling, not the modal too", async () => {
   // Two scrollbars appeared when the feed overflowed the modal's own
   // `overflow-y: auto` content box. The body becomes a flex column that
