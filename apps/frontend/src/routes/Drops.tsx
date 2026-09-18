@@ -55,6 +55,32 @@ function age(at: number): string {
   return delta < 60_000 ? "just now" : `${formatSpan(delta)} ago`;
 }
 
+/** Whether a campaign's own name or its game contains the needle. */
+function matchesHeader(c: ResolvedCampaign, needle: string): boolean {
+  return c.name.toLowerCase().includes(needle)
+    || (c.game?.displayName.toLowerCase().includes(needle) ?? false);
+}
+
+/** Whether any drop inside the campaign contains the needle. */
+function matchesDrop(c: ResolvedCampaign, needle: string): boolean {
+  return c.drops.some((d) => d.name.toLowerCase().includes(needle));
+}
+
+/**
+ * Whether the only reason this campaign survived the filter is a drop.
+ *
+ * Such a card is opened, because everything on the collapsed row -- name,
+ * game, deadline -- lacks what was typed, and a result that does not
+ * visibly contain the search term reads as a bug. A campaign matched by
+ * its own name or game is left alone: the match is already on the row,
+ * and opening it would spend a screenful to show nothing new.
+ */
+function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
+  const needle = filter.trim().toLowerCase();
+  if (needle === "") return false;
+  return !matchesHeader(c, needle) && matchesDrop(c, needle);
+}
+
 /**
  * Every running drop campaign, with this viewer's progress against each.
  *
@@ -169,10 +195,12 @@ export function Drops() {
       needle === "" || data === null
         ? data?.campaigns ?? []
         : data.campaigns.filter((c) =>
-            // Name or game: the game is how most campaigns are actually
-            // found, and a second box for it would not earn its width.
-            c.name.toLowerCase().includes(needle)
-            || (c.game?.displayName.toLowerCase().includes(needle) ?? false));
+            // Name, game or drop: the game is how most campaigns are
+            // actually found, and the drop is often the only name the
+            // player knows -- they are hunting a particular skin, not
+            // whatever the campaign offering it is called. A separate box
+            // per field would not earn its width.
+            matchesHeader(c, needle) || matchesDrop(c, needle));
 
     // Three tiers, then soonest deadline within each.
     //
@@ -226,7 +254,7 @@ export function Drops() {
       <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
         <TextInput
           label="Filter"
-          placeholder="Campaign or game"
+          placeholder="Campaign, game or drop"
           leftSection={<IconSearch size={16} />}
           value={filter}
           onChange={(e) => setFilter(e.currentTarget.value)}
@@ -401,6 +429,7 @@ export function Drops() {
                 key={campaign.id}
                 campaign={campaign}
                 subscribed={sub !== undefined}
+                expand={matchedByDropOnly(campaign, filter)}
                 busy={busy?.key === campaign.id ? busy.label : undefined}
                 onSubscribe={() => void mutate(
                   campaign.id,

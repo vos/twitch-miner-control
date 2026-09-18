@@ -9,6 +9,11 @@ const aDrop = {
   requiredMinutes: 60, minutes: 0, status: "not-started",
 };
 
+const aHelmet = {
+  id: "d2", name: "Gilded Helmet", benefits: ["Gilded Helmet"],
+  requiredMinutes: 60, minutes: 0, status: "not-started",
+};
+
 const payload = {
   campaigns: [
     { id: "c1", name: "Alpha Campaign",
@@ -18,7 +23,7 @@ const payload = {
     { id: "c2", name: "Beta Campaign",
       game: { id: "g2", slug: "beta-game", displayName: "Beta Game" },
       startsAt: 1, endsAt: Date.now() + 86_400_000,
-      drops: [aDrop], status: "partial" },
+      drops: [aHelmet], status: "partial" },
   ],
   catalogueFetchedAt: Date.now() - 3_600_000,
   catalogueStale: false,
@@ -71,6 +76,67 @@ test("filters by game", async () => {
   // The game is a campaign's most useful handle, so the same box matches it.
   expect(screen.getByText("Beta Campaign")).toBeTruthy();
   expect(screen.queryByText("Alpha Campaign")).toBeNull();
+});
+
+test("filters by the name of a drop inside a campaign", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  // The reward is often the only name a player knows -- they are hunting
+  // the helmet, not whatever the campaign behind it is called.
+  await userEvent.type(screen.getByLabelText(/filter/i), "Gilded Helmet");
+  expect(screen.getByText("Beta Campaign")).toBeTruthy();
+  expect(screen.queryByText("Alpha Campaign")).toBeNull();
+});
+
+test("opens a campaign matched only by its drop", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.type(screen.getByLabelText(/filter/i), "Gilded Helmet");
+  // Otherwise the card that survived the filter shows nothing containing
+  // what was typed, and the match looks like a bug.
+  expect(screen.getByText("Gilded Helmet")).toBeTruthy();
+});
+
+test("closes a drop-matched campaign again when the filter is cleared", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.type(screen.getByLabelText(/filter/i), "Gilded Helmet");
+  expect(screen.getByText("Gilded Helmet")).toBeTruthy();
+  await userEvent.clear(screen.getByLabelText(/filter/i));
+  // The card was opened by the search, not by the reader, so it should
+  // not stay open and cost the list its scannability.
+  //
+  // Asserted on aria-expanded rather than on the drop being gone:
+  // Collapse unmounts its content only once the CSS transition ends, and
+  // jsdom never fires transitionend, so the row stays in the test DOM
+  // however long we wait. aria-expanded is the state itself.
+  await waitFor(() => expect(
+    screen.getByRole("button", { name: /Beta Campaign, 1 drops/ }),
+  ).toHaveAttribute("aria-expanded", "false"));
+});
+
+test("a reader can still close a card the filter opened", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.type(screen.getByLabelText(/filter/i), "Gilded Helmet");
+  const row = screen.getByRole("button", { name: /Beta Campaign, 1 drops/ });
+  expect(row).toHaveAttribute("aria-expanded", "true");
+  await userEvent.click(row);
+  // Forcing it open must not mean nailing it open. On aria-expanded for
+  // the same reason as above: jsdom fires no transitionend, so Collapse
+  // never unmounts the drop it is closing over.
+  expect(row).toHaveAttribute("aria-expanded", "false");
+});
+
+test("leaves a campaign matched by its own name closed", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.type(screen.getByLabelText(/filter/i), "Beta Campaign");
+  // The name is already on the collapsed row, so there is nothing to
+  // reveal and forcing it open would just cost the reader space.
+  expect(
+    screen.getByRole("button", { name: /Beta Campaign, 1 drops/ }),
+  ).toHaveAttribute("aria-expanded", "false");
 });
 
 test("says so when a filter matches nothing", async () => {

@@ -2,6 +2,7 @@ import {
   Badge, Button, Card, Collapse, Group, Loader, Stack, Text, UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
+import { useState } from "react";
 import { IconChevronDown } from "@tabler/icons-react";
 import { formatSpan } from "../lib/formatSpan.js";
 import { DropRow, type ResolvedDrop } from "./DropRow.js";
@@ -57,9 +58,18 @@ function badge(status: CampaignStatus, endsAt: number | null) {
  * whether this campaign is already done.
  */
 export function CampaignCard({
-  campaign, subscribed, onSubscribe, onUnsubscribe, busy,
+  campaign, subscribed, onSubscribe, onUnsubscribe, busy, expand = false,
 }: {
   campaign: ResolvedCampaign;
+  /**
+   * Force the drops open regardless of the disclosure.
+   *
+   * Set when the card survived a filter only because a drop inside it
+   * matched: collapsed, it would show nothing containing what was typed.
+   * The toggle still works while this is set, so a reader who wants the
+   * row back can close it.
+   */
+  expand?: boolean;
   /** Whether a subscription already targets this campaign. */
   subscribed?: boolean;
   onSubscribe?: () => void;
@@ -73,7 +83,17 @@ export function CampaignCard({
    */
   busy?: string;
 }) {
-  const [open, { toggle }] = useDisclosure(false);
+  const [open, { toggle, set }] = useDisclosure(expand);
+  // useDisclosure reads its argument once, so follow `expand` when it
+  // flips -- typing a drop name opens the card, clearing the box closes
+  // it again. Tracking the previous value rather than running an effect
+  // keeps a reader's own toggle in between: this only fires on the
+  // transition, not on every render while the filter stands.
+  const [wasExpanded, setWasExpanded] = useState(expand);
+  if (wasExpanded !== expand) {
+    setWasExpanded(expand);
+    set(expand);
+  }
   const status = badge(campaign.status, campaign.endsAt);
   const count = campaign.drops.length;
 
