@@ -111,7 +111,7 @@ test("closes a drop-matched campaign again when the filter is cleared", async ()
   // jsdom never fires transitionend, so the row stays in the test DOM
   // however long we wait. aria-expanded is the state itself.
   await waitFor(() => expect(
-    screen.getByRole("button", { name: /Beta Campaign, 1 drops/ }),
+    screen.getByRole("button", { name: /Beta Campaign, 1 drop/ }),
   ).toHaveAttribute("aria-expanded", "false"));
 });
 
@@ -119,7 +119,7 @@ test("a reader can still close a card the filter opened", async () => {
   renderApp(<Drops />);
   await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
   await userEvent.type(screen.getByLabelText(/filter/i), "Gilded Helmet");
-  const row = screen.getByRole("button", { name: /Beta Campaign, 1 drops/ });
+  const row = screen.getByRole("button", { name: /Beta Campaign, 1 drop/ });
   expect(row).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(row);
   // Forcing it open must not mean nailing it open. On aria-expanded for
@@ -135,7 +135,7 @@ test("leaves a campaign matched by its own name closed", async () => {
   // The name is already on the collapsed row, so there is nothing to
   // reveal and forcing it open would just cost the reader space.
   expect(
-    screen.getByRole("button", { name: /Beta Campaign, 1 drops/ }),
+    screen.getByRole("button", { name: /Beta Campaign, 1 drop/ }),
   ).toHaveAttribute("aria-expanded", "false");
 });
 
@@ -1029,4 +1029,197 @@ test("channel links open in a new tab, away from the miner", async () => {
     .getByRole("link", { name: "beta" });
   expect(link.getAttribute("target")).toBe("_blank");
   expect(link.getAttribute("rel")).toMatch(/noopener/);
+});
+
+// --- view filters ---
+
+/** The catalogue as a mix of running, scheduled, ended and collected. */
+function mixedPayload() {
+  const now = Date.now();
+  return {
+    ...payload,
+    campaigns: [
+      { id: "run", name: "Running One",
+        game: { id: "g1", slug: "g1", displayName: "Running Game" },
+        startsAt: now - 3_600_000, endsAt: now + 86_400_000,
+        drops: [aDrop], status: "untouched" },
+      { id: "soon", name: "Scheduled One",
+        game: { id: "g2", slug: "g2", displayName: "Scheduled Game" },
+        startsAt: now + 3_600_000, endsAt: now + 86_400_000,
+        drops: [aDrop], status: "untouched" },
+      { id: "done", name: "Ended One",
+        game: { id: "g3", slug: "g3", displayName: "Ended Game" },
+        startsAt: now - 86_400_000, endsAt: now - 3_600_000,
+        drops: [aDrop], status: "untouched" },
+      { id: "got", name: "Collected One",
+        game: { id: "g4", slug: "g4", displayName: "Collected Game" },
+        startsAt: now - 3_600_000, endsAt: now + 86_400_000,
+        drops: [aDrop], status: "collected" },
+    ],
+  };
+}
+
+async function shownGames(): Promise<string[]> {
+  const cards = await screen.findAllByTestId("campaign-card");
+  return cards.map((c) =>
+    c.querySelector('[data-testid="campaign-game"]')?.textContent ?? "");
+}
+
+test("shows every campaign under All", async () => {
+  body = mixedPayload();
+  renderApp(<Drops />);
+  await waitFor(async () => {
+    expect(await shownGames()).toHaveLength(4);
+  });
+});
+
+test("Running now hides scheduled and ended campaigns", async () => {
+  body = mixedPayload();
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Running now" }));
+  await waitFor(async () => {
+    const games = await shownGames();
+    expect(games).toContain("Running Game");
+    expect(games).toContain("Collected Game");
+    expect(games).not.toContain("Scheduled Game");
+    expect(games).not.toContain("Ended Game");
+  });
+});
+
+test("Scheduled shows only campaigns that have not opened yet", async () => {
+  body = mixedPayload();
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Scheduled" }));
+  await waitFor(async () => {
+    expect(await shownGames()).toEqual(["Scheduled Game"]);
+  });
+});
+
+test("Unclaimed leaves out what is finished or out of reach", async () => {
+  // A collected campaign needs nothing; an ended one can never be
+  // finished however much you watch.
+  body = mixedPayload();
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Unclaimed" }));
+  await waitFor(async () => {
+    const games = await shownGames();
+    expect(games).toContain("Running Game");
+    expect(games).toContain("Scheduled Game");
+    expect(games).not.toContain("Collected Game");
+    expect(games).not.toContain("Ended Game");
+  });
+});
+
+test("the view filter and the search box narrow together", async () => {
+  body = mixedPayload();
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Running now" }));
+  await user.type(screen.getByPlaceholderText(/Campaign, game or drop/), "Collected");
+  await waitFor(async () => {
+    expect(await shownGames()).toEqual(["Collected Game"]);
+  });
+});
+
+test("says which view is empty rather than claiming none are running", async () => {
+  // "No drop campaigns are running" under the Scheduled pill would be a
+  // claim about the catalogue, when it is only a claim about the filter.
+  body = { ...payload, campaigns: [mixedPayload().campaigns[0]] };
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Scheduled" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("campaigns-empty").textContent)
+      .toMatch(/no campaigns are scheduled/i);
+  });
+});
+
+test("sorts scheduled campaigns after running ones and before ended", async () => {
+  body = mixedPayload();
+  renderApp(<Drops />);
+  await waitFor(async () => {
+    const games = await shownGames();
+    expect(games.indexOf("Scheduled Game"))
+      .toBeGreaterThan(games.indexOf("Running Game"));
+    expect(games.indexOf("Scheduled Game"))
+      .toBeLessThan(games.indexOf("Ended Game"));
+  });
+});
+
+// --- the game on a subscription row ---
+
+test("names the game beside a subscribed campaign", async () => {
+  // The panel lists campaign names alone, and plenty read as a version
+  // string ("J5 - Temporix Cps") with no clue what game they are for.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  await waitFor(() => {
+    expect(within(row).getByTestId("subscription-game").textContent)
+      .toBe("Alpha Game");
+  });
+});
+
+test("omits the game when the campaign is no longer in the catalogue", async () => {
+  // Nothing to look it up against; a guessed name would be worse than
+  // none.
+  withSubs([asSub({ targetId: "gone" })]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  await waitFor(() => {
+    expect(within(row).queryByTestId("subscription-game")).toBeNull();
+  });
+});
+
+test("does not repeat the game when it is already the label", async () => {
+  // A game subscription is labelled with the game, and rendering it
+  // twice on one row reads as a rendering fault.
+  withSubs([asSub({ kind: "game", targetId: "g1", label: "Alpha Game" })]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  await waitFor(() => {
+    expect(within(row).queryByTestId("subscription-game")).toBeNull();
+  });
+});
+
+test("names the game on a game subscription labelled something else", async () => {
+  withSubs([asSub({ kind: "game", targetId: "g1", label: "My watchlist" })]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  await waitFor(() => {
+    expect(within(row).getByTestId("subscription-game").textContent)
+      .toBe("Alpha Game");
+  });
+});
+
+test("the game yields its width to the campaign name, not the reverse", async () => {
+  // The bug this exists to prevent: the game was pinned with
+  // flexShrink 0 while the label was free to shrink, so on a narrow
+  // screen the row collapsed the campaign name to "W..." and kept the
+  // game at full width -- showing only the annotation and none of the
+  // thing it annotates.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  const game = await within(row).findByTestId("subscription-game");
+  expect(game.style.flexShrink).not.toBe("0");
+});
+
+test("the game is not capped to a share of the row", async () => {
+  // The bug this exists to prevent: a maxWidth of 33% truncated long
+  // game names on a wide screen with most of the row unused. Width is
+  // yielded by shrinking when contested, never by a fixed share.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  const game = await within(row).findByTestId("subscription-game");
+  expect(game.style.maxWidth).toBe("");
 });

@@ -61,6 +61,61 @@ export interface CampaignsPayload {
 const SOURCE_NAME = "Fenrisapps Twitch Drops Tracker";
 const SOURCE_HREF = "https://twitch-drops.fenrisapps.com/";
 
+/**
+ * Which slice of the catalogue the grid shows.
+ *
+ * `unclaimed` is the one the tracker has no equivalent for: it needs
+ * this viewer's inventory, which a public site does not have.
+ */
+type View = "all" | "running" | "scheduled" | "unclaimed";
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "running", label: "Running now" },
+  { value: "scheduled", label: "Scheduled" },
+  { value: "unclaimed", label: "Unclaimed" },
+];
+
+/** What the empty grid says, per view -- each a claim about that view. */
+const EMPTY: Record<View, string> = {
+  all: "No drop campaigns are running.",
+  running: "No campaigns are running right now.",
+  scheduled: "No campaigns are scheduled.",
+  unclaimed: "Nothing left to claim -- every campaign here is done.",
+};
+
+/** Whether a campaign's window has yet to open. */
+function isScheduled(c: ResolvedCampaign, now: number): boolean {
+  return c.startsAt !== null && c.startsAt > now;
+}
+
+/** Whether a campaign's window has shut. */
+function hasEnded(c: ResolvedCampaign, now: number): boolean {
+  return c.endsAt !== null && c.endsAt <= now;
+}
+
+/**
+ * Whether a campaign belongs in the given view.
+ *
+ * `unclaimed` excludes the ended as well as the collected: progress on
+ * an expired campaign is frozen and can never be finished, so listing it
+ * as something still to claim would be a promise the page cannot keep.
+ * A campaign whose progress could not be read stays in -- "unknown" is
+ * not "nothing left to do".
+ */
+function inView(c: ResolvedCampaign, view: View, now: number): boolean {
+  switch (view) {
+    case "running":
+      return !isScheduled(c, now) && !hasEnded(c, now);
+    case "scheduled":
+      return isScheduled(c, now);
+    case "unclaimed":
+      return !hasEnded(c, now) && c.status !== "collected";
+    case "all":
+      return true;
+  }
+}
+
 /** "3h ago", or "just now" below a minute -- a zero span reads as broken. */
 function age(at: number): string {
   const delta = Date.now() - at;
@@ -97,10 +152,11 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
  * Where a subscription's label points, or null when nowhere real does.
  *
  * A campaign still in the catalogue links down to its own card on this
- * same page: the tracker the catalogue comes from publishes one flat
- * list with no per-campaign page, and the card below is the only place
- * the drops are actually listed -- which is what the panel itself does
- * not show.
+ * same page, which is the only place showing this viewer's progress
+ * against its drops -- the panel itself lists none of that, and neither
+ * does any page elsewhere. (The tracker does publish a page per
+ * campaign, at /campaigns/<id>; it just cannot know what you have
+ * claimed.)
  *
  * Otherwise the game's Twitch directory, which is where the channels in
  * the row came from. That covers a `game` subscription, which is tied to
@@ -129,6 +185,31 @@ function subscriptionLink(
 }
 
 /**
+ * The game a subscription is for, or null when there is nothing to add.
+ *
+ * Looked up in the catalogue the page already holds rather than added to
+ * the subscriptions payload: the engine stores a label and a target id,
+ * and the game is a property of the campaign, not of the subscription.
+ *
+ * Returns null when the name would only repeat the label -- a game
+ * subscription is labelled with its game, and rendering it twice on one
+ * row reads as a rendering fault rather than as detail. Also null for a
+ * campaign that has left the catalogue, where there is nothing to look
+ * up and a guess would be worse than silence.
+ */
+function subscriptionGame(
+  sub: SubscriptionRow,
+  campaigns: ResolvedCampaign[],
+): string | null {
+  const game = sub.kind === "campaign"
+    ? campaigns.find((c) => c.id === sub.targetId)?.game
+    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
+  const name = game?.displayName;
+  if (name === undefined || name === "") return null;
+  return name.toLowerCase() === sub.label.toLowerCase() ? null : name;
+}
+
+/**
  * One subscription in the panel, draggable by its grip.
  *
  * Rank decides which subscriptions fill the miner's watch slots first, so
@@ -141,7 +222,7 @@ function subscriptionLink(
  * panel does not keep.
  */
 function SubscriptionRow({
-  sub, index, draggable, restartPending, busy, link, onOpen, onRemove,
+  sub, index, draggable, restartPending, busy, link, game, onOpen, onRemove,
   onPoolSize,
 }: {
   sub: SubscriptionRow;
@@ -149,6 +230,8 @@ function SubscriptionRow({
   draggable: boolean;
   restartPending: boolean;
   busy: boolean;
+  /** The game this is for, or null when naming it would add nothing. */
+  game: string | null;
   /** Where the label points, or null when nothing real to point at. */
   link: { href: string; external: boolean } | null;
   /** Called when an in-page link is followed, to open the card landed on. */
@@ -190,7 +273,10 @@ function SubscriptionRow({
       ref={setNodeRef}
       data-testid="subscription-row"
       justify="space-between"
-      wrap="nowrap"
+      // Wrapping is what lets the controls drop below the text on a
+      // narrow screen; the CSS decides when, this only permits it.
+      wrap="wrap"
+      className={classes.subRow}
       gap="xs"
       style={{
         transform: CSS.Transform.toString(transform),
@@ -200,7 +286,7 @@ function SubscriptionRow({
         opacity: isDragging ? 0.6 : undefined,
       }}
     >
-      <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+      <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: "1 1 260px" }}>
         {draggable && (
           <ActionIcon
             variant="subtle"
@@ -218,7 +304,14 @@ function SubscriptionRow({
         <div style={{ minWidth: 0 }}>
           {/* The panel lists no drops of its own, so the label is the way
               to somewhere that does. Plain text when there is nowhere to
-              go: a link that lands on nothing is worse than no link. */}
+              go: a link that lands on nothing is worse than no link.
+
+              The game rides alongside rather than on its own line: many
+              campaign names are a bare version string ("J5 - Temporix
+              Cps") that says nothing about what game they belong to, and
+              the row has the width to spare. Dimmed, because the label
+              is what the row is identified by. */}
+          <Group gap={6} wrap="nowrap" align="baseline" style={{ minWidth: 0 }}>
           {link === null ? (
             <Text size="sm" lineClamp={1}>{sub.label}</Text>
           ) : (
@@ -246,6 +339,27 @@ function SubscriptionRow({
               )}
             </Anchor>
           )}
+          {game !== null && (
+            <Text
+              size="xs"
+              c="dimmed"
+              lineClamp={1}
+              // Shrinks before the label does, which is what keeps the
+              // campaign name whole on a narrow row -- the label is what
+              // the row is identified by, and the game is the note
+              // beside it.
+              //
+              // Width is yielded by shrinking, never by a cap: a share
+              // of the row (maxWidth: 33%) is not a measure of whether
+              // the text fits, and truncates long game names on a wide
+              // screen with most of the row unused.
+              style={{ flexShrink: 1000, minWidth: 0 }}
+              data-testid="subscription-game"
+            >
+              {game}
+            </Text>
+          )}
+          </Group>
           <Text size="xs" c="dimmed">
             {/* Three different states, and saying the wrong one
                 is a claim about the miner that is not true:
@@ -284,7 +398,7 @@ function SubscriptionRow({
           </Text>
         </div>
       </Group>
-      <Group gap={6} wrap="nowrap">
+      <Group gap={6} wrap="nowrap" className={classes.subControls}>
         {/* The number alone is a count of nothing in particular, so the
             unit is on the row and the reason behind it is a hover away.
             Both, rather than one: the word is what makes the control
@@ -356,6 +470,7 @@ export function Drops() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("");
+  const [view, setView] = useState<View>("all");
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
   /**
    * What is running, and which campaign it belongs to.
@@ -499,10 +614,14 @@ export function Drops() {
 
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
+    const now = Date.now();
+    // The pills and the box narrow the same list, in that order: the
+    // view picks the slice, the needle searches within it.
+    const inScope = (data?.campaigns ?? []).filter((c) => inView(c, view, now));
     const matched =
       needle === "" || data === null
-        ? data?.campaigns ?? []
-        : data.campaigns.filter((c) =>
+        ? inScope
+        : inScope.filter((c) =>
             // Name, game or drop: the game is how most campaigns are
             // actually found, and the drop is often the only name the
             // player knows -- they are hunting a particular skin, not
@@ -510,34 +629,41 @@ export function Drops() {
             // per field would not earn its width.
             matchesHeader(c, needle) || matchesDrop(c, needle));
 
-    // Three tiers, then soonest deadline within each.
+    // Four tiers, then soonest deadline within each.
     //
     //   1. Live, with progress on them -- watch time already committed
     //      outranks anything else, even something expiring sooner.
     //      `collected` is not promoted: it is finished, and lifting it
     //      would push campaigns that still need something down the page.
     //   2. Everything else live.
-    //   3. Ended, whatever progress sits on it, because that progress is
+    //   3. Scheduled, sorted by when they open. Below everything live,
+    //      because a campaign you cannot earn yet must not outrank one
+    //      expiring tonight; above ended, because it is still to come.
+    //   4. Ended, whatever progress sits on it, because that progress is
     //      frozen and can never be finished. Kept rather than hidden:
     //      the tracker still lists them and a drop already earned is
     //      worth seeing.
     //
     // Within a tier: soonest deadline first, so 40/60 minutes expiring
-    // tonight outranks 10/60 with a week left. No end date sorts after
-    // dated ones -- an unknown deadline is not an urgent one -- and ties
-    // break by name so a refresh does not reshuffle the list.
-    const now = Date.now();
+    // tonight outranks 10/60 with a week left. Scheduled sorts on its
+    // start instead -- the date that decides when it becomes actionable.
+    // No date sorts after dated ones -- an unknown deadline is not an
+    // urgent one -- and ties break by name so a refresh does not
+    // reshuffle the list.
     const tier = (c: ResolvedCampaign) => {
-      if (c.endsAt !== null && c.endsAt <= now) return 2;
+      if (hasEnded(c, now)) return 3;
+      if (isScheduled(c, now)) return 2;
       return c.status === "partial" ? 0 : 1;
     };
     return [...matched].sort((a, b) => {
       const byTier = tier(a) - tier(b);
       if (byTier !== 0) return byTier;
-      const byEnd = (a.endsAt ?? Infinity) - (b.endsAt ?? Infinity);
-      return byEnd !== 0 ? byEnd : a.name.localeCompare(b.name);
+      const key = (c: ResolvedCampaign) =>
+        (isScheduled(c, now) ? c.startsAt : c.endsAt) ?? Infinity;
+      const byDate = key(a) - key(b);
+      return byDate !== 0 ? byDate : a.name.localeCompare(b.name);
     });
-  }, [data, filter]);
+  }, [data, filter, view]);
 
   if (error !== null && data === null) {
     return (
@@ -550,26 +676,62 @@ export function Drops() {
   if (data === null) return <Loader />;
 
   return (
-    // Capped a little wider than Settings' 760, because each row carries
-    // a name, a game, a count and a deadline; left to fill the window,
-    // the badge on the right drifts a screen away from the name on the
-    // left. The bottom padding clears the pinned restart banner, which
-    // would otherwise half-cover the last campaign.
-    <Stack gap="md" maw={900} pb={140}>
-      {/* align flex-end, not the default centre: the filter input is
-          taller than the button because of its label, so centring drops
-          the button below the input's baseline. */}
-      <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
+    // Wider than the rest of the app: the campaigns below are a card
+    // grid, and the cap is what decides how many fit per row -- 1400
+    // gives three comfortable columns on a desktop and still stops the
+    // rows growing long enough to lose your place on an ultrawide. The
+    // old 900 existed to keep a full-width row's badge near its name, a
+    // constraint a card does not have. The bottom padding clears the
+    // pinned restart banner, which would otherwise half-cover the last
+    // campaign.
+    <Stack gap="md" maw={1400} pb={140}>
+      {/* One row: the pills pick the slice, the box searches inside it,
+          Refresh reloads both. The label is dropped from the input --
+          with the pills beside it the row reads as one control group,
+          and a floating "Filter" caption above only one of them puts
+          them on different baselines. */}
+      {/* The pills and the box are one control group, so they sit
+          together on the left rather than being pushed to opposite ends
+          of a 1400px row. Refresh keeps to the far right: it acts on the
+          whole page, not on the filters. */}
+      <Group wrap="wrap" gap="sm" align="center">
+        <Group gap={6} wrap="wrap">
+          {VIEWS.map((v) => (
+            <Button
+              key={v.value}
+              size="compact-sm"
+              radius="xl"
+              // Filled for the one in force, subtle for the rest: at a
+              // glance the row has to say which slice is on screen, or
+              // an empty grid reads as "no campaigns" rather than "none
+              // in this view".
+              variant={view === v.value ? "filled" : "subtle"}
+              color={view === v.value ? undefined : "gray"}
+              aria-pressed={view === v.value}
+              onClick={() => setView(v.value)}
+            >
+              {v.label}
+            </Button>
+          ))}
+        </Group>
+        {/* Wide enough to read a campaign name back, capped so it does
+            not stretch to the far edge of a 1400px page. */}
         <TextInput
-          label="Filter"
+            // The visible caption is gone, so the name is carried here:
+            // a bare box with a placeholder announces nothing once text
+            // is typed into it.
+          aria-label="Filter"
           placeholder="Campaign, game or drop"
           leftSection={<IconSearch size={16} />}
           value={filter}
           onChange={(e) => setFilter(e.currentTarget.value)}
-          style={{ flex: "1 1 240px" }}
+          style={{ flex: "1 1 260px", maxWidth: 420 }}
         />
+        {/* Pushed to the far right, away from the filters it does not
+            belong to. */}
         <Button
           variant="default"
+          ml="auto"
           leftSection={<IconRefresh size={16} />}
           onClick={() => void refresh()}
           loading={refreshing}
@@ -692,6 +854,7 @@ export function Drops() {
                     restartPending={restartPending}
                     busy={busy !== null}
                     link={subscriptionLink(sub, data.campaigns)}
+                    game={subscriptionGame(sub, data.campaigns)}
                     onOpen={() => setJumpedTo(sub.targetId)}
                     // Keyed to the campaign, not "panel": the card for
                     // this same subscription must go inert too, or it
@@ -721,14 +884,18 @@ export function Drops() {
 
       {shown.length === 0 ? (
         <Text c="dimmed" data-testid="campaigns-empty">
-          {data.campaigns.length > 0
+          {/* Three different claims, and the wrong one misreports the
+              catalogue. A needle that matched nothing is about the
+              search; an empty view is about the pills; only a genuinely
+              empty catalogue is about the campaigns themselves. */}
+          {filter.trim() !== ""
             ? "No campaigns match that filter."
-            : data.catalogueAvailable
-              ? "No drop campaigns are running."
-              : "No campaign list to show."}
+            : !data.catalogueAvailable
+              ? "No campaign list to show."
+              : EMPTY[view]}
         </Text>
       ) : (
-        <Stack gap="xs">
+        <div className={classes.grid} data-testid="campaign-grid">
           {shown.map((campaign) => {
             const sub = subs.find(
               (x) => x.kind === "campaign" && x.targetId === campaign.id,
@@ -761,7 +928,7 @@ export function Drops() {
               />
             );
           })}
-        </Stack>
+        </div>
       )}
 
     </Stack>

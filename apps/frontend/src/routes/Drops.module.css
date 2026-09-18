@@ -39,3 +39,46 @@
     opacity: 1;
   }
 }
+
+/* The campaign grid. A minimum track width rather than a fixed column
+   count, so the number of columns falls out of the viewport: three on a
+   desktop at the page's 1400 cap, two on a laptop, one on a phone. A
+   hardcoded three would crush the cards on a narrow window and leave the
+   box art wider than the text beside it. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: var(--mantine-spacing-xs);
+  align-items: start;
+}
+
+/* Below the narrowest card width a single column is the honest layout;
+   auto-fill already collapses to one, but this keeps the card from
+   overflowing its track on very small screens. */
+@media (max-width: 420px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The subscription row is two clusters: the text (name, game, channels
+   being watched) and the controls (pool size, Remove). Side by side they
+   need roughly 420px before the text cluster starts losing its name to
+   an ellipsis and "nobody is streaming this right now" wraps to three
+   lines.
+
+   Below that the controls drop onto their own line and both clusters get
+   the full width. Kept as a wrap rather than a separate narrow layout so
+   the drag handle, the rank and the tab order stay exactly as they are
+   -- this changes where the controls sit, not what the row is. */
+@media (max-width: 560px) {
+  .subRow {
+    flex-wrap: wrap;
+  }
+
+  /* Indented to the rank column, so the controls read as belonging to
+     the row above them rather than as a new entry in the list. */
+  .subControls {
+    margin-left: 24px;
+  }
+}
