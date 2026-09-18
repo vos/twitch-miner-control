@@ -4,8 +4,20 @@
  * Ten minutes, matching DROPS_TTL_MS and for the same reason: progress
  * moves in 30/60/120-minute steps, so a ten-minute-old bar is never
  * meaningfully stale while the call count stays sane.
+ *
+ * This is the idle clock. A user who wants their progress now presses
+ * Refresh, which calls refresh() below and skips it.
  */
 export const INVENTORY_TTL_MS = 600_000;
+
+/**
+ * Floor between two forced refetches, matching the catalogue's.
+ *
+ * The Drops page refresh button drives this, so the limit is what stops
+ * a held button from turning one impatient user into a burst of GQL
+ * calls. A refusal is not an error: the caller is served what we hold.
+ */
+export const INVENTORY_REFRESH_MIN_INTERVAL_MS = 60_000;
 
 export interface DropProgressEntry {
   minutes: number;
@@ -55,6 +67,7 @@ export class InventoryCache {
   private progress: InventoryMap = {};
   private fetchedAt = 0;
   private available = false;
+  private lastRefreshAt = 0;
   private inflight: Promise<void> | null = null;
 
   constructor(private readonly deps: InventoryDeps) {}
@@ -88,14 +101,39 @@ export class InventoryCache {
     return this.inflight;
   }
 
-  async get(): Promise<InventorySnapshot> {
-    const fresh =
-      this.available && this.now() - this.fetchedAt < INVENTORY_TTL_MS;
-    if (!fresh) await this.fetch();
+  private snapshot(): InventorySnapshot {
     return {
       progress: this.progress,
       fetchedAt: this.fetchedAt,
       available: this.available,
     };
+  }
+
+  async get(): Promise<InventorySnapshot> {
+    const fresh =
+      this.available && this.now() - this.fetchedAt < INVENTORY_TTL_MS;
+    if (!fresh) await this.fetch();
+    return this.snapshot();
+  }
+
+  /**
+   * Refetch regardless of the TTL, for the Drops page refresh button.
+   *
+   * The TTL is sized for the idle case, where a ten-minute-old bar is
+   * never meaningfully stale. Someone who has just finished watching is
+   * not that case: they want the minutes they earned, now. Pairs with
+   * CampaignCatalogue.refresh() so one press updates both halves of the
+   * page rather than only the campaign list.
+   *
+   * Rate limited: returns what it has rather than fetching again.
+   */
+  async refresh(): Promise<InventorySnapshot> {
+    const at = this.now();
+    if (at - this.lastRefreshAt < INVENTORY_REFRESH_MIN_INTERVAL_MS) {
+      return this.snapshot();
+    }
+    this.lastRefreshAt = at;
+    await this.fetch();
+    return this.snapshot();
   }
 }

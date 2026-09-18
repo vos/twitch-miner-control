@@ -469,7 +469,9 @@ export function buildServer(deps: ServerDeps): AppServer {
       const cat = refresh
         ? await deps.catalogue.refresh()
         : await deps.catalogue.get();
-      const inv = await deps.inventory.get();
+      const inv = refresh
+        ? await deps.inventory.refresh()
+        : await deps.inventory.get();
       return {
         campaigns: cat.campaigns.map((c) => resolveCampaign(c, inv)),
         catalogueFetchedAt: cat.fetchedAt,
@@ -486,8 +488,9 @@ export function buildServer(deps: ServerDeps): AppServer {
 
     instance.get("/api/campaigns", async () => campaignPayload(false));
 
-    // Bypasses the TTL for a campaign that has just been announced. The
-    // cache rate limits this itself, so a double click costs one sweep.
+    // Bypasses the TTL on both halves: a campaign that has just been
+    // announced, and the progress the user has just earned. Each cache
+    // rate limits itself, so a double click costs one sweep.
     instance.post("/api/campaigns/refresh", async () => campaignPayload(true));
 
     /**

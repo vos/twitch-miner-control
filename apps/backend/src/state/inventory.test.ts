@@ -1,5 +1,9 @@
 import { expect, test, vi } from "vitest";
-import { InventoryCache, INVENTORY_TTL_MS } from "./inventory.js";
+import {
+  InventoryCache,
+  INVENTORY_TTL_MS,
+  INVENTORY_REFRESH_MIN_INTERVAL_MS,
+} from "./inventory.js";
 
 let clock = 1_000_000;
 
@@ -105,4 +109,64 @@ test("a failed fetch is retried on the next get, not cached for the TTL", async 
   const out = await cache.get();
   expect(request).toHaveBeenCalledTimes(2);
   expect(out.available).toBe(true);
+});
+
+test("refresh refetches inside the TTL", async () => {
+  // The point of the button: progress the user just earned must be
+  // reachable without waiting out a clock built for the idle case.
+  const { cache, request } = make([
+    { inventory: {} },
+    { inventory: { c1: { d1: progress } } },
+  ]);
+  await cache.get();
+  clock += 1_000;
+  const out = await cache.refresh();
+  expect(out.progress["c1"]?.["d1"]).toEqual(progress);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("refresh is rate limited", async () => {
+  const { cache, request } = make([
+    { inventory: {} },
+    { inventory: { c1: { d1: progress } } },
+    { inventory: {} },
+  ]);
+  await cache.refresh();
+  clock += INVENTORY_REFRESH_MIN_INTERVAL_MS - 1;
+  await cache.refresh();
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+test("refresh works again once the rate limit has passed", async () => {
+  const { cache, request } = make([
+    { inventory: {} },
+    { inventory: { c1: { d1: progress } } },
+  ]);
+  await cache.refresh();
+  clock += INVENTORY_REFRESH_MIN_INTERVAL_MS + 1;
+  const out = await cache.refresh();
+  expect(out.progress["c1"]?.["d1"]).toEqual(progress);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+test("a rate limited refresh still serves what it holds", async () => {
+  // Returning empty here would blank a page that has good data.
+  const { cache } = make([{ inventory: { c1: { d1: progress } } }]);
+  await cache.refresh();
+  clock += 1_000;
+  const out = await cache.refresh();
+  expect(out.progress["c1"]?.["d1"]).toEqual(progress);
+  expect(out.available).toBe(true);
+});
+
+test("a failed refresh keeps the last progress, marked unavailable", async () => {
+  const { cache } = make([
+    { inventory: { c1: { d1: progress } } },
+    new Error("gql exploded"),
+  ]);
+  await cache.get();
+  clock += INVENTORY_REFRESH_MIN_INTERVAL_MS + 1;
+  const out = await cache.refresh();
+  expect(out.progress["c1"]?.["d1"]).toEqual(progress);
+  expect(out.available).toBe(false);
 });

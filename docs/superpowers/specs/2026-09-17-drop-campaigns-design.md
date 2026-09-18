@@ -194,10 +194,15 @@ channel.
 
 ### Manual refresh
 
-A POST that bypasses the TTL and rebroadcasts over SSE. Guarded by a
-minimum interval (60s) between manual refreshes, so a double-click cannot
-fire two full detail sweeps. The UI shows the catalogue's age beside the
-button, so staleness is visible rather than guessed at.
+A POST that bypasses the TTL on **both** sources -- the campaign
+catalogue and the inventory -- and rebroadcasts over SSE. Refreshing only
+the catalogue would leave the button unable to move the one number a user
+presses it for: the progress they just earned.
+
+Each cache guards itself with its own minimum interval (60s) between
+manual refreshes, so a double-click cannot fire two full detail sweeps.
+The UI shows both ages beside the button, so staleness is visible rather
+than guessed at.
 
 ### Failure behaviour
 

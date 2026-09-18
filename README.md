@@ -178,7 +178,7 @@ them is a claim about Twitch.
 
 Campaigns are cached for 24 hours (they barely change once published)
 and your progress for ten minutes; both ages are shown, and **Refresh**
-re-reads the list on demand.
+re-reads both on demand.
 
 ### Notifications
 

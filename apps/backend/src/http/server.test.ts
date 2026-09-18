@@ -1316,6 +1316,31 @@ test("GET /api/campaigns reports the two cache ages separately", async () => {
   expect(body.progressAvailable).toBe(true);
 });
 
+test("POST /api/campaigns/refresh refetches progress, not just the catalogue", async () => {
+  // The button exists to answer "did the minutes I just watched land?".
+  // Refreshing only the catalogue would leave that number untouched.
+  ctx.setCampaigns(() => [aCampaign]);
+  ctx.helperResponses["inventory"] = { inventory: {} };
+  await ctx.app.inject({ method: "GET", url: "/api/campaigns", cookies: auth() });
+  const before = ctx.client.request.mock.calls.filter(
+    (c: unknown[]) => c[0] === "inventory",
+  ).length;
+
+  ctx.helperResponses["inventory"] = {
+    inventory: { c1: { d1: { minutes: 45, claimed: false, instanceId: null } } },
+  };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh", cookies: auth(),
+  });
+
+  expect(res.statusCode).toBe(200);
+  const after = ctx.client.request.mock.calls.filter(
+    (c: unknown[]) => c[0] === "inventory",
+  ).length;
+  expect(after).toBe(before + 1);
+  expect(res.json().campaigns[0].drops[0].minutes).toBe(45);
+});
+
 test("GET /api/campaigns reports progress unavailable when the fetch fails", async () => {
   // The campaigns must still render -- only the progress is unknown.
   ctx.setCampaigns(() => [aCampaign]);
