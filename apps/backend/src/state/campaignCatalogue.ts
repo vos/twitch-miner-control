@@ -28,15 +28,44 @@ export interface CampaignGame {
   id: string;
   slug: string;
   displayName: string;
+  /**
+   * Twitch box art for the category, or null when the source had none.
+   *
+   * Optional on top of nullable because the catalogue below is persisted
+   * as raw JSON with no migration: for up to a TTL after an upgrade,
+   * campaigns load from disk without the fields the build now expects.
+   * Every reader has to treat absent and null alike.
+   */
+  boxArtUrl?: string | null;
+}
+
+/** One award from a drop: what it is called, and what it looks like. */
+export interface CampaignBenefit {
+  name: string;
+  imageUrl: string | null;
 }
 
 export interface CampaignDrop {
   id: string;
   name: string;
-  benefits: string[];
+  benefits: CampaignBenefit[];
   requiredMinutes: number;
   /** Non-zero means it can never be earned by watching -- see dropState. */
   requiredSubs: number;
+  /**
+   * The drop's own window, which can be narrower than its campaign's.
+   *
+   * Absent on a catalogue written before these were parsed; see
+   * CampaignGame.boxArtUrl.
+   */
+  startsAt?: number | null;
+  endsAt?: number | null;
+}
+
+/** Who runs the campaign -- a studio or publisher, shown on the card. */
+export interface CampaignOwner {
+  name: string;
+  type: string;
 }
 
 export interface Campaign {
@@ -44,6 +73,8 @@ export interface Campaign {
   name: string;
   /** Null when the miner build's parser predates the field. */
   game: CampaignGame | null;
+  /** Absent on a catalogue written before this was parsed. */
+  owner?: CampaignOwner | null;
   startsAt: number | null;
   endsAt: number | null;
   drops: CampaignDrop[];
@@ -82,9 +113,50 @@ export interface CatalogueDeps {
   now?: () => number;
 }
 
+/**
+ * A campaign as some earlier build may have written it.
+ *
+ * Only the fields whose shape changed are restated; everything else is
+ * either unchanged or already optional. `migrate` narrows this back to a
+ * Campaign on load.
+ */
+type PersistedCampaign = Omit<Campaign, "drops"> & {
+  drops: (Omit<CampaignDrop, "benefits"> & {
+    benefits?: CampaignDrop["benefits"] | string[];
+  })[];
+};
+
 interface Persisted {
-  campaigns: Campaign[];
+  campaigns: PersistedCampaign[];
   fetchedAt: number;
+}
+
+/**
+ * Brings a campaign read off disk up to the shape this build expects.
+ *
+ * The cache is raw JSON with a 24h TTL and no version stamp, so for up
+ * to a day after an upgrade this process serves campaigns written by the
+ * previous one. The shape that actually changed is `benefits`, once a
+ * list of names and now a list of objects -- left alone, every reward
+ * tile would render a nameless placeholder until the TTL expired.
+ *
+ * Widening the field's type instead would push this same check into
+ * every consumer and leave the old shape live in the API payload. One
+ * conversion at the boundary keeps the rest of the app honest about what
+ * a benefit is.
+ */
+function migrate(campaign: PersistedCampaign): Campaign {
+  return {
+    ...campaign,
+    drops: campaign.drops.map((drop) => ({
+      ...drop,
+      benefits: (drop.benefits ?? []).map((benefit) =>
+        typeof benefit === "string"
+          ? { name: benefit, imageUrl: null }
+          : benefit,
+      ),
+    })),
+  };
 }
 
 /**
@@ -122,7 +194,7 @@ export class CampaignCatalogue {
     try {
       const raw = JSON.parse(readFileSync(this.deps.path, "utf8")) as Persisted;
       if (Array.isArray(raw.campaigns)) {
-        this.campaigns = raw.campaigns;
+        this.campaigns = raw.campaigns.map(migrate);
         this.fetchedAt = raw.fetchedAt ?? 0;
       }
     } catch {

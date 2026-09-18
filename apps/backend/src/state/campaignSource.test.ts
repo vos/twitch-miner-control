@@ -13,15 +13,21 @@ const payload = (inner: string) =>
 
 const campaign = `[{
   "id":"c1","name":"Console Launch Drops","gameId":"1441208453",
+  "ownerId":"o1",
   "startAt":"$D2026-08-25T18:00:00.000Z","endAt":"$D2026-09-22T17:59:59.999Z",
-  "game":{"id":"1441208453","displayName":"Once Human","slug":"once-human"},
+  "game":{"id":"1441208453","displayName":"Once Human","slug":"once-human",
+    "boxArtUrl":"https://cdn/ttv-boxart/1441208453_IGDB-285x380.jpg"},
+  "owner":{"id":"o1","name":"Starry","type":"Organization"},
   "timeBasedDrops":[
     {"id":"d1","name":"DECAL: GRAFFITI","requiredMinutesWatched":60,
+     "startAt":"$D2026-08-25T18:00:00.000Z","endAt":"$D2026-09-01T00:00:00.000Z",
      "requiresSub":false,
-     "benefits":[{"benefitId":"b1","name":"Graffiti Decal"}]},
+     "benefits":[{"benefitId":"b1","name":"Graffiti Decal",
+       "imageAssetUrl":"https://cdn/REWARD/b1.png"}]},
     {"id":"d2","name":"Supporter Crate","requiredMinutesWatched":240,
      "requiresSub":true,
-     "benefits":[{"benefitId":"b2","name":"Crate"}]}
+     "benefits":[{"benefitId":"b2","name":"Crate",
+       "imageAssetUrl":"https://cdn/REWARD/b2.png"}]}
   ]}]`;
 
 test("pulls campaigns out of the surrounding RSC stream", () => {
@@ -43,9 +49,11 @@ test("maps drops onto the shape the rest of the app already uses", () => {
   expect(out?.drops[0]).toEqual({
     id: "d1",
     name: "DECAL: GRAFFITI",
-    benefits: ["Graffiti Decal"],
+    benefits: [{ name: "Graffiti Decal", imageUrl: "https://cdn/REWARD/b1.png" }],
     requiredMinutes: 60,
     requiredSubs: 0,
+    startsAt: Date.parse("2026-08-25T18:00:00.000Z"),
+    endsAt: Date.parse("2026-09-01T00:00:00.000Z"),
   });
 });
 
@@ -54,6 +62,72 @@ test("carries requiresSub through as the sub requirement", () => {
   // boolean has to become a count rather than being dropped.
   const [out] = extractCampaigns(payload(campaign));
   expect(out?.drops[1]?.requiredSubs).toBe(1);
+});
+
+test("carries the game's box art through", () => {
+  // The card leads with this image; without it every campaign renders
+  // the same monogram placeholder.
+  const [out] = extractCampaigns(payload(campaign));
+  expect(out?.game?.boxArtUrl).toBe(
+    "https://cdn/ttv-boxart/1441208453_IGDB-285x380.jpg",
+  );
+});
+
+test("carries the campaign owner through", () => {
+  const [out] = extractCampaigns(payload(campaign));
+  expect(out?.owner).toEqual({ name: "Starry", type: "Organization" });
+});
+
+test("carries each benefit's image alongside its name", () => {
+  const [out] = extractCampaigns(payload(campaign));
+  expect(out?.drops[1]?.benefits).toEqual([
+    { name: "Crate", imageUrl: "https://cdn/REWARD/b2.png" },
+  ]);
+});
+
+test("reports a drop's own window, which can be shorter than the campaign's", () => {
+  // A weekly drop inside a month-long campaign has its own dates, and
+  // showing the campaign's would overstate how long is left to earn it.
+  const [out] = extractCampaigns(payload(campaign));
+  expect(out?.drops[0]?.endsAt).toBe(Date.parse("2026-09-01T00:00:00.000Z"));
+});
+
+test("leaves a drop's window null when the source omits it", () => {
+  const [out] = extractCampaigns(payload(campaign));
+  expect(out?.drops[1]?.startsAt).toBeNull();
+  expect(out?.drops[1]?.endsAt).toBeNull();
+});
+
+test("survives a game with no box art", () => {
+  // Older cached payloads and the odd category have none; the card falls
+  // back rather than rendering a broken image.
+  const out = extractCampaigns(
+    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
+      "endAt":"$D2026-02-01T00:00:00.000Z",
+      "game":{"id":"g1","displayName":"Game","slug":"game"},
+      "timeBasedDrops":[]}]`),
+  );
+  expect(out[0]?.game?.boxArtUrl).toBeNull();
+});
+
+test("survives a campaign with no owner reported", () => {
+  const out = extractCampaigns(
+    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
+      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,"timeBasedDrops":[]}]`),
+  );
+  expect(out[0]?.owner).toBeNull();
+});
+
+test("survives a benefit with no image", () => {
+  const out = extractCampaigns(
+    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
+      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,
+      "timeBasedDrops":[{"id":"d1","name":"Thing","requiredMinutesWatched":30,
+        "benefits":[{"benefitId":"b1","name":"Thing"}]}]}]`),
+  );
+  expect(out[0]?.drops[0]?.benefits).toEqual([
+    { name: "Thing", imageUrl: null },
+  ]);
 });
 
 test("survives a campaign with no game reported", () => {

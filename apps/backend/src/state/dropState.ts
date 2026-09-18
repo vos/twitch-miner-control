@@ -1,4 +1,6 @@
-import type { Campaign, CampaignDrop } from "./campaignCatalogue.js";
+import type {
+  Campaign, CampaignBenefit, CampaignDrop,
+} from "./campaignCatalogue.js";
 import type { DropProgressEntry, InventorySnapshot } from "./inventory.js";
 
 /**
@@ -21,11 +23,20 @@ export type CampaignStatus = "collected" | "partial" | "untouched" | "unknown";
 export interface ResolvedDrop {
   id: string;
   name: string;
-  benefits: string[];
+  benefits: CampaignBenefit[];
   requiredMinutes: number;
   /** Clamped to requiredMinutes; 0 when not started or unknown. */
   minutes: number;
   status: DropStatus;
+  /**
+   * The drop's own window, null when the source did not report one.
+   *
+   * Normalised from the optional field on CampaignDrop so the API shape
+   * is stable: a catalogue loaded from disk before these were parsed
+   * reports null here rather than omitting the key.
+   */
+  startsAt: number | null;
+  endsAt: number | null;
 }
 
 export interface ResolvedCampaign extends Omit<Campaign, "drops"> {
@@ -50,8 +61,10 @@ export function resolveDrop(
   const base = {
     id: drop.id,
     name: drop.name,
-    benefits: drop.benefits,
+    benefits: drop.benefits ?? [],
     requiredMinutes: drop.requiredMinutes,
+    startsAt: drop.startsAt ?? null,
+    endsAt: drop.endsAt ?? null,
   };
 
   if (drop.requiredSubs > 0) {

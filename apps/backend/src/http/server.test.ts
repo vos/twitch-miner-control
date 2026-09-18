@@ -1282,7 +1282,8 @@ const aCampaign = {
   startsAt: 1_000,
   endsAt: 9_000,
   drops: [
-    { id: "d1", name: "Crate", benefits: ["Crate"],
+    { id: "d1", name: "Crate",
+      benefits: [{ name: "Crate", imageUrl: "https://cdn/crate.png" }],
       requiredMinutes: 60, requiredSubs: 0 },
   ],
 };

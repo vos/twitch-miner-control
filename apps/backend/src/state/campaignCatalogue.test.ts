@@ -142,6 +142,41 @@ test("survives a restart by reloading from disk", async () => {
   expect(out.campaigns).toEqual([campaign()]);
 });
 
+test("upgrades benefits written as bare names by an older build", async () => {
+  // The cache carries no version stamp and lives for a day, so this
+  // process serves campaigns the previous build wrote. Before benefits
+  // grew images they were plain strings; left as they are, every reward
+  // tile renders nameless until the TTL expires.
+  const file = join(mkdtempSync(join(tmpdir(), "cat-")), "c.json");
+  writeFileSync(file, JSON.stringify({
+    fetchedAt: 1_000,
+    campaigns: [{
+      id: "c1",
+      name: "Campaign One",
+      game: { id: "g1", slug: "a-game", displayName: "A Game" },
+      startsAt: 1_000,
+      endsAt: 9_000,
+      drops: [{
+        id: "d1",
+        name: "Thing",
+        benefits: ["Crate", "Charm"],
+        requiredMinutes: 60,
+        requiredSubs: 0,
+      }],
+    }],
+  }));
+
+  clock = 2_000;
+  const { cache, request } = make([], file);
+  const out = await cache.get();
+
+  expect(request).not.toHaveBeenCalled();
+  expect(out.campaigns[0]?.drops[0]?.benefits).toEqual([
+    { name: "Crate", imageUrl: null },
+    { name: "Charm", imageUrl: null },
+  ]);
+});
+
 test("a reloaded catalogue still expires on its original age", async () => {
   const { cache, path } = make([[campaign()]]);
   await cache.get();

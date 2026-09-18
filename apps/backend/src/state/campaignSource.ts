@@ -1,4 +1,6 @@
-import type { Campaign, CampaignDrop } from "./campaignCatalogue.js";
+import type {
+  Campaign, CampaignBenefit, CampaignDrop,
+} from "./campaignCatalogue.js";
 
 /**
  * Where the campaign list comes from, and why it is not Twitch.
@@ -46,6 +48,8 @@ const KEY = '"campaigns":[';
 
 interface SourceBenefit {
   name?: string;
+  /** The reward's own artwork, shown on the drop tile. */
+  imageAssetUrl?: string;
 }
 
 interface SourceDrop {
@@ -53,6 +57,9 @@ interface SourceDrop {
   name?: string;
   requiredMinutesWatched?: number;
   requiresSub?: boolean;
+  /** A drop's window can be narrower than its campaign's. */
+  startAt?: string;
+  endAt?: string;
   benefits?: SourceBenefit[];
 }
 
@@ -61,7 +68,13 @@ interface SourceCampaign {
   name?: string;
   startAt?: string;
   endAt?: string;
-  game?: { id?: string; displayName?: string; slug?: string } | null;
+  game?: {
+    id?: string;
+    displayName?: string;
+    slug?: string;
+    boxArtUrl?: string;
+  } | null;
+  owner?: { name?: string; type?: string } | null;
   timeBasedDrops?: SourceDrop[];
 }
 
@@ -100,21 +113,43 @@ function epochMs(value: string | undefined): number | null {
   return Number.isNaN(at) ? null : at;
 }
 
+/**
+ * A drop's awards, deduped, each keeping its own artwork.
+ *
+ * Deduped on name *and* image rather than name alone: a drop granting
+ * two of an item repeats the name, but two genuinely different rewards
+ * sharing a name are distinct tiles and collapsing them would drop one
+ * from the gallery. A benefit with no name is skipped entirely -- an
+ * unnamed tile is not something the card can label.
+ */
+function toBenefits(benefits: SourceBenefit[] | undefined): CampaignBenefit[] {
+  const seen = new Set<string>();
+  const out: CampaignBenefit[] = [];
+  for (const b of benefits ?? []) {
+    if (typeof b.name !== "string" || b.name === "") continue;
+    const imageUrl =
+      typeof b.imageAssetUrl === "string" && b.imageAssetUrl !== ""
+        ? b.imageAssetUrl
+        : null;
+    const key = `${b.name}\u0000${imageUrl ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: b.name, imageUrl });
+  }
+  return out;
+}
+
 function toDrop(drop: SourceDrop): CampaignDrop {
   return {
     id: drop.id ?? "",
     name: drop.name ?? "Drop",
-    // Deduped and flattened to names: the source nests a benefit object
-    // per award, and a drop granting two of an item repeats the name.
-    benefits: [
-      ...new Set((drop.benefits ?? []).map((b) => b.name).filter(
-        (n): n is string => typeof n === "string" && n !== "",
-      )),
-    ],
+    benefits: toBenefits(drop.benefits),
     requiredMinutes: drop.requiredMinutesWatched ?? 0,
     // A boolean upstream, a count here: the rest of the app reads
     // requiredSubs > 0 as unobtainable, matching Twitch's own field.
     requiredSubs: drop.requiresSub === true ? 1 : 0,
+    startsAt: epochMs(drop.startAt),
+    endsAt: epochMs(drop.endAt),
   };
 }
 
@@ -151,7 +186,15 @@ export function extractCampaigns(body: string): Campaign[] {
             id: c.game.id,
             slug: c.game.slug ?? "",
             displayName: c.game.displayName ?? "",
+            boxArtUrl:
+              typeof c.game.boxArtUrl === "string" && c.game.boxArtUrl !== ""
+                ? c.game.boxArtUrl
+                : null,
           }
+        : null,
+    owner:
+      c.owner && typeof c.owner.name === "string" && c.owner.name !== ""
+        ? { name: c.owner.name, type: c.owner.type ?? "" }
         : null,
     startsAt: epochMs(c.startAt),
     endsAt: epochMs(c.endAt),

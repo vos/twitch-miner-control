@@ -6,7 +6,7 @@ import type { InventoryMap, InventorySnapshot } from "./inventory.js";
 const drop = (over: Partial<CampaignDrop> = {}): CampaignDrop => ({
   id: "d1",
   name: "Crate",
-  benefits: ["Crate"],
+  benefits: [{ name: "Crate", imageUrl: "https://cdn/crate.png" }],
   requiredMinutes: 60,
   requiredSubs: 0,
   ...over,
@@ -109,16 +109,37 @@ test("minutes are clamped to the requirement", () => {
 
 test("a resolved drop carries its definition through", () => {
   const out = resolveDrop(
-    drop({ name: "Charm", benefits: ["Charm"], requiredMinutes: 120 }),
+    drop({
+      name: "Charm",
+      benefits: [{ name: "Charm", imageUrl: null }],
+      requiredMinutes: 120,
+    }),
     undefined,
     true,
   );
   expect(out).toMatchObject({
     id: "d1",
     name: "Charm",
-    benefits: ["Charm"],
+    benefits: [{ name: "Charm", imageUrl: null }],
     requiredMinutes: 120,
   });
+});
+
+test("a drop with no window of its own reports null rather than omitting it", () => {
+  // A catalogue persisted before these were parsed has no dates on its
+  // drops; the API shape stays the same either way.
+  const out = resolveDrop(drop({ startsAt: undefined, endsAt: undefined }), undefined, true);
+  expect(out.startsAt).toBeNull();
+  expect(out.endsAt).toBeNull();
+});
+
+test("a drop's own window is carried through to the card", () => {
+  const out = resolveDrop(
+    drop({ startsAt: 5_000, endsAt: 6_000 }),
+    undefined,
+    true,
+  );
+  expect(out).toMatchObject({ startsAt: 5_000, endsAt: 6_000 });
 });
 
 // --- campaign states ---
