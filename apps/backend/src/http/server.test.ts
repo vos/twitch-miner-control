@@ -1489,6 +1489,30 @@ test("reorder rewrites ranks in the given order", async () => {
   expect(saved.subscriptions.find((s) => s.id === "s1")?.rank).toBe(1);
 });
 
+test("reorder runs a pass so the new order reaches the miner", async () => {
+  // Rank alone changes nothing the miner can see: the engine writes the
+  // streamer list in rank order, and THAT order is what upstream's
+  // priority_order consumes. Without a pass the new ranks sit in the
+  // config while the miner keeps watching in the old order.
+  withSubs([aSub({ id: "s1", rank: 0 }), aSub({ id: "s2", targetId: "c2", rank: 1 })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/reorder", cookies: auth(),
+    payload: { ids: ["s2", "s1"] },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
+});
+
+test("a rejected reorder does not run a pass", async () => {
+  // Nothing was written, so there is nothing to propagate.
+  withSubs([aSub({ id: "s1" }), aSub({ id: "s2", targetId: "c2", rank: 1 })]);
+  await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/reorder", cookies: auth(),
+    payload: { ids: ["s1"] },
+  });
+  expect(ctx.engine.pass).not.toHaveBeenCalled();
+});
+
 test("reorder rejects a list that is not the full set", async () => {
   // A partial list would leave the missing ones with stale ranks.
   withSubs([aSub({ id: "s1" }), aSub({ id: "s2", targetId: "c2", rank: 1 })]);

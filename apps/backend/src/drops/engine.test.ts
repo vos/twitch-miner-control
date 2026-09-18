@@ -22,7 +22,9 @@ const owned = (username: string, ownedBy: string) =>
 function make(over: {
   config?: Partial<AppConfig>;
   catalogue?: Partial<Catalogue>;
-  directory?: () => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
+  directory?: (
+    game: { name: string; slug: string },
+  ) => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -108,6 +110,39 @@ test("subscriptions resolve in rank order", async () => {
   await engine.pass();
   // Rank 0 fills the miner's slots first -- it is what priority_order reads.
   expect(written(saveConfig).streamers[0]?.ownedBy).toBe("s1");
+});
+
+test("swapping two subscriptions' ranks rewrites the order and proposes a restart", async () => {
+  // The reorder case end to end: both pools are already resolved and
+  // nothing about WHICH channels are watched changes -- only their
+  // sequence. That sequence is what upstream's priority_order consumes,
+  // so it has to count as a change and earn a restart, or a reorder is
+  // a no-op the user cannot see.
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s2"), owned("delta", "s1")] as never,
+      subscriptions: [
+        sub({ id: "s1", rank: 0, poolSize: 1 }),
+        sub({ id: "s2", targetId: "c2", rank: 1, poolSize: 1 }),
+      ],
+    },
+    catalogue: {
+      campaigns: [campaign(), campaign({
+        id: "c2", name: "Beta",
+        game: { id: "g2", slug: "b-game", displayName: "B Game" },
+      })],
+    },
+    directory: async (game: { slug: string }) => [
+      game.slug === "a-game"
+        ? { login: "delta", channelId: "id-delta", viewers: 100 }
+        : { login: "beta", channelId: "id-beta", viewers: 500 },
+    ],
+  });
+  await engine.pass();
+  // s1 now outranks s2, so its channel is written first.
+  expect(written(saveConfig).streamers.map((s) => s.username))
+    .toEqual(["delta", "beta"]);
+  expect(propose).toHaveBeenCalledTimes(1);
 });
 
 test("an ended campaign drops its pool and its subscription", async () => {

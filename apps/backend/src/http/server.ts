@@ -568,6 +568,16 @@ export function buildServer(deps: ServerDeps): AppServer {
           ...s, rank: rankOf.get(s.id) ?? s.rank,
         })),
       });
+      // New ranks alone change nothing the miner can see. The engine
+      // writes the streamer list in rank order, and that written order is
+      // what upstream's priority_order consumes -- so the pass is what
+      // turns a reorder into different behaviour, and its reconcile is
+      // what proposes the restart that applies it. Without this the new
+      // order sits in the config until the next quarter-hour pass.
+      //
+      // Swallowed like the subscribe route's: the ranks are already
+      // saved, so failing the request would suggest they were not.
+      await deps.engine.pass().catch(() => {});
       return { ok: true };
     });
 
