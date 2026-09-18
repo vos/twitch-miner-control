@@ -80,3 +80,57 @@ test("a channel that is not being watched renders no tag", () => {
   row(LONG, false);
   expect(screen.queryByTestId("watching-tag")).not.toBeInTheDocument();
 });
+
+/**
+ * A subscription-owned row. The engine rewrites these on every pass, so
+ * the screen's job is to say where the channel came from and to keep the
+ * user from staging an edit that the next pass would silently undo.
+ */
+function ownedRow(ownedByLabel: string | null = "Rust Twitch Drops") {
+  return renderApp(
+    <DndContext>
+      <SortableContext items={["alpha"]}>
+        <StreamerRow
+          username="alpha"
+          enabled
+          index={0}
+          watching={false}
+          ownedByLabel={ownedByLabel}
+          status={null}
+          onToggle={() => {}}
+          onRemove={() => {}}
+          onOpenSettings={() => {}}
+        />
+      </SortableContext>
+    </DndContext>,
+  );
+}
+
+test("names the campaign that a subscription-owned channel came from", () => {
+  ownedRow();
+  expect(screen.getByTestId("owned-tag")).toHaveTextContent("Rust Twitch Drops");
+});
+
+test("an owned row offers no reorder, settings or remove control", () => {
+  ownedRow();
+  // Each of these stages an edit the engine's next pass would overwrite,
+  // so offering them at all would be a lie about what the screen does.
+  expect(screen.queryByLabelText("Reorder alpha")).toBeNull();
+  expect(screen.queryByLabelText("Settings for alpha")).toBeNull();
+  expect(screen.queryByLabelText("Remove alpha")).toBeNull();
+});
+
+test("an owned row can still be disabled by hand", () => {
+  // The one edit that survives: `enabled` is the user's say over whether
+  // the miner watches a channel, and reconcile preserves it across passes
+  // rather than resetting it.
+  ownedRow();
+  expect(screen.getByLabelText("Enable alpha")).toBeInTheDocument();
+});
+
+test("a hand-added row keeps every control and shows no campaign tag", () => {
+  ownedRow(null);
+  expect(screen.queryByTestId("owned-tag")).toBeNull();
+  expect(screen.getByLabelText("Reorder alpha")).toBeInTheDocument();
+  expect(screen.getByLabelText("Remove alpha")).toBeInTheDocument();
+});

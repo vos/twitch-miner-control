@@ -8,6 +8,15 @@ export interface StreamerState {
   username: string;
   displayName: string | null;
   channelId: string | null;
+  /**
+   * The drop campaign whose subscription put this channel in the roster,
+   * or null for one the user added by hand.
+   *
+   * Optional like the other late additions here: a snapshot from a
+   * backend that predates the field has no such key, and StreamerMeta
+   * reads it defensively for that reason.
+   */
+  ownedByLabel?: string | null;
   points: number | null;
   isOnline: boolean | null;
   pointsEnabled: boolean | null;

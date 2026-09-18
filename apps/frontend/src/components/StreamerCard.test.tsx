@@ -714,3 +714,23 @@ test("omits the benefits line when the miner reported none", async () => {
   await screen.findByTestId("drop-detail");
   expect(screen.queryByTestId("drop-benefits")).not.toBeInTheDocument();
 });
+
+test("names the drop campaign a subscription-added channel came from", () => {
+  // An unfamiliar channel on the dashboard raises exactly one question,
+  // and the campaign name is the answer to it.
+  view({ ownedByLabel: "Rust Twitch Drops" });
+  expect(screen.getByTestId("campaign-badge")).toHaveTextContent("Rust Twitch Drops");
+});
+
+test("a hand-added channel carries no campaign badge", () => {
+  view();
+  expect(screen.queryByTestId("campaign-badge")).toBeNull();
+});
+
+test("a snapshot without the campaign field renders no badge", () => {
+  // A backend that predates the field sends nothing here; reading it
+  // strictly would let `undefined` through, which is the failure mode
+  // StreamerMeta already guards every other optional field against.
+  view({ ownedByLabel: undefined });
+  expect(screen.queryByTestId("campaign-badge")).toBeNull();
+});

@@ -1389,3 +1389,34 @@ test("deriveLocal takes the newest verdict when a channel has flipped", async ()
   });
   expect(service.deriveLocal(["alpha"])[0].isOnline).toBe(false);
 });
+
+test("reports the campaign a subscription-owned channel came from", async () => {
+  const { service } = make([alpha(100)]);
+  // Not wired by `make`, so the default is the one every existing test
+  // exercises: no owner lookup at all, and no label on any card.
+  const owned = new StateService({
+    client: { request: vi.fn(async () => alpha(100)) } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+    ownerLabel: (login) => (login === "alpha" ? "Rust Twitch Drops" : null),
+  });
+  await owned.refresh();
+  expect(owned.snapshot().streamers[0].ownedByLabel).toBe("Rust Twitch Drops");
+
+  await service.refresh();
+  // A hand-added channel, and a service with no lookup wired, both say
+  // null rather than inventing an owner.
+  expect(service.snapshot().streamers[0].ownedByLabel).toBeNull();
+});
+
+test("deriveLocal carries the owning campaign onto the first paint", () => {
+  // The database-only paint is what the dashboard shows for its first
+  // couple of seconds; a badge that appeared only once the live pass
+  // landed would flicker in on every load.
+  seedHistory("alpha", clock);
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+    ownerLabel: () => "Rust Twitch Drops",
+  });
+  expect(service.deriveLocal(["alpha"])[0].ownedByLabel).toBe("Rust Twitch Drops");
+});

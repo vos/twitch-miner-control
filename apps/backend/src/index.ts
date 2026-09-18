@@ -28,7 +28,7 @@ import { PendingRestart } from "./drops/pendingRestart.js";
 import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
-import { resolveRoster } from "./state/roster.js";
+import { normaliseUsername, resolveRoster } from "./state/roster.js";
 import { InventoryCache } from "./state/inventory.js";
 import { StateService } from "./state/service.js";
 
@@ -172,6 +172,24 @@ function resolveStreamers(): Promise<string[]> {
   });
 }
 
+/**
+ * The campaign label for a subscription-owned channel, or null.
+ *
+ * Matched case-insensitively: the engine writes whatever login the
+ * directory reported, while the roster and the dashboard normalise, so a
+ * literal comparison would silently drop the badge on any channel whose
+ * capitalisation happens to differ.
+ */
+function subscriptionLabelFor(username: string): string | null {
+  const config = loadConfig(configPath);
+  const key = normaliseUsername(username);
+  const entry = config.streamers.find(
+    (s) => normaliseUsername(s.username) === key,
+  );
+  if (entry?.ownedBy === undefined) return null;
+  return config.subscriptions.find((sub) => sub.id === entry.ownedBy)?.label ?? null;
+}
+
 const streamers = new Streamers(db);
 const profileCache = new ProfileCache({ streamers, client: helper });
 
@@ -212,6 +230,7 @@ const stateService = new StateService({
   history,
   streamers,
   getStreamers: resolveStreamers,
+  ownerLabel: subscriptionLabelFor,
   profiles: profileCache,
   drops: dropsCache,
   // This process normally runs for days with no browser attached. A

@@ -33,6 +33,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   const multiplier = s.multiplier ?? null;
   const claimPending = s.claimPending ?? false;
   const watching = s.watching ?? false;
+  const campaign = s.ownedByLabel ?? null;
   // Offline: nothing is being mined, so nothing is being multiplied.
   const idle = s.isOnline !== true;
 
@@ -77,6 +78,23 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
         </Tooltip>
       )}
       {drop !== null && <DropBadge drop={drop} />}
+      {campaign !== null && (
+        <Tooltip
+          label={
+            `Added automatically to collect drops from ${campaign}. `
+            + "It leaves the list when you unsubscribe or the campaign ends."
+          }
+        >
+          {/* Why this channel is on the dashboard at all, which is the
+              question a name you do not recognise actually raises. Sits
+              beside the drop badge rather than replacing it: that one
+              says how far along the drop is, this one says who asked for
+              it, and a channel can legitimately show both. */}
+          <Badge color="grape" variant="outline" size="sm" data-testid="campaign-badge">
+            {campaign}
+          </Badge>
+        </Tooltip>
+      )}
       {s.pointsEnabled === false && (
         <Tooltip label="Channel points are disabled for this channel, so the balance cannot move.">
           <Badge color="yellow" variant="light" size="sm" data-testid="points-disabled">
@@ -90,7 +108,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   // An empty strip still costs a row gap on every card that has none of
   // these, so the whole thing is omitted rather than rendered blank.
   const hasBadges = multiplier !== null || claimPending || watching
-    || drop !== null || s.pointsEnabled === false;
+    || drop !== null || campaign !== null || s.pointsEnabled === false;
   if (!hasBadges && goal === null) return null;
 
   return (

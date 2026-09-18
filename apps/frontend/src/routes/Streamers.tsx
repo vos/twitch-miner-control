@@ -20,7 +20,18 @@ interface StreamerEntry {
   username: string;
   enabled: boolean;
   settings: Record<string, unknown>;
+  /**
+   * The id of the drop subscription that added this channel, when one
+   * did. Absent on a hand-added streamer.
+   *
+   * Read but never written here: the whole config object round-trips
+   * through the draft, so the field survives an Apply untouched, and the
+   * engine stays the only thing that sets it.
+   */
+  ownedBy?: string;
 }
+/** The subscriptions, so an owned row can name the campaign it came from. */
+interface SubscriptionEntry { id: string; label: string }
 /**
  * The slice of the live snapshot this screen reads.
  *
@@ -50,6 +61,8 @@ export function Streamers() {
   const [busy, setBusy] = useState(false);
 
   const [status, setStatus] = useState<Map<string, StreamerStatus>>(new Map());
+  /** Subscription id to campaign label, for the badge on owned rows. */
+  const [campaigns, setCampaigns] = useState<Map<string, string>>(new Map());
   const [refreshing, setRefreshing] = useState(false);
   /** Index of the streamer whose settings dialog is open, if any. */
   const [editing, setEditing] = useState<number | null>(null);
@@ -98,6 +111,19 @@ export function Streamers() {
       .catch((cause) => {
         setLoadError(cause instanceof Error ? cause.message : String(cause));
       });
+  }, []);
+
+  // Decoration, like the live status above: a failure here must not touch
+  // `loadError`. An owned row whose label is missing still renders as
+  // owned -- locked, with a generic badge -- because `ownedBy` alone is
+  // what makes it owned. Losing the name is worth less than wrongly
+  // offering controls that do not work.
+  useEffect(() => {
+    api.get<{ subscriptions: SubscriptionEntry[] }>("/api/subscriptions")
+      .then(({ subscriptions }) => {
+        setCampaigns(new Map(subscriptions.map((sub) => [sub.id, sub.label])));
+      })
+      .catch(() => {});
   }, []);
 
   if (loadError) {
@@ -150,10 +176,23 @@ export function Streamers() {
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
     // No `over` means the drag was cancelled or released outside the list.
     if (!over || active.id === over.id) return;
-    const from = draft.streamers.findIndex((s) => s.username === active.id);
-    const to = draft.streamers.findIndex((s) => s.username === over.id);
+    // Reordered within the hand-added rows alone, then spliced back into
+    // their original slots. A plain arrayMove over the mixed list would
+    // drag every owned row between the two positions along with it, and
+    // the engine writes those in its own rank order -- so the shuffle
+    // would show as a pending change and then be undone by the next pass.
+    const manual = draft.streamers.filter((s) => s.ownedBy === undefined);
+    const from = manual.findIndex((s) => s.username === active.id);
+    const to = manual.findIndex((s) => s.username === over.id);
     if (from === -1 || to === -1) return;
-    setDraft({ ...draft, streamers: arrayMove(draft.streamers, from, to) });
+    const moved = arrayMove(manual, from, to);
+    let next = 0;
+    setDraft({
+      ...draft,
+      streamers: draft.streamers.map(
+        (s) => (s.ownedBy === undefined ? moved[next++]! : s),
+      ),
+    });
   };
 
   const apply = async () => {
@@ -201,7 +240,8 @@ export function Streamers() {
         onDragEnd={handleDragEnd}
       >
         <SortableContext
-          items={draft.streamers.map((s) => s.username)}
+          items={draft.streamers.filter((s) => s.ownedBy === undefined)
+            .map((s) => s.username)}
           strategy={verticalListSortingStrategy}
         >
           <Stack gap={6}>
@@ -213,6 +253,7 @@ export function Streamers() {
                 status={status.get(streamer.username.toLowerCase()) ?? null}
                 index={index}
                 watching={status.get(streamer.username.toLowerCase())?.watching === true}
+                ownedByLabel={labelFor(streamer, campaigns)}
                 onToggle={() => toggle(index)}
                 onRemove={() => remove(index)}
                 onOpenSettings={() => setEditing(index)}
@@ -238,6 +279,22 @@ export function Streamers() {
       <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );
+}
+
+/**
+ * What to show on a row's campaign badge: the campaign name, a generic
+ * stand-in when the subscription list did not load, or null for a
+ * hand-added streamer.
+ *
+ * The fallback matters because the label is decoration but the lock is
+ * not -- see the fetch above.
+ */
+function labelFor(
+  streamer: StreamerEntry,
+  campaigns: Map<string, string>,
+): string | null {
+  if (streamer.ownedBy === undefined) return null;
+  return campaigns.get(streamer.ownedBy) ?? "drop campaign";
 }
 
 function countChanges(before: StreamerEntry[], after: StreamerEntry[]): number {

@@ -498,3 +498,86 @@ test("a staged removal does not move the watching tag", async () => {
   expect(rows[0].textContent).toContain("bbb");
   expect(screen.queryAllByTestId("watching-tag")).toHaveLength(0);
 });
+
+/**
+ * A roster with a subscription-owned channel in the middle of it, which
+ * is the arrangement that makes the reorder question interesting: the
+ * owned row sits between the two hand-added ones.
+ */
+function withOwned() {
+  const owned = {
+    ...config,
+    streamers: [
+      { username: "alpha", enabled: true, settings: {} },
+      { username: "dropchan", enabled: true, settings: {}, ownedBy: "sub-1" },
+      { username: "beta", enabled: true, settings: {} },
+    ],
+  };
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/config" && (!init || init.method === "GET")) {
+      return { ok: true, status: 200, json: async () => owned };
+    }
+    if (url === "/api/subscriptions") {
+      return { ok: true, status: 200, json: async () => ({
+        subscriptions: [{ id: "sub-1", label: "Rust Twitch Drops" }],
+      }) };
+    }
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({ streamers: [] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  }));
+  return owned;
+}
+
+test("badges a subscription-owned row with its campaign", async () => {
+  withOwned();
+  view();
+  const tag = await screen.findByTestId("owned-tag");
+  expect(tag).toHaveTextContent("Rust Twitch Drops");
+  // Only the owned row carries one.
+  expect(screen.getAllByTestId("owned-tag")).toHaveLength(1);
+});
+
+test("an owned row stays locked when the subscription list fails to load", async () => {
+  // The label is decoration; the lock is not. Offering controls that do
+  // not work is worse than a badge without a name.
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/subscriptions") throw new Error("offline");
+    if (url === "/api/config" && (!init || init.method === "GET")) {
+      return { ok: true, status: 200, json: async () => ({
+        ...config,
+        streamers: [{ username: "dropchan", enabled: true, settings: {}, ownedBy: "sub-1" }],
+      }) };
+    }
+    if (url === "/api/streamers") {
+      return { ok: true, status: 200, json: async () => ({ streamers: [] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  }));
+  view();
+  expect(await screen.findByTestId("owned-tag")).toHaveTextContent("drop campaign");
+  expect(screen.queryByLabelText("Remove dropchan")).toBeNull();
+});
+
+test("dragging past an owned row does not move it", async () => {
+  // The owned row's position is the engine's to decide -- it rewrites the
+  // list in subscription rank order on every pass. Carrying it along in
+  // an arrayMove would stage a change that the next pass silently undoes.
+  withOwned();
+  view();
+  await screen.findAllByTestId("streamer-row");
+  stubRowRects();
+  await dragBy(screen.getByLabelText("Reorder alpha"), 100);
+
+  await waitFor(() => {
+    const rows = screen.getAllByTestId("streamer-row");
+    // alpha and beta swap; dropchan holds its slot in the middle.
+    expect(rows[1].textContent).toContain("dropchan");
+  });
+  const rows = screen.getAllByTestId("streamer-row");
+  expect(rows[0].textContent).toContain("beta");
+  expect(rows[2].textContent).toContain("alpha");
+});

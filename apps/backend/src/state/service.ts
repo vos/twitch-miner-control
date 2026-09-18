@@ -12,6 +12,17 @@ import { roundViewers } from "./viewers.js";
 export interface StreamerState {
   username: string;
   channelId: string | null;
+  /**
+   * The drop campaign whose subscription put this channel in the roster,
+   * or null when nobody did -- a hand-added streamer, a followed one, or
+   * a backend wired without the lookup.
+   *
+   * The subscription's cached label rather than its id: the dashboard
+   * wants to render "where did this come from" without a second fetch,
+   * and that label is stored precisely so it still reads correctly once
+   * the campaign ends and leaves the catalogue.
+   */
+  ownedByLabel: string | null;
   displayName: string | null;
   points: number | null;
   isOnline: boolean | null;
@@ -143,7 +154,7 @@ export type RawStreamerState = Omit<
   | "gained24h" | "gainedSince" | "gainedStream" | "spark" | "avatarUrl"
   | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
-  | "game" | "streamTitle" | "viewers" | "drop"
+  | "game" | "streamTitle" | "viewers" | "drop" | "ownedByLabel"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
   streamStartedAt: number | null;
@@ -233,6 +244,21 @@ export interface StateServiceDeps {
    */
   streamers?: Streamers;
   getStreamers: () => string[] | Promise<string[]>;
+  /**
+   * Which subscription owns a channel, by its cached label.
+   *
+   * Deliberately a lookup beside the roster rather than a widening of
+   * `getStreamers`: that resolver unions the config list with the follow
+   * list and dedupes the two (see state/roster.ts), and threading a
+   * second field through it would complicate the one piece of roster
+   * logic that has to stay simple. Read per call, like the rest of this
+   * service's config access, so a subscription added between passes is
+   * picked up without a restart.
+   *
+   * Optional, and absent means every channel reports a null label --
+   * which is what every caller that does not care already gets.
+   */
+  ownerLabel?: (username: string) => string | null;
   intervalMs?: number;
   debounceMs?: number;
   staleAfterMs?: number;
@@ -643,6 +669,7 @@ export class StateService extends EventEmitter {
       // visibly rename the card to its lowercase login until the
       // next good poll.
       displayName: s.displayName ?? known?.displayName ?? null,
+      ownedByLabel: this.deps.ownerLabel?.(s.username) ?? null,
       gained24h,
       gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
       gainedStream:
