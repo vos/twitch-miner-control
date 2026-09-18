@@ -1,5 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { render, type RenderResult } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { LiveStateProvider } from "./api/useLiveState.js";
 import { theme } from "./theme.js";
@@ -61,4 +62,24 @@ export function stubRowRects(testId = "streamer-row"): void {
 /** Undoes {@link stubRowRects}. Call from `afterEach`. */
 export function restoreRects(): void {
   Element.prototype.getBoundingClientRect = nativeRect;
+}
+
+/**
+ * Drives one pointer drag from `handle` by `dy` pixels.
+ *
+ * dnd-kit's PointerSensor only begins a drag once the pointer has travelled
+ * past its activation distance, so the move is sent in two steps: one to get
+ * over the threshold and one to land on the target row.
+ *
+ * Pair with {@link stubRowRects}: without real geometry dnd-kit has nothing
+ * to compare the dragged row against and the drag reorders nothing.
+ */
+export async function dragBy(handle: HTMLElement, dy: number): Promise<void> {
+  const user = userEvent.setup();
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
+    { target: handle, coords: { x: 10, y: 10 + Math.sign(dy) * 20 } },
+    { target: handle, coords: { x: 10, y: 10 + dy } },
+    { keys: "[/MouseLeft]", target: handle, coords: { x: 10, y: 10 + dy } },
+  ]);
 }

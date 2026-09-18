@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Settings } from "./Settings.js";
-import { renderApp, restoreRects, stubRowRects } from "../test-utils.js";
+import { dragBy, renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const config = {
   version: 1, username: "alex", followers: false, followersOrder: "ASC",
@@ -29,23 +29,6 @@ const sentConfig = () => {
   const put = calls.find((c) => c.url === "/api/config" && c.init?.method === "PUT");
   return JSON.parse(String(put?.init?.body));
 };
-
-/**
- * Drives one pointer drag from `handle` by `dy` pixels.
- *
- * Mirrors the helper in Streamers.test.tsx: dnd-kit's PointerSensor only
- * begins a drag once the pointer has travelled past its activation
- * distance, so the move is sent in two steps.
- */
-async function dragBy(handle: HTMLElement, dy: number) {
-  const user = userEvent.setup();
-  await user.pointer([
-    { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
-    { target: handle, coords: { x: 10, y: 10 + Math.sign(dy) * 20 } },
-    { target: handle, coords: { x: 10, y: 10 + dy } },
-    { keys: "[/MouseLeft]", target: handle, coords: { x: 10, y: 10 + dy } },
-  ]);
-}
 
 /** Adds priorities by clicking their add-buttons, in the order given. */
 async function addPriorities(...labels: string[]) {

@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Streamers } from "./Streamers.js";
-import { renderApp, restoreRects, stubRowRects } from "../test-utils.js";
+import { dragBy, renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const config = {
   version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -110,23 +110,6 @@ test("rejects adding a duplicate", async () => {
   await userEvent.click(screen.getByRole("button", { name: /^add$/i }));
   expect(await screen.findByRole("alert")).toHaveTextContent(/already/i);
 });
-
-/**
- * Drives one pointer drag from `handle` by `dy` pixels.
- *
- * dnd-kit's PointerSensor only begins a drag once the pointer has travelled
- * past its activation distance, so the move is sent in two steps: one to get
- * over the threshold and one to land on the target row.
- */
-async function dragBy(handle: HTMLElement, dy: number) {
-  const user = userEvent.setup();
-  await user.pointer([
-    { keys: "[MouseLeft>]", target: handle, coords: { x: 10, y: 10 } },
-    { target: handle, coords: { x: 10, y: 10 + Math.sign(dy) * 20 } },
-    { target: handle, coords: { x: 10, y: 10 + dy } },
-    { keys: "[/MouseLeft]", target: handle, coords: { x: 10, y: 10 + dy } },
-  ]);
-}
 
 test("dragging a streamer down reorders priority and stages a change", async () => {
   stubRowRects();
