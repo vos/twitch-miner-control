@@ -6,6 +6,7 @@ import { useState } from "react";
 import { IconChevronDown } from "@tabler/icons-react";
 import { formatSpan } from "../lib/formatSpan.js";
 import { DropRow, type ResolvedDrop } from "./DropRow.js";
+import classes from "./CampaignCard.module.css";
 
 export type CampaignStatus = "collected" | "partial" | "untouched" | "unknown";
 
@@ -98,7 +99,11 @@ export function CampaignCard({
   const count = campaign.drops.length;
 
   return (
-    <Card withBorder padding="sm" data-testid="campaign-card">
+    // The id is what the subscriptions panel links down to. On the card
+    // rather than on a wrapper, so the browser scrolls the whole card
+    // into view and the drops that open below it are already on screen.
+    <Card withBorder padding="sm" id={`campaign-${campaign.id}`}
+          className={classes.card} data-testid="campaign-card">
       {/* The subscribe button is a sibling of the disclosure button:
           nesting one interactive element inside another is invalid and
           leaves a keyboard user no way to reach the inner control. */}

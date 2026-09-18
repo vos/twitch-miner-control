@@ -15,7 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   IconAlertTriangle, IconExternalLink, IconGripVertical, IconRefresh, IconSearch,
 } from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
 import { formatSpan } from "../lib/formatSpan.js";
@@ -94,6 +94,41 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
 }
 
 /**
+ * Where a subscription's label points, or null when nowhere real does.
+ *
+ * A campaign still in the catalogue links down to its own card on this
+ * same page: the tracker the catalogue comes from publishes one flat
+ * list with no per-campaign page, and the card below is the only place
+ * the drops are actually listed -- which is what the panel itself does
+ * not show.
+ *
+ * Otherwise the game's Twitch directory, which is where the channels in
+ * the row came from. That covers a `game` subscription, which is tied to
+ * no campaign at all, and a campaign that has since left the catalogue.
+ * A campaign whose game is unknown gets no link rather than a guessed
+ * one: a slug invented from a display name lands on a 404.
+ */
+function subscriptionLink(
+  sub: SubscriptionRow,
+  campaigns: ResolvedCampaign[],
+): { href: string; external: boolean } | null {
+  if (sub.kind === "campaign") {
+    const campaign = campaigns.find((c) => c.id === sub.targetId);
+    if (campaign !== undefined) {
+      return { href: `#campaign-${campaign.id}`, external: false };
+    }
+  }
+  const slug = campaigns.find(
+    (c) => c.game?.id === sub.targetId,
+  )?.game?.slug;
+  if (slug === undefined || slug === "") return null;
+  return {
+    href: `https://twitch.tv/directory/category/${slug}`,
+    external: true,
+  };
+}
+
+/**
  * One subscription in the panel, draggable by its grip.
  *
  * Rank decides which subscriptions fill the miner's watch slots first, so
@@ -106,13 +141,18 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
  * panel does not keep.
  */
 function SubscriptionRow({
-  sub, index, draggable, restartPending, busy, onRemove, onPoolSize,
+  sub, index, draggable, restartPending, busy, link, onOpen, onRemove,
+  onPoolSize,
 }: {
   sub: SubscriptionRow;
   index: number;
   draggable: boolean;
   restartPending: boolean;
   busy: boolean;
+  /** Where the label points, or null when nothing real to point at. */
+  link: { href: string; external: boolean } | null;
+  /** Called when an in-page link is followed, to open the card landed on. */
+  onOpen: () => void;
   onRemove: () => void;
   onPoolSize: (size: number) => void;
 }) {
@@ -176,7 +216,36 @@ function SubscriptionRow({
         )}
         <Text size="sm" c="dimmed" ff="monospace" w={16}>{index + 1}</Text>
         <div style={{ minWidth: 0 }}>
-          <Text size="sm" lineClamp={1}>{sub.label}</Text>
+          {/* The panel lists no drops of its own, so the label is the way
+              to somewhere that does. Plain text when there is nowhere to
+              go: a link that lands on nothing is worse than no link. */}
+          {link === null ? (
+            <Text size="sm" lineClamp={1}>{sub.label}</Text>
+          ) : (
+            <Anchor
+              size="sm"
+              lineClamp={1}
+              href={link.href}
+              // The in-page link stays in this tab -- it is a jump down
+              // the page, and opening a second copy of the app to reach
+              // a card already on screen is not what the click meant.
+              target={link.external ? "_blank" : undefined}
+              rel={link.external ? "noreferrer noopener" : undefined}
+              // Expanding the card is the point: arriving at a collapsed
+              // one shows nothing the panel did not already say. Only for
+              // the in-page jump; there is no card to open otherwise.
+              onClick={link.external ? undefined : onOpen}
+            >
+              {sub.label}
+              {link.external && (
+                <IconExternalLink
+                  size={11}
+                  style={{ marginLeft: 3, verticalAlign: "-1px" }}
+                  aria-hidden
+                />
+              )}
+            </Anchor>
+          )}
           <Text size="xs" c="dimmed">
             {/* Three different states, and saying the wrong one
                 is a claim about the miner that is not true:
@@ -188,9 +257,30 @@ function SubscriptionRow({
                 channels…" here would never resolve. */}
             {sub.channels.length === 0
               ? "nobody is streaming this right now"
-              : restartPending
-                ? `after the restart: ${sub.channels.join(", ")}`
-                : `watching ${sub.channels.join(", ")}`}
+              : (
+                <>
+                  {restartPending ? "after the restart: " : "watching "}
+                  {/* The commas are rendered between the links rather
+                      than joined into one string: a login is a place you
+                      can go, and the separators are not part of it. */}
+                  {sub.channels.map((login, at) => (
+                    <Fragment key={login}>
+                      {at > 0 && ", "}
+                      <Anchor
+                        size="xs"
+                        href={`https://twitch.tv/${login}`}
+                        // A new tab, because this page is a control panel
+                        // with a live session behind it: navigating it
+                        // away to glance at a channel loses that.
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {login}
+                      </Anchor>
+                    </Fragment>
+                  ))}
+                </>
+              )}
           </Text>
         </div>
       </Group>
@@ -280,6 +370,13 @@ export function Drops() {
   // being watched until it happens, and the panel must not claim
   // otherwise.
   const [restartPending, setRestartPending] = useState(false);
+  /**
+   * The campaign a subscription link jumped to, whose card is opened.
+   *
+   * One at a time: a second jump closes the first, so following two
+   * links does not leave a trail of opened cards behind.
+   */
+  const [jumpedTo, setJumpedTo] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -594,6 +691,8 @@ export function Drops() {
                     draggable={subs.length > 1}
                     restartPending={restartPending}
                     busy={busy !== null}
+                    link={subscriptionLink(sub, data.campaigns)}
+                    onOpen={() => setJumpedTo(sub.targetId)}
                     // Keyed to the campaign, not "panel": the card for
                     // this same subscription must go inert too, or it
                     // offers a second delete of what is already going.
@@ -639,7 +738,10 @@ export function Drops() {
                 key={campaign.id}
                 campaign={campaign}
                 subscribed={sub !== undefined}
-                expand={matchedByDropOnly(campaign, filter)}
+                expand={
+                  jumpedTo === campaign.id
+                  || matchedByDropOnly(campaign, filter)
+                }
                 busy={busy?.key === campaign.id ? busy.label : undefined}
                 onSubscribe={() => void mutate(
                   campaign.id,

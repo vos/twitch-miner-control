@@ -156,3 +156,10 @@ test("a busy card cannot be clicked again", async () => {
   await userEvent.click(screen.getByRole("button", { name: /subscribe/i }));
   expect(onSubscribe).not.toHaveBeenCalled();
 });
+
+test("carries an id so a link elsewhere on the page can reach it", () => {
+  // The subscriptions panel links its rows down to the card, which needs
+  // a stable anchor rather than a position in a list that re-sorts.
+  renderApp(<CampaignCard campaign={campaign()} />);
+  expect(screen.getByTestId("campaign-card").id).toBe("campaign-c1");
+});

@@ -1,0 +1,10 @@
+/* Clears the fixed 56px AppShell header when a link jumps to this card.
+   Without it the browser puts the card's top edge at the viewport's top,
+   which is underneath the header -- the campaign name, the badge and the
+   subscribe button all land behind it, and the card looks like it
+   scrolled to the wrong place. The extra 12px is breathing room, so the
+   card reads as having arrived rather than as being jammed against the
+   bar. */
+.card {
+  scroll-margin-top: 68px;
+}

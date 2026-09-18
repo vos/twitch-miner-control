@@ -946,3 +946,87 @@ test("a lone subscription offers no drag handle", async () => {
   // promise the panel does not keep.
   expect(screen.queryByRole("button", { name: /reorder/i })).toBeNull();
 });
+
+// --- subscription links ---
+
+test("a subscribed campaign links down to its own card", async () => {
+  // The panel lists no drops of its own, so the label is the way to the
+  // card that does list them.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const link = within(screen.getByTestId("subscriptions"))
+    .getByRole("link", { name: /alpha campaign/i });
+  expect(link.getAttribute("href")).toBe("#campaign-c1");
+});
+
+test("following the link opens the campaign's drops", async () => {
+  // Arriving at a collapsed card shows nothing the panel did not already
+  // say, which is the whole reason for the link.
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(within(screen.getByTestId("subscriptions"))
+    .getByRole("link", { name: /alpha campaign/i }));
+  const card = screen.getAllByTestId("campaign-card")
+    .find((c) => c.textContent?.includes("Alpha Campaign"))!;
+  await waitFor(() =>
+    expect(within(card).getByText("Crate")).toBeTruthy());
+});
+
+test("a subscription whose campaign has gone gets no dead anchor", async () => {
+  // The catalogue drops a campaign when it ends, and there is no card
+  // here to jump to. Nothing identifies its game either -- the row
+  // carries only the campaign id -- so the row goes plain rather than
+  // pointing somewhere invented.
+  withSubs([asSub({ targetId: "gone", label: "Ended Campaign" })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(within(screen.getByTestId("subscriptions"))
+    .queryByRole("link", { name: /ended campaign/i })).toBeNull();
+});
+
+test("a game subscription for an unknown game gets no link", async () => {
+  // Nothing in the catalogue carries its slug, and a slug guessed from
+  // the display name lands on a 404.
+  withSubs([asSub({ kind: "game", targetId: "g9", label: "Unlisted Game" })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(within(screen.getByTestId("subscriptions"))
+    .queryByRole("link", { name: /unlisted game/i })).toBeNull();
+});
+
+test("a game subscription links to that game's directory", async () => {
+  withSubs([asSub({
+    kind: "game", targetId: "g1", label: "Alpha Game",
+  })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const link = within(screen.getByTestId("subscriptions"))
+    .getByRole("link", { name: /alpha game/i });
+  expect(link.getAttribute("href"))
+    .toBe("https://twitch.tv/directory/category/alpha-game");
+});
+
+test("resolved channels link to their Twitch profiles", async () => {
+  withSubs([asSub({ channels: ["beta", "gamma"] })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const panel = screen.getByTestId("subscriptions");
+  expect(within(panel).getByRole("link", { name: "beta" }).getAttribute("href"))
+    .toBe("https://twitch.tv/beta");
+  expect(within(panel).getByRole("link", { name: "gamma" }).getAttribute("href"))
+    .toBe("https://twitch.tv/gamma");
+});
+
+test("channel links open in a new tab, away from the miner", async () => {
+  // Navigating the control panel away mid-session loses the page state;
+  // the profile is a reference, not a destination.
+  withSubs([asSub({ channels: ["beta"] })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const link = within(screen.getByTestId("subscriptions"))
+    .getByRole("link", { name: "beta" });
+  expect(link.getAttribute("target")).toBe("_blank");
+  expect(link.getAttribute("rel")).toMatch(/noopener/);
+});
