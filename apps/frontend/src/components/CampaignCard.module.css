@@ -8,3 +8,71 @@
 .card {
   scroll-margin-top: 68px;
 }
+
+/* The disclosure is a text control, not a button-shaped one: it sits on
+   the card's bottom edge beside Subscribe, and giving it a background
+   would read as a second primary action. */
+.disclosure {
+  border-radius: var(--mantine-radius-sm);
+  padding: 2px 4px;
+}
+
+.disclosure:hover {
+  background: var(--tw-surface-alt);
+}
+
+/* The opened card's rewards. The minimum track is wide enough for a
+   40px reward tile, a two-line name and a status badge underneath: below
+   about 240px the name column collapses and the minutes wrap a character
+   at a time. Inside the page's ~380px card that yields one column, which
+   is the honest answer -- two would be narrower than the content. */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The out-link is a quiet affordance: grey at rest so eighty cards do
+   not each carry a bright mark, lifting to the text colour on hover. It
+   sits beside the disclosure, both of them secondary to Subscribe. */
+.outLink {
+  display: flex;
+  align-items: center;
+  color: var(--tw-text-dim);
+  padding: 2px 4px;
+  border-radius: var(--mantine-radius-sm);
+  line-height: 0;
+}
+
+.outLink:hover {
+  color: var(--tw-text);
+  background: var(--tw-surface-alt);
+}
+
+/* A drop's threshold on the progress track. The track itself is the
+   positioning context, so these need it to be relative -- Mantine's
+   Progress.Root is static by default. */
+.card :global(.mantine-Progress-root) {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Notched out of the bar rather than drawn on top of it: a light line
+   would read as a third progress colour, and a dark one disappears
+   against the unfilled grey. Cutting the track instead works over teal,
+   orange and grey alike, which is what makes the segmentation legible
+   wherever the progress happens to have reached.
+
+   translateX centres the line on its threshold, which matters where two
+   marks fall close together. */
+.tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: var(--tw-surface);
+  pointer-events: none;
+  z-index: 1;
+}

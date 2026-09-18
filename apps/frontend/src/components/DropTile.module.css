@@ -1,0 +1,16 @@
+/* Each drop sits on its own panel inside the opened card, so a campaign
+   with several reads as a set of rewards rather than one long column of
+   text. Slightly lighter than the card behind it, which is what makes
+   the boundary visible without a border on every tile. */
+.tile {
+  background: var(--tw-surface-alt);
+  border: 1px solid var(--tw-border);
+  border-radius: var(--mantine-radius-sm);
+  padding: 8px;
+}
+
+/* A claimed or sub-gated reward is still worth seeing -- it says what
+   the campaign offers -- but it is not what the card is scanned for. */
+.mutedArt {
+  opacity: 0.45;
+}

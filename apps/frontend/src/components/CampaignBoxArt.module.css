@@ -1,0 +1,57 @@
+.art,
+.fallback {
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+/* The letter tile stands in for missing art. Muted on purpose: it is a
+   placeholder, and a bright one would out-shout the real box art on the
+   cards beside it. */
+.fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tw-surface-alt);
+  border: 1px solid var(--tw-border);
+  border-radius: var(--mantine-radius-sm);
+  color: var(--tw-text-dim);
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+/* The art carries the link, so the affordance is the art reacting rather
+   than a coloured anchor: the card already spends purple on the time
+   left and on Subscribe, and a third would leave none of them meaning
+   anything. Nothing at rest, so a grid of eighty cards looks exactly as
+   it did before the link existed. */
+.link {
+  display: block;
+  flex-shrink: 0;
+  line-height: 0;
+  border-radius: var(--mantine-radius-sm);
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+.link:hover {
+  filter: brightness(1.15);
+  transform: scale(1.02);
+}
+
+/* A keyboard user gets a real focus ring -- brightness alone is not a
+   focus indicator, and this is the card's only link. */
+.link:focus-visible {
+  outline: 2px solid var(--tw-purple);
+  outline-offset: 2px;
+}
+
+/* Someone who has asked for less motion still gets the brightness. */
+@media (prefers-reduced-motion: reduce) {
+  .link {
+    transition: filter 120ms ease;
+  }
+  .link:hover {
+    transform: none;
+  }
+}

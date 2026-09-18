@@ -1,0 +1,18 @@
+/* A reward sits on its own dark tile rather than floating on the card:
+   the source's PNGs are transparent and many are near-white line art,
+   which disappears against the surface behind it. */
+.icon,
+.placeholder {
+  background: var(--tw-bg);
+  border: 1px solid var(--tw-border);
+  border-radius: var(--mantine-radius-sm);
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tw-text-dim);
+}
