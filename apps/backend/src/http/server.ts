@@ -582,6 +582,39 @@ export function buildServer(deps: ServerDeps): AppServer {
     });
 
     /**
+     * How many channels this subscription keeps in the config.
+     *
+     * The bound comes from the schema rather than being restated here,
+     * so the route and the stored config can never disagree about what
+     * a legal pool is.
+     */
+    instance.post("/api/subscriptions/:id/pool-size", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const config = loadConfig(deps.configPath);
+      if (!config.subscriptions.some((s) => s.id === id)) {
+        return reply.code(404).send({ error: "no such subscription" });
+      }
+      const poolSize = subscriptionSchema.shape.poolSize
+        .safeParse((request.body as { poolSize?: unknown }).poolSize);
+      if (!poolSize.success) {
+        return reply.code(400).send({ error: "not a valid pool size" });
+      }
+      saveConfig(deps.configPath, {
+        ...config,
+        subscriptions: config.subscriptions.map((s) => (
+          s.id === id ? { ...s, poolSize: poolSize.data } : s
+        )),
+      });
+      // The number alone owns no channels: the pass is what resolves the
+      // wider or narrower pool and proposes the restart that applies it.
+      //
+      // Swallowed like the subscribe route's -- the size is already
+      // saved, so failing the request would suggest it was not.
+      await deps.engine.pass().catch(() => {});
+      return { ok: true };
+    });
+
+    /**
      * POST rather than DELETE: every other mutating route in this file
      * is a POST, and the client has no delete helper.
      */

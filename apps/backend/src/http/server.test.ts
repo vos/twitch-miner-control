@@ -1523,6 +1523,64 @@ test("reorder rejects a list that is not the full set", async () => {
   expect(res.statusCode).toBe(400);
 });
 
+test("pool size can be changed", async () => {
+  withSubs([aSub({ poolSize: 3 })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/pool-size", cookies: auth(),
+    payload: { poolSize: 6 },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(loadConfig(ctx.configPath).subscriptions[0]?.poolSize).toBe(6);
+});
+
+test("changing the pool size runs a pass so the new size reaches the miner", async () => {
+  // The stored number alone owns no channels: the pass is what resolves
+  // the bigger or smaller pool and proposes the restart that applies it.
+  withSubs([aSub({ poolSize: 3 })]);
+  await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/pool-size", cookies: auth(),
+    payload: { poolSize: 6 },
+  });
+  expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
+});
+
+test("a failed resolve still leaves the new pool size saved", async () => {
+  // Same bargain as subscribing: the number is written either way, so
+  // failing the request would suggest it was not.
+  withSubs([aSub({ poolSize: 3 })]);
+  ctx.engine.pass.mockRejectedValueOnce(new Error("directory down"));
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/pool-size", cookies: auth(),
+    payload: { poolSize: 6 },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(loadConfig(ctx.configPath).subscriptions[0]?.poolSize).toBe(6);
+});
+
+test("a pool size outside the allowed range is rejected", async () => {
+  // The bound lives in the schema; the route must not invent its own.
+  withSubs([aSub({ poolSize: 3 })]);
+  for (const poolSize of [0, 11, 2.5, "3", null]) {
+    const res = await ctx.app.inject({
+      method: "POST", url: "/api/subscriptions/s1/pool-size", cookies: auth(),
+      payload: { poolSize },
+    });
+    expect(res.statusCode, String(poolSize)).toBe(400);
+  }
+  expect(loadConfig(ctx.configPath).subscriptions[0]?.poolSize).toBe(3);
+  expect(ctx.engine.pass).not.toHaveBeenCalled();
+});
+
+test("setting the pool size of an unknown subscription is a 404", async () => {
+  withSubs([aSub({ id: "s1" })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/nope/pool-size", cookies: auth(),
+    payload: { poolSize: 5 },
+  });
+  expect(res.statusCode).toBe(404);
+  expect(ctx.engine.pass).not.toHaveBeenCalled();
+});
+
 test("POST /api/subscriptions/resolve runs a pass immediately", async () => {
   withSubs([aSub()]);
   const res = await ctx.app.inject({
@@ -1549,7 +1607,8 @@ test("restart cancel and fire-now reach the pending restart", async () => {
 test("the subscription routes require a session", async () => {
   for (const url of [
     "/api/subscriptions", "/api/subscriptions/reorder",
-    "/api/subscriptions/resolve", "/api/restart/cancel",
+    "/api/subscriptions/resolve", "/api/subscriptions/s1/pool-size",
+    "/api/restart/cancel",
   ]) {
     const res = await ctx.app.inject({ method: "POST", url });
     expect(res.statusCode, url).toBe(401);

@@ -1,5 +1,6 @@
 import {
-  ActionIcon, Alert, Anchor, Button, Card, Group, Loader, Stack, Text, TextInput,
+  ActionIcon, Alert, Anchor, Button, Card, Group, Loader, NumberInput, Stack,
+  Text, TextInput, Tooltip,
 } from "@mantine/core";
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCenter,
@@ -18,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
 import { formatSpan } from "../lib/formatSpan.js";
+import classes from "./Drops.module.css";
 
 /** A subscription as the API reports it, with its resolved channels. */
 export interface SubscriptionRow {
@@ -104,7 +106,7 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
  * panel does not keep.
  */
 function SubscriptionRow({
-  sub, index, draggable, restartPending, busy, onRemove,
+  sub, index, draggable, restartPending, busy, onRemove, onPoolSize,
 }: {
   sub: SubscriptionRow;
   index: number;
@@ -112,11 +114,36 @@ function SubscriptionRow({
   restartPending: boolean;
   busy: boolean;
   onRemove: () => void;
+  onPoolSize: (size: number) => void;
 }) {
   const {
     attributes, listeners, setNodeRef, setActivatorNodeRef, transform,
     transition, isDragging,
   } = useSortable({ id: sub.id, disabled: !draggable });
+  /**
+   * What is in the box, which is not yet what is in force.
+   *
+   * Held locally so the digits can be edited freely -- half a number is
+   * a legal thing to have typed and an illegal thing to save. It is
+   * committed on blur or Enter rather than per keystroke: each commit
+   * costs a directory resolve and may propose a restart, so typing "6"
+   * over "3" must not first ask the engine for a pool of one.
+   */
+  const [draft, setDraft] = useState<string | number>(sub.poolSize);
+  useEffect(() => { setDraft(sub.poolSize); }, [sub.poolSize]);
+
+  function commit() {
+    const size = Number(draft);
+    // An emptied box is not a request for zero channels; it falls back
+    // to the size actually in force rather than posting something the
+    // server would reject.
+    if (!Number.isInteger(size) || size < 1 || size > 10) {
+      setDraft(sub.poolSize);
+      return;
+    }
+    if (size === sub.poolSize) return;
+    onPoolSize(size);
+  }
 
   return (
     <Group
@@ -167,18 +194,58 @@ function SubscriptionRow({
           </Text>
         </div>
       </Group>
-      <Button
-        size="compact-xs"
-        variant="subtle"
-        color="gray"
-        // Every Remove goes inert, not just the one clicked:
-        // a second removal mid-flight would post against a
-        // subscription the first call is already deleting.
-        loading={busy}
-        onClick={onRemove}
-      >
-        Remove
-      </Button>
+      <Group gap={6} wrap="nowrap">
+        {/* The number alone is a count of nothing in particular, so the
+            unit is on the row and the reason behind it is a hover away.
+            Both, rather than one: the word is what makes the control
+            legible at a glance, and the tooltip is what explains why
+            anyone would change it. */}
+        <Tooltip
+          label={
+            "How many channels to keep resolved for this campaign. "
+            + "More absorbs channels going offline between checks; "
+            + "fewer leaves room for your other subscriptions."
+          }
+          multiline
+          w={260}
+        >
+          <NumberInput
+            size="xs"
+            // Two digits and the stepper, no more. The arrows are hidden
+            // until the control is hovered or focused, so a resting row
+            // is the number and its unit rather than a pair of chevrons
+            // repeated down the panel.
+            w={48}
+            min={1}
+            max={10}
+            clampBehavior="strict"
+            aria-label={`Channels for ${sub.label}`}
+            disabled={busy}
+            value={draft}
+            onChange={setDraft}
+            onBlur={commit}
+            onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+            classNames={{
+              root: classes.poolField,
+              input: classes.poolInput,
+              controls: classes.poolStepper,
+            }}
+          />
+        </Tooltip>
+        <Text size="xs" c="dimmed">channels</Text>
+        <Button
+          size="compact-xs"
+          variant="subtle"
+          color="gray"
+          // Every Remove goes inert, not just the one clicked:
+          // a second removal mid-flight would post against a
+          // subscription the first call is already deleting.
+          loading={busy}
+          onClick={onRemove}
+        >
+          Remove
+        </Button>
+      </Group>
     </Group>
   );
 }
@@ -534,6 +601,16 @@ export function Drops() {
                       sub.targetId,
                       "Unsubscribing…",
                       () => api.post(`/api/subscriptions/${sub.id}/remove`),
+                    )}
+                    // A different pool size is a different set of
+                    // channels, so this waits on a resolve like
+                    // subscribing does.
+                    onPoolSize={(poolSize) => void mutate(
+                      sub.targetId,
+                      "Finding channels to watch…",
+                      () => api.post(
+                        `/api/subscriptions/${sub.id}/pool-size`, { poolSize },
+                      ),
                     )}
                   />
                 ))}

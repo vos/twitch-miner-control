@@ -730,6 +730,119 @@ const twoSubs = [
   asSub({ id: "s2", targetId: "c2", label: "Beta Campaign", rank: 1 }),
 ];
 
+test("the pool size says what it counts", async () => {
+  // A bare stepper is a number with no unit: the row must say the thing
+  // being counted is channels, or it reads as an unexplained setting.
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const row = screen.getByTestId("subscription-row");
+  expect(row.textContent).toMatch(/channels/i);
+});
+
+test("the pool size explains itself on hover", async () => {
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.hover(
+    screen.getByRole("textbox", { name: /channels for alpha/i }),
+  );
+  await waitFor(() => expect(
+    screen.getByText(/how many channels/i),
+  ).toBeTruthy());
+});
+
+test("changing the pool size posts the new size", async () => {
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const input = screen.getByRole("textbox", { name: /channels for alpha/i });
+  await userEvent.clear(input);
+  await userEvent.type(input, "6");
+  await userEvent.tab();
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/subscriptions/s1/pool-size");
+    expect(post).toBeTruthy();
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ poolSize: 6 });
+  });
+});
+
+test("committing the size it already had posts nothing", async () => {
+  // Every commit costs a directory resolve and possibly a restart, so a
+  // blur that changed nothing must not spend one.
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const input = screen.getByRole("textbox", { name: /channels for alpha/i });
+  await userEvent.click(input);
+  await userEvent.tab();
+  expect(calls.some((c) => c.url.endsWith("/pool-size"))).toBe(false);
+});
+
+test("typing digits does not post until the field is committed", async () => {
+  // A post per keystroke would resolve the directory for 1, then 16,
+  // on the way to typing 6.
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const input = screen.getByRole("textbox", { name: /channels for alpha/i });
+  await userEvent.clear(input);
+  await userEvent.type(input, "6");
+  expect(calls.some((c) => c.url.endsWith("/pool-size"))).toBe(false);
+});
+
+test("Enter commits the pool size without leaving the field", async () => {
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const input = screen.getByRole("textbox", { name: /channels for alpha/i });
+  await userEvent.clear(input);
+  await userEvent.type(input, "5{Enter}");
+  await waitFor(() => expect(calls.some(
+    (c) => c.url === "/api/subscriptions/s1/pool-size",
+  )).toBe(true));
+});
+
+test("an emptied pool size falls back to the one in force", async () => {
+  // A blank box is not a request for zero channels, and posting one
+  // would be rejected anyway.
+  withSubs([asSub({ poolSize: 3 })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const input = screen.getByRole("textbox", { name: /channels for alpha/i });
+  await userEvent.clear(input);
+  await userEvent.tab();
+  expect(calls.some((c) => c.url.endsWith("/pool-size"))).toBe(false);
+  await waitFor(() => expect((input as HTMLInputElement).value).toBe("3"));
+});
+
+test("the pool size is disabled while a removal is in flight", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url.endsWith("/remove")) await gate;
+    const payload = url.startsWith("/api/subscriptions")
+      ? { subscriptions: [asSub()] }
+      : url.startsWith("/api/status")
+        ? { pendingRestart: { pending: false, dueAt: null, reason: null } }
+        : body;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  await userEvent.click(
+    within(screen.getByTestId("subscriptions"))
+      .getByRole("button", { name: /^remove$/i }),
+  );
+  await waitFor(() => expect(
+    screen.getByRole("textbox", { name: /channels for alpha/i })
+      .hasAttribute("disabled"),
+  ).toBe(true));
+  release!();
+});
+
 test("the rank of each subscription is on the row", async () => {
   withSubs(twoSubs);
   renderApp(<Drops />);
