@@ -26,5 +26,17 @@ export const theme = createTheme({
   components: {
     Card: { defaultProps: { bg: "var(--tw-surface)", withBorder: true } },
     Paper: { defaultProps: { bg: "var(--tw-surface)" } },
+    /**
+     * Mantine's stock tooltip is near-white, which glares against a
+     * forced-dark app -- it was the one floating surface not following
+     * the palette. Set here rather than per call site so every tooltip
+     * in the app matches, including the ones already written.
+     */
+    Tooltip: {
+      defaultProps: {
+        bg: "var(--tw-surface-alt)",
+        color: "var(--tw-text)",
+      },
+    },
   },
 });

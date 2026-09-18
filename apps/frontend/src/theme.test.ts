@@ -14,3 +14,13 @@ test("sets monospace to the tabular-figure face used for every number", () => {
   // fallback makes a ticking uptime jitter.
   expect(theme.fontFamilyMonospace).toMatch(/JetBrains Mono/);
 });
+
+test("tooltips use the dark surface, not Mantine's light default", () => {
+  // The app is forced dark. Mantine's stock tooltip is near-white, which
+  // glares against every surface it is summoned over -- and it is the
+  // only floating surface that did not follow the palette.
+  const props = theme.components?.Tooltip?.defaultProps as
+    { bg?: string; color?: string } | undefined;
+  expect(props?.bg).toBe("var(--tw-surface-alt)");
+  expect(props?.color).toBe("var(--tw-text)");
+});
