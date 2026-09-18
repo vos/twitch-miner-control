@@ -1,8 +1,18 @@
 import {
-  Alert, Anchor, Button, Card, Group, Loader, Stack, Text, TextInput,
+  ActionIcon, Alert, Anchor, Button, Card, Group, Loader, Stack, Text, TextInput,
 } from "@mantine/core";
 import {
-  IconAlertTriangle, IconExternalLink, IconRefresh, IconSearch,
+  DndContext, KeyboardSensor, PointerSensor, closestCenter,
+  useSensor, useSensors, type DragEndEvent,
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext, arrayMove, sortableKeyboardCoordinates,
+  useSortable, verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  IconAlertTriangle, IconExternalLink, IconGripVertical, IconRefresh, IconSearch,
 } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
@@ -79,6 +89,98 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
   const needle = filter.trim().toLowerCase();
   if (needle === "") return false;
   return !matchesHeader(c, needle) && matchesDrop(c, needle);
+}
+
+/**
+ * One subscription in the panel, draggable by its grip.
+ *
+ * Rank decides which subscriptions fill the miner's watch slots first, so
+ * the position is shown rather than merely implied: an unnumbered list
+ * reads as decoration, and this order is the thing that picks what gets
+ * watched.
+ *
+ * `draggable` is false for a lone subscription -- there is nothing to
+ * reorder against, and a grip that cannot do anything is a promise the
+ * panel does not keep.
+ */
+function SubscriptionRow({
+  sub, index, draggable, restartPending, busy, onRemove,
+}: {
+  sub: SubscriptionRow;
+  index: number;
+  draggable: boolean;
+  restartPending: boolean;
+  busy: boolean;
+  onRemove: () => void;
+}) {
+  const {
+    attributes, listeners, setNodeRef, setActivatorNodeRef, transform,
+    transition, isDragging,
+  } = useSortable({ id: sub.id, disabled: !draggable });
+
+  return (
+    <Group
+      ref={setNodeRef}
+      data-testid="subscription-row"
+      justify="space-between"
+      wrap="nowrap"
+      gap="xs"
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        // The lifted row rides above its neighbours as they slide under it.
+        zIndex: isDragging ? 1 : undefined,
+        opacity: isDragging ? 0.6 : undefined,
+      }}
+    >
+      <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+        {draggable && (
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            ref={setActivatorNodeRef}
+            aria-label={`Reorder ${sub.label}`}
+            style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
+            {...attributes}
+            {...listeners}
+          >
+            <IconGripVertical size={16} />
+          </ActionIcon>
+        )}
+        <Text size="sm" c="dimmed" ff="monospace" w={16}>{index + 1}</Text>
+        <div style={{ minWidth: 0 }}>
+          <Text size="sm" lineClamp={1}>{sub.label}</Text>
+          <Text size="xs" c="dimmed">
+            {/* Three different states, and saying the wrong one
+                is a claim about the miner that is not true:
+                the engine looked and found nobody live, resolved
+                but not watched until the pending restart lands,
+                or genuinely being watched now.
+                An empty pool is an answer, not a wait -- the
+                engine resolves on subscribe, so "finding
+                channels…" here would never resolve. */}
+            {sub.channels.length === 0
+              ? "nobody is streaming this right now"
+              : restartPending
+                ? `after the restart: ${sub.channels.join(", ")}`
+                : `watching ${sub.channels.join(", ")}`}
+          </Text>
+        </div>
+      </Group>
+      <Button
+        size="compact-xs"
+        variant="subtle"
+        color="gray"
+        // Every Remove goes inert, not just the one clicked:
+        // a second removal mid-flight would post against a
+        // subscription the first call is already deleting.
+        loading={busy}
+        onClick={onRemove}
+      >
+        Remove
+      </Button>
+    </Group>
+  );
 }
 
 /**
@@ -174,6 +276,48 @@ export function Drops() {
       setError(cause instanceof Error ? cause.message : "that did not work");
     } finally {
       setBusy(null);
+    }
+  }
+
+  // An activation distance keeps a click on the grip from being read as a
+  // drag; the keyboard sensor is the only reorder path for a keyboard user.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  /**
+   * Commits a drag to the server, optimistically.
+   *
+   * The rows move first: a row that springs back while the POST is in
+   * flight reads as the drag having failed. A rejected call restores the
+   * previous order rather than leaving an order up that the engine is not
+   * using, which is the worse of the two lies.
+   *
+   * Not routed through `mutate`: that reloads the list on success, and
+   * re-reading a freshly written order would only replace the rows with
+   * identical ones. The restart state does need re-reading, because a new
+   * rank order changes which channels the miner watches.
+   */
+  async function reorder({ active, over }: DragEndEvent) {
+    if (over === null || active.id === over.id) return;
+    const from = subs.findIndex((s) => s.id === active.id);
+    const to = subs.findIndex((s) => s.id === over.id);
+    if (from === -1 || to === -1) return;
+
+    const previous = subs;
+    const moved = arrayMove(subs, from, to);
+    setSubs(moved);
+    try {
+      // The endpoint rejects anything short of the full set, which is
+      // exactly what this list is.
+      await api.post("/api/subscriptions/reorder", {
+        ids: moved.map((s) => s.id),
+      });
+      await loadRestart();
+    } catch (cause: unknown) {
+      setSubs(previous);
+      setError(cause instanceof Error ? cause.message : "could not reorder");
     }
   }
 
@@ -364,49 +508,38 @@ export function Drops() {
               restarts when they change.
             </Text>
           )}
-          <Stack gap="xs">
-            {subs.map((sub) => (
-              <Group key={sub.id} justify="space-between" wrap="nowrap" gap="xs">
-                <div style={{ minWidth: 0 }}>
-                  <Text size="sm" lineClamp={1}>{sub.label}</Text>
-                  <Text size="xs" c="dimmed">
-                    {/* Three different states, and saying the wrong one
-                        is a claim about the miner that is not true:
-                        the engine looked and found nobody live, resolved
-                        but not watched until the pending restart lands,
-                        or genuinely being watched now.
-                        An empty pool is an answer, not a wait -- the
-                        engine resolves on subscribe, so "finding
-                        channels…" here would never resolve. */}
-                    {sub.channels.length === 0
-                      ? "nobody is streaming this right now"
-                      : restartPending
-                        ? `after the restart: ${sub.channels.join(", ")}`
-                        : `watching ${sub.channels.join(", ")}`}
-                  </Text>
-                </div>
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  color="gray"
-                  // Every Remove goes inert, not just the one clicked:
-                  // a second removal mid-flight would post against a
-                  // subscription the first call is already deleting.
-                  loading={busy !== null}
-                  // Keyed to the campaign, not "panel": the card for
-                  // this same subscription must go inert too, or it
-                  // offers a second delete of what is already going.
-                  onClick={() => void mutate(
-                    sub.targetId,
-                    "Unsubscribing…",
-                    () => api.post(`/api/subscriptions/${sub.id}/remove`),
-                  )}
-                >
-                  Remove
-                </Button>
-              </Group>
-            ))}
-          </Stack>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+            onDragEnd={(event) => void reorder(event)}
+          >
+            <SortableContext
+              items={subs.map((s) => s.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <Stack gap="xs">
+                {subs.map((sub, index) => (
+                  <SubscriptionRow
+                    key={sub.id}
+                    sub={sub}
+                    index={index}
+                    draggable={subs.length > 1}
+                    restartPending={restartPending}
+                    busy={busy !== null}
+                    // Keyed to the campaign, not "panel": the card for
+                    // this same subscription must go inert too, or it
+                    // offers a second delete of what is already going.
+                    onRemove={() => void mutate(
+                      sub.targetId,
+                      "Unsubscribing…",
+                      () => api.post(`/api/subscriptions/${sub.id}/remove`),
+                    )}
+                  />
+                ))}
+              </Stack>
+            </SortableContext>
+          </DndContext>
         </Card>
       )}
 

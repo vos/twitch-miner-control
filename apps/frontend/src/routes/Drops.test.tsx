@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Drops } from "./Drops.js";
-import { renderApp } from "../test-utils.js";
+import { dragBy, renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const aDrop = {
   id: "d1", name: "Crate", benefits: ["Crate"],
@@ -46,7 +46,7 @@ beforeEach(() => {
   }));
 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); restoreRects(); });
 
 test("lists every campaign the server returns", async () => {
   renderApp(<Drops />);
@@ -716,4 +716,120 @@ test("removing from the panel also freezes that campaign's card button", async (
   expect(within(card).getByRole("button", { name: /unsubscribe/i })
     .hasAttribute("disabled")).toBe(true);
   release!();
+});
+
+// --- reordering subscriptions ---
+
+/**
+ * Two subscriptions in rank order, the fixture every reorder test drags.
+ * Ranks are what the engine sorts by, so they are set explicitly rather
+ * than left to the array order.
+ */
+const twoSubs = [
+  asSub({ id: "s1", targetId: "c1", label: "Alpha Campaign", rank: 0 }),
+  asSub({ id: "s2", targetId: "c2", label: "Beta Campaign", rank: 1 }),
+];
+
+test("the rank of each subscription is on the row", async () => {
+  withSubs(twoSubs);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  // The order is the whole point of the panel -- unnumbered it reads as
+  // decoration rather than the thing that picks what gets watched first.
+  const rows = screen.getAllByTestId("subscription-row");
+  expect(rows[0].textContent).toMatch(/1/);
+  expect(rows[0].textContent).toContain("Alpha Campaign");
+  expect(rows[1].textContent).toContain("Beta Campaign");
+});
+
+test("dragging a subscription down posts the new order", async () => {
+  stubRowRects("subscription-row");
+  withSubs(twoSubs);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+
+  const handles = screen.getAllByRole("button", { name: /reorder/i });
+  await dragBy(handles[0], 60);
+
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/subscriptions/reorder");
+    expect(post).toBeTruthy();
+    // The endpoint rejects anything short of the full set, so the whole
+    // list goes up, in its new order.
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ ids: ["s2", "s1"] });
+  });
+});
+
+test("a reordered row moves before the server answers", async () => {
+  stubRowRects("subscription-row");
+  withSubs(twoSubs);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+
+  await dragBy(screen.getAllByRole("button", { name: /reorder/i })[0], 60);
+
+  // Optimistic: a row that springs back while the POST is in flight reads
+  // as the drag having failed.
+  const rows = screen.getAllByTestId("subscription-row");
+  expect(rows[0].textContent).toContain("Beta Campaign");
+  expect(rows[1].textContent).toContain("Alpha Campaign");
+});
+
+test("the drag handle reorders from the keyboard alone", async () => {
+  stubRowRects("subscription-row");
+  withSubs(twoSubs);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+
+  // Space lifts, arrow moves, space drops -- the only reorder path for a
+  // keyboard user, and the reason the grip is a button at all.
+  screen.getAllByRole("button", { name: /reorder/i })[0].focus();
+  await userEvent.keyboard("{ }");
+  await userEvent.keyboard("{ArrowDown}");
+  await userEvent.keyboard("{ }");
+
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/subscriptions/reorder");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ ids: ["s2", "s1"] });
+  });
+});
+
+test("a rejected reorder puts the rows back", async () => {
+  stubRowRects("subscription-row");
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/subscriptions/reorder") {
+      return { ok: false, status: 500, json: async () => ({ error: "nope" }) };
+    }
+    if (url.startsWith("/api/subscriptions")) {
+      return { ok: true, status: 200, json: async () => ({ subscriptions: twoSubs }) };
+    }
+    if (url.startsWith("/api/status")) {
+      return { ok: true, status: 200, json: async () => ({
+        pendingRestart: { pending: false, dueAt: null, reason: null },
+      }) };
+    }
+    return { ok: true, status: 200, json: async () => body };
+  }));
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+
+  await dragBy(screen.getAllByRole("button", { name: /reorder/i })[0], 60);
+
+  // Leaving the optimistic order up would show an order the engine is not
+  // using, which is worse than the drag visibly not taking.
+  await waitFor(() => {
+    const rows = screen.getAllByTestId("subscription-row");
+    expect(rows[0].textContent).toContain("Alpha Campaign");
+    expect(rows[1].textContent).toContain("Beta Campaign");
+  });
+});
+
+test("a lone subscription offers no drag handle", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  // Nothing to reorder against: a grip that cannot do anything is a
+  // promise the panel does not keep.
+  expect(screen.queryByRole("button", { name: /reorder/i })).toBeNull();
 });
