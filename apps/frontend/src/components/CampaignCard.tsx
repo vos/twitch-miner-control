@@ -1,11 +1,12 @@
 import {
-  Anchor, Badge, Button, Card, Collapse, Group, Loader, Progress, Stack,
-  Text, Tooltip, UnstyledButton,
+  Anchor, Badge, Button, Card, Collapse, Group, Loader, Popover, Progress,
+  Stack, Text, Tooltip, UnstyledButton,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
 import { IconChevronDown, IconExternalLink } from "@tabler/icons-react";
 import { formatSpan } from "../lib/formatSpan.js";
+import { windowLines } from "../lib/campaignWindow.js";
 import { CampaignBoxArt } from "./CampaignBoxArt.js";
 import { DropTile, type ResolvedDrop } from "./DropTile.js";
 import { RewardIcon } from "./RewardIcon.js";
@@ -286,6 +287,17 @@ export function CampaignCard({
     set(expand);
   }
 
+  const [datesOpen, { open: openDates, close: closeDates, toggle: toggleDates }] =
+    useDisclosure(false);
+  // Hover only where hovering is real: a tap synthesises mouseenter and
+  // mouseleave around its click, and binding them unconditionally lets
+  // the mouseleave close what the click just opened.
+  const hoverable = typeof window !== "undefined"
+    && window.matchMedia?.("(hover: hover)").matches === true;
+  const dateHover = hoverable
+    ? { onMouseEnter: openDates, onMouseLeave: closeDates }
+    : {};
+
   const now = Date.now();
   const upcoming = scheduled(campaign.startsAt, now);
   const status = badge(campaign.status, campaign.startsAt, campaign.endsAt, now);
@@ -297,6 +309,7 @@ export function CampaignCard({
   const marks = time === null
     ? []
     : milestones(campaign.drops, time.required);
+  const dates = windowLines(campaign.startsAt, campaign.endsAt, now);
   const all = rewards(campaign.drops);
   const shown = all.slice(0, ICON_CAP);
   const extra = all.length - shown.length;
@@ -336,30 +349,69 @@ export function CampaignCard({
                 only an end still reports its deadline. */}
             {(campaign.endsAt !== null
               || (upcoming && campaign.startsAt !== null)) && (
-              <Text
-                size="xs"
-                fw={600}
-                // Purple for a running campaign, dimmed once it has shut:
-                // the accent means "act on this", which an ended campaign
-                // is not asking for.
-                c={over ? "dimmed" : "var(--tw-purple)"}
-                style={{ whiteSpace: "nowrap" }}
-                data-testid="campaign-ends"
+              /* A Popover rather than a Tooltip, for the reason
+                 DropBadge and StreamContext use one: a tooltip opens on
+                 hover only, so on a phone the exact dates -- the whole
+                 point of the panel -- were unreachable. */
+              <Popover
+                opened={datesOpen}
+                onDismiss={closeDates}
+                position="bottom-end"
+                withArrow
+                shadow="md"
+                disabled={dates.rows.length === 0}
               >
-                {/* Three tenses, and the wrong one is a claim about
-                    what you can earn right now. A campaign that has not
-                    opened counts down to its start -- reporting its
-                    deadline instead reads as time you could be earning
-                    it. Past tense once the window has shut: a finished
-                    campaign is not "ending in -2d". */}
-                {over
-                  ? "ended"
-                  : upcoming && campaign.startsAt !== null
-                    ? `starts in ${formatSpan(campaign.startsAt - now)}`
-                    : campaign.endsAt !== null
-                      ? `${formatSpan(campaign.endsAt - now)} left`
-                      : null}
-              </Text>
+                <Popover.Target>
+                  <UnstyledButton
+                    {...dateHover}
+                    onClick={toggleDates}
+                    aria-expanded={datesOpen}
+                    aria-label={`${campaign.name} campaign window`}
+                    className={classes.countdown}
+                    data-ended={over ? "" : undefined}
+                    data-testid="campaign-ends"
+                  >
+                    {/* Three tenses, and the wrong one is a claim about
+                        what you can earn right now. A campaign that has
+                        not opened counts down to its start -- reporting
+                        its deadline instead reads as time you could be
+                        earning it. Past tense once the window has shut:
+                        a finished campaign is not "ending in -2d". */}
+                    {over
+                      ? "ended"
+                      : upcoming && campaign.startsAt !== null
+                        ? `starts in ${formatSpan(campaign.startsAt - now)}`
+                        : campaign.endsAt !== null
+                          ? `${formatSpan(campaign.endsAt - now)} left`
+                          : null}
+                  </UnstyledButton>
+                </Popover.Target>
+                <Popover.Dropdown data-testid="campaign-window">
+                  {/* Label and value as two columns, set in the theme's
+                      own type rather than padded into alignment: the
+                      dimmed label carries the distinction, so the dates
+                      line up without a monospace trick. */}
+                  <Stack gap={4}>
+                    {dates.rows.map((row) => (
+                      <Group key={row.label} gap="sm" wrap="nowrap"
+                             justify="space-between">
+                        <Text size="xs" c="dimmed">{row.label}</Text>
+                        <Text size="xs" fw={500}>{row.value}</Text>
+                      </Group>
+                    ))}
+                    {/* Set apart from the dates above it: those are the
+                        facts, this is the same window read back
+                        relative to now. On the dates' own 4px rhythm it
+                        reads as a third date. */}
+                    {dates.state !== null && (
+                      <Text size="xs" c="dimmed" mt={4}
+                            data-testid="campaign-window-state">
+                        {dates.state}
+                      </Text>
+                    )}
+                  </Stack>
+                </Popover.Dropdown>
+              </Popover>
             )}
           </Group>
 

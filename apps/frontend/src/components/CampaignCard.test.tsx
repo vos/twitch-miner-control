@@ -74,7 +74,7 @@ test("drops are hidden until the card is expanded", async () => {
   // content mounts with the enter transition rather than synchronously.
   renderApp(<CampaignCard campaign={campaign()} />);
   expect(screen.queryByTestId("drop-row")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: /campaign one/i }));
+  await userEvent.click(screen.getByRole("button", { name: /campaign one, 1 drop/i }));
   await waitFor(() => expect(screen.getByTestId("drop-row")).toBeTruthy());
 });
 
@@ -640,4 +640,40 @@ test("the ticks are decorative, the tooltip carrying the figures", () => {
   for (const tick of screen.getAllByTestId("drop-tick")) {
     expect(tick.getAttribute("aria-hidden")).toBe("true");
   }
+});
+
+test("the countdown opens the exact dates on click", async () => {
+  // "4d left" rounds to a single unit, so it spans most of a day either
+  // way; someone deciding whether to start a campaign needs the real
+  // deadline, and the card has no room to print it.
+  const user = userEvent.setup();
+  renderApp(<CampaignCard campaign={campaign({
+    startsAt: Date.now() - 2 * 86_400_000,
+    endsAt: Date.now() + 3 * 86_400_000,
+  })} />);
+  await user.click(screen.getByTestId("campaign-ends"));
+  const panel = await screen.findByTestId("campaign-window");
+  expect(panel.textContent).toMatch(/Starts/);
+  expect(panel.textContent).toMatch(/Ends/);
+  expect(screen.getByTestId("campaign-window-state").textContent)
+    .toBe("started 2d ago");
+});
+
+test("the countdown is reachable without a pointer", async () => {
+  // A tooltip opens on hover only, which no touch device can do -- the
+  // reason this is a Popover behind a real button.
+  renderApp(<CampaignCard campaign={campaign()} />);
+  const target = screen.getByTestId("campaign-ends");
+  expect(target.tagName).toBe("BUTTON");
+  expect(target.getAttribute("aria-expanded")).toBe("false");
+  await userEvent.setup().click(target);
+  await waitFor(() =>
+    expect(target.getAttribute("aria-expanded")).toBe("true"));
+});
+
+test("a campaign with no dates shows no window panel", () => {
+  renderApp(<CampaignCard campaign={campaign({ startsAt: null, endsAt: null })} />);
+  // The countdown itself is not rendered without a date to report.
+  expect(screen.queryByTestId("campaign-ends")).toBeNull();
+  expect(screen.queryByTestId("campaign-window")).toBeNull();
 });

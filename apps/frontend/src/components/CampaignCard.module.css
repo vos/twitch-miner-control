@@ -76,3 +76,30 @@
   pointer-events: none;
   z-index: 1;
 }
+
+/* The countdown is a button now that its dates open a panel, so it has
+   to shed the button chrome and keep reading as the label it was.
+   Purple for a running campaign, dimmed once it has shut: the accent
+   means "act on this", which an ended campaign is not asking for. */
+.countdown {
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--tw-purple);
+  border-radius: var(--mantine-radius-sm);
+}
+
+.countdown[data-ended] {
+  color: var(--mantine-color-dimmed);
+}
+
+/* The affordance: underlined on hover, so a pointer user learns the
+   dates are there without a permanent decoration on every card. */
+.countdown:hover {
+  text-decoration: underline;
+}
+
+.countdown:focus-visible {
+  outline: 2px solid var(--tw-purple);
+  outline-offset: 2px;
+}
