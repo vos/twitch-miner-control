@@ -78,6 +78,54 @@ test("ties break by login so the pool is stable across passes", () => {
   expect(out.channels).toEqual(["alpha", "beta"]);
 });
 
+test("live incumbents keep their slots and their order", () => {
+  // The whole point of a pool: while a member is still live it carries
+  // the drop, so re-ranking it by viewers buys nothing and costs a
+  // restart. Upstream's priority_order reads this order, but honouring a
+  // viewer shuffle is not worth the miner's accumulated session state.
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("gamma", 900), chan("beta", 500), chan("alpha", 10),
+  ], ["alpha", "beta", "gamma"]);
+  expect(out.channels).toEqual(["alpha", "beta", "gamma"]);
+  expect(out.degraded).toBe(false);
+});
+
+test("a pool with one live member left is left alone, offline members and all", () => {
+  // One live streamer still makes progress. Topping the pool back up
+  // would restart the miner to buy resilience we do not need yet -- and
+  // the offline members stay in the list so the miner resumes them by
+  // itself when they come back.
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("alpha", 10), chan("delta", 900), chan("epsilon", 800),
+  ], ["alpha", "beta", "gamma"]);
+  expect(out.channels).toEqual(["alpha", "beta", "gamma"]);
+});
+
+test("a dead pool is rebuilt from the directory", () => {
+  // No incumbent is live, so nothing is collecting -- this is the one
+  // case where a rebuild and its restart are worth paying for.
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("delta", 900), chan("epsilon", 800), chan("zeta", 700),
+  ], ["alpha", "beta", "gamma"]);
+  expect(out.channels).toEqual(["delta", "epsilon", "zeta"]);
+});
+
+test("an empty pool resolves fresh rather than counting as dead-but-kept", () => {
+  // A brand new subscription owns nothing yet; it must fill.
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("delta", 900), chan("epsilon", 800),
+  ], []);
+  expect(out.channels).toEqual(["delta", "epsilon"]);
+});
+
+test("incumbents are matched regardless of login casing", () => {
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("alpha", 10), chan("delta", 900),
+  ], ["Alpha", "beta"]);
+  // Still live, so the pool holds -- and keeps the config's spelling.
+  expect(out.channels).toEqual(["Alpha", "beta"]);
+});
+
 test("a game subscription resolves without needing a campaign", () => {
   // Subscribing to a game is not tied to any one campaign's lifetime.
   const out = resolveSubscription(

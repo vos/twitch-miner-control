@@ -145,6 +145,76 @@ test("swapping two subscriptions' ranks rewrites the order and proposes a restar
   expect(propose).toHaveBeenCalledTimes(1);
 });
 
+test("a live pool whose viewer ranking shuffled does not restart the miner", async () => {
+  // The bug this guards: the pool was rebuilt as an absolute top-N by
+  // viewers every pass, so two live members trading places rewrote the
+  // config and restarted the miner. All three still collect; nothing
+  // about the drop changed.
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "gamma", channelId: "id-gamma", viewers: 900 },
+      { login: "beta", channelId: "id-beta", viewers: 50 },
+    ],
+  });
+  await engine.pass();
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a bigger channel appearing does not evict a live pool member", async () => {
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "omega", channelId: "id-omega", viewers: 9000 },
+      { login: "beta", channelId: "id-beta", viewers: 500 },
+      { login: "gamma", channelId: "id-gamma", viewers: 50 },
+    ],
+  });
+  await engine.pass();
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a pool down to its last live member still does not restart", async () => {
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "omega", channelId: "id-omega", viewers: 9000 },
+      { login: "beta", channelId: "id-beta", viewers: 5 },
+    ],
+  });
+  await engine.pass();
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a pool with nobody live left is rebuilt and earns its restart", async () => {
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "omega", channelId: "id-omega", viewers: 9000 },
+      { login: "delta", channelId: "id-delta", viewers: 500 },
+    ],
+  });
+  await engine.pass();
+  expect(written(saveConfig).streamers.map((s) => s.username))
+    .toEqual(["omega", "delta"]);
+  expect(propose).toHaveBeenCalledTimes(1);
+});
+
 test("an ended campaign drops its pool and its subscription", async () => {
   // A campaign missing from a FRESH catalogue has ended.
   const { engine, saveConfig, propose } = make({

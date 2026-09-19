@@ -12,10 +12,11 @@ import {
  * How often subscriptions are re-resolved.
  *
  * Fifteen minutes. This is the cadence at which a WHOLE pool can go
- * stale, not the cadence at which individual channels go offline -- the
- * pool absorbs that without help, because the miner's own selector moves
- * down the list. Well under the shortest meaningful drop (30 minutes),
- * so even a completely dead pool costs at most half a drop's progress.
+ * stale, not the cadence at which individual channels go offline -- a
+ * pool keeping even one live member is left untouched by a pass, so
+ * members going offline cost nothing until the last one does. Well under
+ * the shortest meaningful drop (30 minutes), so even a completely dead
+ * pool costs at most half a drop's progress.
  */
 export const RECONCILE_INTERVAL_MS = 900_000;
 
@@ -90,11 +91,13 @@ export class SubscriptionEngine {
         continue;
       }
 
+      const incumbents = config.streamers
+        .filter((s) => s.ownedBy === sub.id)
+        .map((s) => s.username);
+
       const keepExisting = () => {
-        for (const s of config.streamers) {
-          if (s.ownedBy === sub.id) {
-            desired.push({ username: s.username, ownedBy: sub.id });
-          }
+        for (const username of incumbents) {
+          desired.push({ username, ownedBy: sub.id });
         }
       };
 
@@ -112,7 +115,7 @@ export class SubscriptionEngine {
         // subscription so one failing lookup does not sink the others.
       }
 
-      const result = resolveSubscription(sub, campaign, directory);
+      const result = resolveSubscription(sub, campaign, directory, incumbents);
       if (result.degraded) {
         // Keep whatever this subscription already owns rather than
         // dropping it -- an empty pool stops collection invisibly.
