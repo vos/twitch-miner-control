@@ -154,6 +154,27 @@ test("shows both cache ages separately", async () => {
   expect(screen.getByTestId("progress-age")).toBeTruthy();
 });
 
+test("never-fetched progress reads as never, not as 1970", async () => {
+  // Without a Twitch login the inventory is never fetched and its
+  // timestamp stays 0, which formatted as an age read "20715d ago" --
+  // the epoch, presented as though progress had genuinely been read
+  // once, 56 years ago.
+  body = { ...payload, progressFetchedAt: 0, progressAvailable: false };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByTestId("progress-age").textContent).toBe("Progress never read"));
+});
+
+test("a catalogue that has never been read says so too", async () => {
+  body = {
+    ...payload, catalogueFetchedAt: 0, catalogueAvailable: false, campaigns: [],
+  };
+  renderApp(<Drops />);
+  await waitFor(() =>
+    expect(screen.getByTestId("catalogue-age").textContent)
+      .toBe("Campaigns never read"));
+});
+
 test("warns when progress could not be read", async () => {
   body = { ...payload, progressAvailable: false };
   renderApp(<Drops />);

@@ -116,8 +116,17 @@ function inView(c: ResolvedCampaign, view: View, now: number): boolean {
   }
 }
 
-/** "3h ago", or "just now" below a minute -- a zero span reads as broken. */
-function age(at: number): string {
+/**
+ * "3h ago", or "just now" below a minute -- a zero span reads as broken.
+ *
+ * Null when the cache has never been filled. Both timestamps start at 0
+ * and only advance on a successful fetch, so a miner with no Twitch
+ * session reported its progress as "20715d ago" -- the epoch, formatted
+ * as though the inventory had genuinely been read once, in 1970. "Never"
+ * is the honest answer, and it is a different claim from an old one.
+ */
+function age(at: number): string | null {
+  if (at <= 0) return null;
   const delta = Date.now() - at;
   return delta < 60_000 ? "just now" : `${formatSpan(delta)} ago`;
 }
@@ -675,6 +684,9 @@ export function Drops() {
 
   if (data === null) return <Loader />;
 
+  const catalogueAge = age(data.catalogueFetchedAt);
+  const progressAge = age(data.progressFetchedAt);
+
   return (
     // Wider than the rest of the app: the campaigns below are a card
     // grid, and the cap is what decides how many fit per row -- 1400
@@ -742,10 +754,14 @@ export function Drops() {
 
       <Group gap="md" wrap="wrap">
         <Text size="xs" c="dimmed" data-testid="catalogue-age">
-          Campaigns updated {age(data.catalogueFetchedAt)}
+          {catalogueAge === null
+            ? "Campaigns never read"
+            : `Campaigns updated ${catalogueAge}`}
         </Text>
         <Text size="xs" c="dimmed" data-testid="progress-age">
-          Progress updated {age(data.progressFetchedAt)}
+          {progressAge === null
+            ? "Progress never read"
+            : `Progress updated ${progressAge}`}
         </Text>
         <Text size="xs" c="dimmed" data-testid="catalogue-source">
           Campaigns from{" "}
@@ -788,8 +804,12 @@ export function Drops() {
         </Alert>
       ) : data.catalogueStale ? (
         <Alert color="yellow" data-testid="catalogue-stale">
-          This list could not be refreshed, so it may be missing campaigns
-          announced since {age(data.catalogueFetchedAt)}.
+          {/* Stale implies a successful earlier fetch, so the age is
+              always known here -- but the sentence must not degrade into
+              "announced since ." if that ever stops holding. */}
+          {catalogueAge === null
+            ? "This list could not be refreshed, so it may be missing campaigns."
+            : `This list could not be refreshed, so it may be missing campaigns announced since ${catalogueAge}.`}
         </Alert>
       ) : null}
 
