@@ -14,3 +14,10 @@
 .mutedArt {
   opacity: 0.45;
 }
+
+/* Reward names wrap rather than clamp: they carry the quantities
+   ("5m Speedup*12"), so a name cut mid-word loses the part that
+   distinguishes one award from another. */
+.benefitName {
+  overflow-wrap: anywhere;
+}

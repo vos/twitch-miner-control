@@ -44,29 +44,34 @@ const STATE: Record<DropStatus, { label: string; colour: string }> = {
 };
 
 /**
- * The reward this drop is best represented by, or null when it has none.
+ * What this drop awards, as rows to render.
  *
- * The first benefit, because a drop granting several awards them
- * together -- there is no "main" one to pick, and the tile has room for
- * a single image. The rest are named in the subtitle.
- */
-function cover(drop: ResolvedDrop): DropBenefit | null {
-  return drop.benefits[0] ?? null;
-}
-
-/**
- * The benefit names worth printing under a drop's own name.
+ * Every benefit gets its own icon and label. The tile used to draw only
+ * `benefits[0]` and cram the rest into one clamped line of text, which
+ * meant a drop awarding eight items showed one picture and a truncated
+ * list -- the other seven had artwork in the catalogue that appeared
+ * nowhere in the app, not even behind the collapsed card's "+N".
  *
- * Dropped when they would only repeat it: a drop called "Hazmat Suit"
- * awarding a "Hazmat Suit" renders the same words twice, which reads as
- * a rendering fault rather than detail.
+ * A drop with nothing named still yields one row, standing for the drop
+ * itself: it awards something, and a tile with no artwork at all reads
+ * as a failed load. That row is left unlabelled, since the drop's name
+ * is already printed directly above it.
  */
-function subtitle(drop: ResolvedDrop): string | null {
-  const listed = drop.benefits.map((b) => b.name).join(", ");
-  if (listed === "" || listed.toLowerCase() === drop.name.toLowerCase()) {
-    return null;
+function benefitRows(
+  drop: ResolvedDrop,
+): { key: string; name: string; imageUrl: string | null; label: string | null }[] {
+  if (drop.benefits.length === 0) {
+    return [{ key: drop.id, name: drop.name, imageUrl: null, label: null }];
   }
-  return listed;
+  return drop.benefits.map((b, at) => ({
+    key: `${b.name}\u0000${at}`,
+    name: b.name,
+    imageUrl: b.imageUrl,
+    // Dropped when it would only repeat the drop's own name: a "Hazmat
+    // Suit" awarding a "Hazmat Suit" renders the same words twice,
+    // which reads as a rendering fault rather than as detail.
+    label: b.name.toLowerCase() === drop.name.toLowerCase() ? null : b.name,
+  }));
 }
 
 /**
@@ -84,8 +89,59 @@ export function DropTile({ drop }: { drop: ResolvedDrop }) {
   const showBar = drop.status === "in-progress";
   const unknown = drop.status === "unknown";
   const muted = drop.status === "claimed" || drop.status === "unobtainable";
-  const art = cover(drop);
-  const benefits = subtitle(drop);
+  const rows = benefitRows(drop);
+
+  // A drop awarding one thing is the common case and reads best as a
+  // single line: the big icon beside the name, the way the tile looked
+  // before the gallery learned to show every reward. Stacking that one
+  // reward into a list orphans the name on a row of its own, shrinks the
+  // art for no reason and makes every tile taller than it needs to be.
+  const single = rows.length === 1;
+
+  const meta = (
+    /* The cost and the state, on the tile's last line. Kept off the
+       name's row: these tiles are two to a row inside an already-narrow
+       card, and a badge reading "progress unknown" beside the name
+       leaves it no width at all -- it collapses to nothing and the
+       minutes wrap one character per line. */
+    <Group gap={6} wrap="nowrap" justify="space-between" mt={2}>
+      <Text
+        size="xs"
+        c="dimmed"
+        style={{ whiteSpace: "nowrap" }}
+        data-testid="drop-progress"
+      >
+        {unknown
+          ? `— / ${drop.requiredMinutes}m`
+          : drop.status === "in-progress"
+            ? `${drop.minutes}/${drop.requiredMinutes}m`
+            : `${drop.requiredMinutes}m`}
+      </Text>
+      <Badge
+        size="xs"
+        color={state.colour}
+        variant={drop.status === "claimable" ? "filled" : "light"}
+        data-testid="drop-state"
+      >
+        {state.label}
+      </Badge>
+    </Group>
+  );
+
+  const name = (
+    <Text size="sm" fw={500} lineClamp={2} c={muted ? "dimmed" : undefined}>
+      {drop.name}
+    </Text>
+  );
+
+  /* Dimmed once claimed or unearnable, so a finished campaign's tiles
+     recede rather than competing with the ones still worth watching
+     for. */
+  const icon = (row: typeof rows[number], size: number) => (
+    <div className={muted ? classes.mutedArt : undefined}>
+      <RewardIcon name={row.name} imageUrl={row.imageUrl} size={size} />
+    </div>
+  );
 
   return (
     <Stack
@@ -94,58 +150,39 @@ export function DropTile({ drop }: { drop: ResolvedDrop }) {
       data-testid="drop-row"
       data-status={drop.status}
     >
-      <Group gap="xs" wrap="nowrap" align="flex-start">
-        {/* Dimmed once claimed or unearnable, so a finished campaign's
-            tiles recede rather than competing with the ones still worth
-            watching for. */}
-        <div className={muted ? classes.mutedArt : undefined}>
-          <RewardIcon
-            name={art?.name ?? drop.name}
-            imageUrl={art?.imageUrl ?? null}
-            size={40}
-          />
-        </div>
-
-        <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-          <Text size="sm" fw={500} lineClamp={2} c={muted ? "dimmed" : undefined}>
-            {drop.name}
-          </Text>
-
-          {benefits !== null && (
-            <Text size="xs" c="dimmed" lineClamp={1} data-testid="drop-benefits">
-              {benefits}
-            </Text>
-          )}
-
-          {/* The badge sits under the name rather than beside it: these
-              tiles are two to a row inside an already-narrow card, and a
-              badge reading "progress unknown" on the same line leaves the
-              name no width at all -- it collapses to nothing and the
-              minutes wrap one character per line. */}
-          <Group gap={6} wrap="nowrap" justify="space-between" mt={2}>
-            <Text
-              size="xs"
-              c="dimmed"
-              style={{ whiteSpace: "nowrap" }}
-              data-testid="drop-progress"
-            >
-              {unknown
-                ? `— / ${drop.requiredMinutes}m`
-                : drop.status === "in-progress"
-                  ? `${drop.minutes}/${drop.requiredMinutes}m`
-                  : `${drop.requiredMinutes}m`}
-            </Text>
-            <Badge
-              size="xs"
-              color={state.colour}
-              variant={drop.status === "claimable" ? "filled" : "light"}
-              data-testid="drop-state"
-            >
-              {state.label}
-            </Badge>
-          </Group>
+      {single ? (
+        <Group gap="xs" wrap="nowrap" align="flex-start"
+               data-testid="drop-benefit">
+          {icon(rows[0], 40)}
+          <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+            {name}
+            {meta}
+          </Stack>
+        </Group>
+      ) : (
+        <Stack gap={4}>
+          {name}
+          {/* One row per award, each with its own artwork. Stacked
+              rather than a bare icon grid so every reward is readable
+              without hovering -- these names carry the quantities
+              ("5m Speedup*12"), which is most of what distinguishes one
+              from another. */}
+          <Stack gap={4} data-testid="drop-benefit-list">
+            {rows.map((row) => (
+              <Group key={row.key} gap={6} wrap="nowrap" align="center"
+                     data-testid="drop-benefit">
+                {icon(row, 24)}
+                {row.label !== null && (
+                  <Text size="xs" c="dimmed" className={classes.benefitName}>
+                    {row.label}
+                  </Text>
+                )}
+              </Group>
+            ))}
+          </Stack>
+          {meta}
         </Stack>
-      </Group>
+      )}
 
       {showBar && (
         <Tooltip label={`${drop.minutes} of ${drop.requiredMinutes} minutes watched`}>

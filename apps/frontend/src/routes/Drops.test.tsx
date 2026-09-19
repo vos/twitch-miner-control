@@ -5,12 +5,12 @@ import { Drops } from "./Drops.js";
 import { dragBy, renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const aDrop = {
-  id: "d1", name: "Crate", benefits: ["Crate"],
+  id: "d1", name: "Crate", benefits: [{ name: "Crate", imageUrl: null }],
   requiredMinutes: 60, minutes: 0, status: "not-started",
 };
 
 const aHelmet = {
-  id: "d2", name: "Gilded Helmet", benefits: ["Gilded Helmet"],
+  id: "d2", name: "Gilded Helmet", benefits: [{ name: "Gilded Helmet", imageUrl: null }],
   requiredMinutes: 60, minutes: 0, status: "not-started",
 };
 
