@@ -21,3 +21,21 @@
 .benefitName {
   overflow-wrap: anywhere;
 }
+
+/* The drop's own window opens a panel, so the note is a button; it
+   still has to read as the quiet aside it is, beside the state badge. */
+.windowNote {
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  white-space: nowrap;
+  border-radius: var(--mantine-radius-sm);
+}
+
+.windowNote:hover {
+  text-decoration: underline;
+}
+
+.windowNote:focus-visible {
+  outline: 2px solid var(--tw-purple);
+  outline-offset: 2px;
+}

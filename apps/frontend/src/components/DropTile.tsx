@@ -1,4 +1,8 @@
-import { Badge, Group, Progress, Stack, Text, Tooltip } from "@mantine/core";
+import {
+  Badge, Group, Popover, Progress, Stack, Text, Tooltip, UnstyledButton,
+} from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { narrowerWindow, windowLines } from "../lib/campaignWindow.js";
 import { RewardIcon } from "./RewardIcon.js";
 import classes from "./DropTile.module.css";
 
@@ -84,12 +88,37 @@ function benefitRows(
  * inventory fetch cannot support. That case shows an em-dash instead,
  * the same way Gain reports an unknown balance.
  */
-export function DropTile({ drop }: { drop: ResolvedDrop }) {
+export function DropTile({ drop, campaignStartsAt = null, campaignEndsAt = null }: {
+  drop: ResolvedDrop;
+  /**
+   * The campaign's own window, for comparison.
+   *
+   * A drop's dates are shown only when they differ from these -- see
+   * narrowerWindow. Without them the tile cannot tell a real sub-window
+   * from a copy of the campaign's, so it shows none.
+   */
+  campaignStartsAt?: number | null;
+  campaignEndsAt?: number | null;
+}) {
   const state = STATE[drop.status];
   const showBar = drop.status === "in-progress";
   const unknown = drop.status === "unknown";
   const muted = drop.status === "claimed" || drop.status === "unobtainable";
   const rows = benefitRows(drop);
+  const own = narrowerWindow(drop, campaignStartsAt, campaignEndsAt);
+  const ownDates = own === null
+    ? null
+    : windowLines(own.startsAt, own.endsAt, Date.now());
+
+  const [windowOpen, { open: openWindow, close: closeWindow, toggle: toggleWindow }] =
+    useDisclosure(false);
+  // See DropBadge: a tap synthesises mouseenter/mouseleave around its
+  // click, so binding hover unconditionally closes what the tap opened.
+  const hoverable = typeof window !== "undefined"
+    && window.matchMedia?.("(hover: hover)").matches === true;
+  const windowHover = hoverable
+    ? { onMouseEnter: openWindow, onMouseLeave: closeWindow }
+    : {};
 
   // A drop awarding one thing is the common case and reads best as a
   // single line: the big icon beside the name, the way the tile looked
@@ -117,14 +146,59 @@ export function DropTile({ drop }: { drop: ResolvedDrop }) {
             ? `${drop.minutes}/${drop.requiredMinutes}m`
             : `${drop.requiredMinutes}m`}
       </Text>
-      <Badge
-        size="xs"
-        color={state.colour}
-        variant={drop.status === "claimable" ? "filled" : "light"}
-        data-testid="drop-state"
-      >
-        {state.label}
-      </Badge>
+      <Group gap={6} wrap="nowrap">
+        {/* Only when this drop runs for a slice of its campaign rather
+            than the whole of it. Every drop in the current catalogue
+            repeats its campaign's window, so this stays hidden -- but
+            Twitch's model allows a "week two" reward inside a longer
+            event, and when one appears the tile must say so: its
+            deadline is not the one the card above it reports. */}
+        {ownDates !== null && ownDates.rows.length > 0 && (
+          <Popover
+            opened={windowOpen}
+            onDismiss={closeWindow}
+            position="bottom-end"
+            withArrow
+            shadow="md"
+          >
+            <Popover.Target>
+              <UnstyledButton
+                {...windowHover}
+                onClick={toggleWindow}
+                aria-expanded={windowOpen}
+                aria-label={`${drop.name} drop window`}
+                className={classes.windowNote}
+                data-testid="drop-window-note"
+              >
+                own window
+              </UnstyledButton>
+            </Popover.Target>
+            <Popover.Dropdown data-testid="drop-window">
+              <Stack gap={4}>
+                {ownDates.rows.map((row) => (
+                  <Group key={row.label} gap="sm" wrap="nowrap"
+                         justify="space-between">
+                    <Text size="xs" c="dimmed">{row.label}</Text>
+                    <Text size="xs" fw={500}>{row.value}</Text>
+                  </Group>
+                ))}
+                {/* Set apart from the dates, as on the campaign card. */}
+                {ownDates.state !== null && (
+                  <Text size="xs" c="dimmed" mt={4}>{ownDates.state}</Text>
+                )}
+              </Stack>
+            </Popover.Dropdown>
+          </Popover>
+        )}
+        <Badge
+          size="xs"
+          color={state.colour}
+          variant={drop.status === "claimable" ? "filled" : "light"}
+          data-testid="drop-state"
+        >
+          {state.label}
+        </Badge>
+      </Group>
     </Group>
   );
 

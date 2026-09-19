@@ -615,7 +615,12 @@ export function CampaignCard({
       <Collapse expanded={open} keepMounted={false}>
         <div className={classes.gallery}>
           {campaign.drops.map((drop) => (
-            <DropTile key={drop.id} drop={drop} />
+            <DropTile
+              key={drop.id}
+              drop={drop}
+              campaignStartsAt={campaign.startsAt}
+              campaignEndsAt={campaign.endsAt}
+            />
           ))}
         </div>
       </Collapse>

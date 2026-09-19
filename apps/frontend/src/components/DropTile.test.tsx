@@ -1,4 +1,5 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { DropTile, type ResolvedDrop } from "./DropTile.js";
 import { renderApp } from "../test-utils.js";
@@ -151,4 +152,38 @@ test("a drop awarding several switches to the stacked list", () => {
   for (const i of screen.getAllByTestId("reward-icon")) {
     expect((i as HTMLElement).style.width).toContain("1.5rem");
   }
+});
+
+const CS = Date.now() - 10 * 86_400_000;
+const CE = Date.now() + 10 * 86_400_000;
+
+test("a drop repeating its campaign's window says nothing about dates", () => {
+  // Every drop in the live catalogue does this, so the note must stay
+  // out of the way rather than restating the card above it.
+  renderApp(<DropTile
+    drop={drop({ startsAt: CS, endsAt: CE })}
+    campaignStartsAt={CS}
+    campaignEndsAt={CE}
+  />);
+  expect(screen.queryByTestId("drop-window-note")).toBeNull();
+});
+
+test("a drop running for a slice of its campaign flags its own window", async () => {
+  // Its deadline is not the one the card above it reports.
+  const user = userEvent.setup();
+  const ends = Date.now() + 2 * 86_400_000;
+  renderApp(<DropTile
+    drop={drop({ startsAt: CS, endsAt: ends })}
+    campaignStartsAt={CS}
+    campaignEndsAt={CE}
+  />);
+  await user.click(screen.getByTestId("drop-window-note"));
+  const panel = await screen.findByTestId("drop-window");
+  expect(panel.textContent).toMatch(/Ends/);
+});
+
+test("a tile given no campaign window shows no drop dates", () => {
+  // Without them it cannot tell a real sub-window from a copy.
+  renderApp(<DropTile drop={drop({ startsAt: CS, endsAt: Date.now() })} />);
+  expect(screen.queryByTestId("drop-window-note")).toBeNull();
 });
