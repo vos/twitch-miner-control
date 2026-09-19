@@ -22,6 +22,17 @@ export interface Reconciliation {
    * still live.
    */
   changed: boolean;
+  /**
+   * The owned channels this pass added and dropped, normalised.
+   *
+   * Facts the fold already establishes and used to discard. Returned so
+   * the caller can say WHAT changed rather than only that something did
+   * -- "changed: true" alone sends a reader back to diffing two configs
+   * by hand, which is the position that made the pool bug hard to see.
+   * Both are empty when `changed` is false.
+   */
+  added: string[];
+  removed: string[];
 }
 
 /**
@@ -84,7 +95,20 @@ export function reconcile(
   });
 
   const streamers = [...manual, ...owned];
-  return { streamers, changed: differs(current, streamers) };
+  // Compared as sets: a channel that merely moved position was not added
+  // or removed, even though the order-sensitive `differs` below counts
+  // the move as a change in its own right.
+  const before = new Set(
+    current.filter((s) => s.ownedBy !== undefined)
+      .map((s) => normaliseUsername(s.username)),
+  );
+  const after = new Set(owned.map((s) => normaliseUsername(s.username)));
+  return {
+    streamers,
+    changed: differs(current, streamers),
+    added: [...after].filter((login) => !before.has(login)),
+    removed: [...before].filter((login) => !after.has(login)),
+  };
 }
 
 /**

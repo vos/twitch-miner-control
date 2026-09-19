@@ -1,0 +1,56 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.time {
+  color: var(--tw-text-dim);
+  flex: none;
+}
+
+.level {
+  flex: none;
+  width: 42px;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.component {
+  flex: none;
+  color: var(--tw-text-dim);
+  opacity: 0.8;
+}
+
+/* The primary scan target: what happened, in one token. */
+.type {
+  flex: none;
+  color: var(--tw-text);
+}
+
+.msg {
+  flex: 1 1 320px;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* The evidence. Present but recessive -- read once the line above has
+   already told you whether this row matters. */
+.fields {
+  flex-basis: 100%;
+  padding-left: 8px;
+  color: var(--tw-text-dim);
+  opacity: 0.75;
+  word-break: break-word;
+}
+
+.error { color: #FF6B6B; }
+.warn { color: var(--tw-warn); }
+.info { color: var(--tw-text); }
+.debug { color: var(--tw-text-dim); opacity: 0.65; }

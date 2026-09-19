@@ -1,4 +1,5 @@
 import { act, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { renderLive } from "../test-utils.js";
 import { Logs } from "./Logs.js";
@@ -125,4 +126,21 @@ test("reloads the log when pushed lines show it missed some", async () => {
 
   expect(await screen.findByText("line 3")).toBeInTheDocument();
   expect(logCalls()).toBe(2);
+});
+
+test("the app events tab is reachable and remembered", async () => {
+  // A reload landing back on the miner tab mid-investigation is a small
+  // thing that happens every single time.
+  stubLogs(() => ({ ok: true, body: { lines: ["hello"], total: 1 } }));
+  const { unmount } = view();
+  await screen.findByText(/hello/);
+  await userEvent.click(screen.getByRole("tab", { name: "App events" }));
+  expect(await screen.findByLabelText("Filter events")).toBeInTheDocument();
+  // The miner view is unmounted, not merely hidden: it holds a
+  // subscription and a buffer the hidden tab would keep for nothing.
+  expect(screen.queryByLabelText("Filter lines")).not.toBeInTheDocument();
+
+  unmount();
+  view();
+  expect(await screen.findByLabelText("Filter events")).toBeInTheDocument();
 });

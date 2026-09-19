@@ -1,5 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fetchCampaigns } from "./campaignSource.js";
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
 
 /**
  * How long the campaign catalogue is trusted.
@@ -111,6 +113,15 @@ export interface CatalogueDeps {
   /** Where the catalogue is persisted across restarts. */
   path: string;
   now?: () => number;
+  /**
+   * Where fetch outcomes are recorded.
+   *
+   * A stale catalogue is what makes the drops engine stop trusting
+   * absence as an ending, so it explains decisions taken elsewhere --
+   * which is exactly the kind of cross-system link a single log exists
+   * to make visible.
+   */
+  log?: AppLog;
 }
 
 /**
@@ -180,9 +191,11 @@ export class CampaignCatalogue {
   private error: string | null = null;
   private inflight: Promise<void> | null = null;
   private readonly source: () => Promise<Campaign[]>;
+  private readonly log: AppLog;
 
   constructor(private readonly deps: CatalogueDeps) {
     this.source = deps.source ?? (() => fetchCampaigns());
+    this.log = (deps.log ?? NULL_LOG).child({ component: COMPONENT.CATALOGUE });
     this.load();
   }
 
@@ -240,6 +253,11 @@ export class CampaignCatalogue {
         this.stale = false;
         this.error = null;
         this.persist();
+        this.log.info({
+          type: EVENT.CATALOGUE_FETCHED,
+          msg: `fetched ${this.campaigns.length} active campaign(s)`,
+          campaigns: this.campaigns.length,
+        });
       } catch (cause: unknown) {
         // Keep whatever we have and mark it old. fetchedAt is left alone
         // so the age the page shows is the age of the data, not of the
@@ -250,6 +268,14 @@ export class CampaignCatalogue {
         // that no campaigns are running.
         this.stale = true;
         this.error = cause instanceof Error ? cause.message : String(cause);
+        this.log.warn({
+          type: EVENT.CATALOGUE_STALE,
+          msg: `the campaign fetch failed (${this.error}); serving the `
+            + "previous list, and no subscription will be ended from it",
+          err: this.error,
+          fetchedAt: this.fetchedAt,
+          ageMs: this.fetchedAt === 0 ? null : this.now() - this.fetchedAt,
+        });
       } finally {
         this.inflight = null;
       }

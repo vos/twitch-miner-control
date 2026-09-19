@@ -7,6 +7,9 @@ import type { ZodError } from "zod";
 import {
   type AppConfig, configSchema, subscriptionSchema, usernameSchema,
 } from "../config/schema.js";
+import type { AppLogBuffer } from "../appLog/buffer.js";
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { UpdateChecker } from "../config/updateCheck.js";
 import { resolveVersion } from "../config/version.js";
@@ -142,6 +145,19 @@ export interface ServerDeps {
    */
   trustProxy?: boolean;
   doorbellToken: string;
+  /** Where user decisions and server-side failures are recorded. */
+  log?: AppLog;
+  /**
+   * The app event log's ring and live feed, for the App tab.
+   *
+   * Absent when logging is disabled, which the route reports as an empty
+   * page rather than an error -- a disabled log is a configuration, not a
+   * failure.
+   */
+  appLog?: {
+    buffer: Pick<AppLogBuffer, "entries" | "total">;
+    onEvent(listener: (event: unknown) => void): void;
+  };
   supervisor: Supervisor;
   stateService: StateService;
   history: History;
@@ -231,6 +247,10 @@ export function buildServer(deps: ServerDeps): AppServer {
     forceCloseConnections: true,
     trustProxy: deps.trustProxy ?? false,
   });
+  // Fastify's own logger is off (above), so `app.log` is a no-op and
+  // anything sent to it is discarded. The app event log is where server
+  // failures and user decisions are recorded instead.
+  const log = (deps.log ?? NULL_LOG).child({ component: COMPONENT.HTTP });
   // The state service runs a reduced pass while nobody is watching, so
   // the first client to connect has to ask for the full one. Fire and
   // forget: the refresh emits "change", which reaches this client over
@@ -287,7 +307,12 @@ export function buildServer(deps: ServerDeps): AppServer {
       // confirmed.
       if (staged !== null) staged = { ...staged, username };
     } catch (cause) {
-      app.log.error({ err: cause }, "could not persist the logged-in username");
+      log.error({
+        type: EVENT.USER_CONFIG_FAILED,
+        msg: `could not persist the logged-in username: ${messageOf(cause)}`,
+        phase: "save",
+        err: messageOf(cause),
+      });
     }
   }
 
@@ -344,7 +369,12 @@ export function buildServer(deps: ServerDeps): AppServer {
     try {
       hub.broadcast("status", status());
     } catch (cause) {
-      app.log.error({ err: cause }, "could not build a status frame");
+      log.error({
+        type: EVENT.USER_CONFIG_FAILED,
+        msg: `could not build a status frame: ${messageOf(cause)}`,
+        phase: "status",
+        err: messageOf(cause),
+      });
     }
   }
 
@@ -381,11 +411,18 @@ export function buildServer(deps: ServerDeps): AppServer {
       // write had landed, `pendingChanges` then read false, so the UI
       // claimed the changes were live while the miner was still running the
       // old config.
+      const applied = staged;
       try {
         saveConfig(deps.configPath, staged);
       } catch (cause) {
         // config.json is untouched (saveConfig writes to a temp file and
         // renames), so the staged changes are still the pending ones.
+        log.error({
+          type: EVENT.USER_CONFIG_FAILED,
+          msg: `could not write config.json: ${messageOf(cause)}`,
+          phase: "save",
+          err: messageOf(cause),
+        });
         return reply.code(500).send({
           error: `could not write config.json: ${messageOf(cause)}. Your changes are still pending.`,
         });
@@ -407,7 +444,20 @@ export function buildServer(deps: ServerDeps): AppServer {
           !deps.loginStatus.required && loadConfig(deps.configPath).username !== "";
         if (runnable) await deps.supervisor.restart();
         else await deps.supervisor.stop();
+        log.info({
+          type: EVENT.USER_CONFIG_APPLIED,
+          msg: `configuration applied; the miner was ${runnable ? "restarted" : "stopped"}`,
+          streamers: applied.streamers.length,
+          subscriptions: applied.subscriptions.length,
+          minerAction: runnable ? "restarted" : "stopped",
+        });
       } catch (cause) {
+        log.error({
+          type: EVENT.USER_CONFIG_FAILED,
+          msg: `config.json was saved but the miner could not be restarted: ${messageOf(cause)}`,
+          phase: "restart",
+          err: messageOf(cause),
+        });
         return reply.code(500).send({
           error: `config.json was saved but the miner could not be restarted: ${messageOf(cause)}. The miner is still running the previous configuration -- restart it from the dashboard.`,
         });
@@ -577,7 +627,16 @@ export function buildServer(deps: ServerDeps): AppServer {
       // subscription is already saved and the next pass will pick it up,
       // so failing the request would leave the user unsure whether it
       // exists at all.
-      await deps.engine.pass().catch(() => {});
+      log.info({
+        type: EVENT.USER_SUB_ADDED,
+        msg: `subscribed to ${subscription.kind} "${subscription.label}"`,
+        subscriptionId: subscription.id,
+        kind: subscription.kind,
+        targetId: subscription.targetId,
+        label: subscription.label,
+        poolSize: subscription.poolSize,
+      });
+      await deps.engine.pass("subscribe").catch(() => {});
       return { subscription };
     });
 
@@ -610,7 +669,12 @@ export function buildServer(deps: ServerDeps): AppServer {
       //
       // Swallowed like the subscribe route's: the ranks are already
       // saved, so failing the request would suggest they were not.
-      await deps.engine.pass().catch(() => {});
+      log.info({
+        type: EVENT.USER_SUB_REORDERED,
+        msg: `subscriptions reordered (${(ids as string[]).length} of them)`,
+        order: ids as string[],
+      });
+      await deps.engine.pass("reorder").catch(() => {});
       return { ok: true };
     });
 
@@ -627,6 +691,7 @@ export function buildServer(deps: ServerDeps): AppServer {
       if (!config.subscriptions.some((s) => s.id === id)) {
         return reply.code(404).send({ error: "no such subscription" });
       }
+      const current = config.subscriptions.find((s) => s.id === id);
       const poolSize = subscriptionSchema.shape.poolSize
         .safeParse((request.body as { poolSize?: unknown }).poolSize);
       if (!poolSize.success) {
@@ -643,7 +708,14 @@ export function buildServer(deps: ServerDeps): AppServer {
       //
       // Swallowed like the subscribe route's -- the size is already
       // saved, so failing the request would suggest it was not.
-      await deps.engine.pass().catch(() => {});
+      log.info({
+        type: EVENT.USER_SUB_POOL_SIZE,
+        msg: `pool size for "${current?.label ?? id}" set to ${poolSize.data}`,
+        subscriptionId: id,
+        from: current?.poolSize ?? null,
+        to: poolSize.data,
+      });
+      await deps.engine.pass("pool-size").catch(() => {});
       return { ok: true };
     });
 
@@ -659,10 +731,17 @@ export function buildServer(deps: ServerDeps): AppServer {
       }
       // Both in one write, so the config can never hold a streamer owned
       // by a subscription that no longer exists.
+      const released = config.streamers.filter((s) => s.ownedBy === id);
       saveConfig(deps.configPath, {
         ...config,
         subscriptions: config.subscriptions.filter((s) => s.id !== id),
         streamers: config.streamers.filter((s) => s.ownedBy !== id),
+      });
+      log.info({
+        type: EVENT.USER_SUB_REMOVED,
+        msg: `unsubscribed, releasing ${released.length} channel(s)`,
+        subscriptionId: id,
+        channelsReleased: released.map((s) => s.username),
       });
       return { ok: true };
     });
@@ -670,7 +749,7 @@ export function buildServer(deps: ServerDeps): AppServer {
     /** Re-resolve now rather than waiting out the engine's timer. */
     instance.post("/api/subscriptions/resolve", async (_request, reply) => {
       try {
-        await deps.engine.pass();
+        await deps.engine.pass("manual");
       } catch (cause) {
         return reply.code(500).send({ error: messageOf(cause) });
       }
@@ -683,6 +762,11 @@ export function buildServer(deps: ServerDeps): AppServer {
     });
 
     instance.post("/api/restart/now", async () => {
+      log.info({
+        type: EVENT.USER_RESTART_FORCED,
+        msg: "the pending restart was applied immediately",
+        reason: deps.pendingRestart.state().reason,
+      });
       await deps.pendingRestart.fireNow();
       return { ok: true };
     });
@@ -770,9 +854,35 @@ export function buildServer(deps: ServerDeps): AppServer {
 
     instance.get("/api/logs", async () => deps.supervisor.logs());
 
+    /**
+     * The app event log, for the Logs page's App tab.
+     *
+     * Shaped like /api/logs -- a page plus the running total -- so the
+     * client's gap detection is the same code for both. An absent feed
+     * means logging is switched off, which is reported as an empty page
+     * with `enabled: false` rather than an error: a disabled log is a
+     * configuration, not a failure, and the UI says so explicitly rather
+     * than showing a blank panel that looks broken.
+     */
+    instance.get("/api/app-log", async () => (
+      deps.appLog === undefined
+        ? { events: [], total: 0, enabled: false }
+        : {
+          events: deps.appLog.buffer.entries(),
+          total: deps.appLog.buffer.total,
+          enabled: true,
+        }
+    ));
+
     for (const action of ["start", "stop", "restart"] as const) {
       instance.post(`/api/miner/${action}`, async () => {
         await deps.supervisor[action]();
+        log.info({
+          type: EVENT.USER_MINER_ACTION,
+          msg: `the miner was asked to ${action}`,
+          action,
+          stateAfter: deps.supervisor.state,
+        });
         // Both values are read after the action settles, so the caller can
         // render the outcome from this response alone and does not have to
         // wait for the next status frame to stop showing the old state.
@@ -781,6 +891,11 @@ export function buildServer(deps: ServerDeps): AppServer {
     }
 
     instance.post("/api/twitch/login", async () => {
+      log.info({
+        type: EVENT.USER_TWITCH_LOGIN,
+        msg: "a Twitch sign-in was started",
+        stage: "started",
+      });
       deps.loginRunner.start();
       return { started: true };
     });
@@ -818,6 +933,12 @@ export function buildServer(deps: ServerDeps): AppServer {
       }
 
       deps.loginStatus.markLoggedOut();
+      log.info({
+        type: EVENT.USER_TWITCH_LOGOUT,
+        msg: `signed out of Twitch${username === "" ? "" : ` as ${username}`}`,
+        username: username === "" ? null : username,
+        initiatedBy: "user",
+      });
       pushStatus();
       // The running helper froze the pickle's path at spawn and would keep
       // answering from the session it has already loaded, so the dashboard
@@ -885,6 +1006,14 @@ export function buildServer(deps: ServerDeps): AppServer {
   // New miner output, carrying the buffer's running total so the log view can
   // skip lines it already has and notice any it missed.
   deps.supervisor.on("log", (frame) => hub.broadcast("log", frame));
+
+  // App events ride the same multiplexed stream under their own name, so
+  // the App tab costs no second connection. Each frame carries the
+  // running total alongside the event, matching the miner log's frame
+  // shape so one gap-detection implementation serves both.
+  deps.appLog?.onEvent((event) => {
+    hub.broadcast("app-log", { events: [event], total: deps.appLog?.buffer.total ?? 0 });
+  });
   // Built at emit time, so the frame carries the start time that belongs to
   // the state being announced: a RUNNING frame gets the new process's
   // timestamp, and a STOPPED/CRASHED frame gets null.
@@ -940,6 +1069,15 @@ export function buildServer(deps: ServerDeps): AppServer {
   deps.helper.on("unattributed-error", (error: unknown) => {
     if (error instanceof NdjsonError && error.code === "AUTH") {
       deps.loginStatus.markLoggedOut();
+      // Not a user action: Twitch rejected the stored session, so the app
+      // marked itself signed out on its own. Recorded at warn because the
+      // operator did not ask for this and will want to know why the
+      // dashboard suddenly wants a sign-in.
+      log.warn({
+        type: EVENT.USER_TWITCH_LOGOUT,
+        msg: "Twitch rejected the stored session; signed out automatically",
+        initiatedBy: "twitch",
+      });
       pushStatus();
     }
   });

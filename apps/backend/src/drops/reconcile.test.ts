@@ -100,3 +100,34 @@ test("an empty desired set against an empty config is no change", () => {
   expect(out.changed).toBe(false);
   expect(out.streamers).toEqual([]);
 });
+
+test("reports which channels were added and removed", () => {
+  const out = reconcile(
+    [owned("alpha", "s1"), owned("beta", "s1")],
+    [{ username: "beta", ownedBy: "s1" }, { username: "gamma", ownedBy: "s1" }],
+  );
+  expect(out.added).toEqual(["gamma"]);
+  expect(out.removed).toEqual(["alpha"]);
+});
+
+test("an unchanged pass added and removed nothing", () => {
+  const out = reconcile(
+    [owned("alpha", "s1")],
+    [{ username: "alpha", ownedBy: "s1" }],
+  );
+  expect(out.changed).toBe(false);
+  expect(out.added).toEqual([]);
+  expect(out.removed).toEqual([]);
+});
+
+test("a pure reorder changes the config without adding or removing", () => {
+  // Order is a real change -- priority_order consumes it -- but no
+  // channel joined or left, and saying otherwise would misreport it.
+  const out = reconcile(
+    [owned("alpha", "s1"), owned("beta", "s1")],
+    [{ username: "beta", ownedBy: "s1" }, { username: "alpha", ownedBy: "s1" }],
+  );
+  expect(out.changed).toBe(true);
+  expect(out.added).toEqual([]);
+  expect(out.removed).toEqual([]);
+});

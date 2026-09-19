@@ -14,6 +14,9 @@ export interface PendingState {
   reason: string | null;
 }
 
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
+
 export interface PendingRestartDeps {
   supervisor: { restart(): Promise<void> };
   /**
@@ -24,6 +27,8 @@ export interface PendingRestartDeps {
    */
   broadcast?: (event: string, data: unknown) => void;
   now?: () => number;
+  /** Where restart decisions -- including the user's vetoes -- are recorded. */
+  log?: AppLog;
 }
 
 /**
@@ -42,8 +47,11 @@ export class PendingRestart {
 
   private broadcast: ((event: string, data: unknown) => void) | undefined;
 
+  private readonly log: AppLog;
+
   constructor(private readonly deps: PendingRestartDeps) {
     this.broadcast = deps.broadcast;
+    this.log = (deps.log ?? NULL_LOG).child({ component: COMPONENT.DROPS });
   }
 
   /** Attaches the SSE hub once the server that owns it exists. */
@@ -76,12 +84,28 @@ export class PendingRestart {
    * the restart forever, so the subscriptions would never take effect.
    */
   propose(reason: string): void {
+    const renewed = this.timer !== null;
     this.reason = reason;
-    if (this.timer !== null) {
+    if (renewed) {
+      this.log.info({
+        type: EVENT.RESTART_PROPOSED,
+        msg: `restart still pending (${reason}); the deadline is not extended`,
+        reason,
+        dueAt: this.dueAt,
+        renewed: true,
+      });
       this.announce();
       return;
     }
     this.dueAt = this.clock() + RESTART_DEFERRAL_MS;
+    this.log.info({
+      type: EVENT.RESTART_PROPOSED,
+      msg: `restart proposed (${reason}); firing in `
+        + `${RESTART_DEFERRAL_MS}ms unless cancelled`,
+      reason,
+      dueAt: this.dueAt,
+      renewed: false,
+    });
     this.timer = setTimeout(() => {
       void this.fire();
     }, RESTART_DEFERRAL_MS);
@@ -90,6 +114,17 @@ export class PendingRestart {
 
   /** Drop the pending restart. The next pass may propose a fresh one. */
   cancel(): void {
+    // Read before clear(), which discards both.
+    const reason = this.reason;
+    const remainingMs = this.dueAt === null ? null : this.dueAt - this.clock();
+    if (this.timer !== null) {
+      this.log.info({
+        type: EVENT.USER_RESTART_CANCELLED,
+        msg: `pending restart cancelled (${reason ?? "no reason recorded"})`,
+        reason,
+        remainingMs,
+      });
+    }
     this.clear();
     this.announce();
   }
@@ -100,13 +135,26 @@ export class PendingRestart {
   }
 
   private async fire(): Promise<void> {
+    const reason = this.reason;
     // Cleared first, so a fireNow() cannot leave the timer armed to
     // restart a second time a minute later.
     this.clear();
     this.announce();
+    this.log.info({
+      type: EVENT.RESTART_FIRED,
+      msg: `restarting the miner (${reason ?? "no reason recorded"})`,
+      reason,
+    });
     try {
       await this.deps.supervisor.restart();
-    } catch {
+    } catch (cause) {
+      this.log.error({
+        type: EVENT.RESTART_FAILED,
+        msg: "the restart failed; the miner is still on the previous config "
+          + "and the next pass will propose again",
+        reason,
+        err: cause instanceof Error ? cause.message : String(cause),
+      });
       // A failed restart leaves the miner on the previous config, which
       // is still collecting -- the next reconciliation pass sees the
       // same difference and proposes again.

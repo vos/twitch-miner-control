@@ -31,6 +31,12 @@ import { dropsEligible } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
 import { InventoryCache } from "./state/inventory.js";
 import { StateService } from "./state/service.js";
+import { resolveVersion } from "./config/version.js";
+import { createAppLog } from "./appLog/pino.js";
+import { COMPONENT, EVENT } from "./appLog/types.js";
+import {
+  resolveAppLogLevel, resolveAppLogMaxBytes,
+} from "./config/appLogLevel.js";
 
 const dataDir = resolve(process.env.DATA_DIR ?? "./data");
 const pythonDir = resolve(process.env.PYTHON_DIR ?? "./python");
@@ -42,11 +48,49 @@ const password = process.env.APP_PASSWORD;
 if (!password) throw new Error("APP_PASSWORD is required");
 const doorbellToken = randomBytes(24).toString("hex");
 const port = Number(process.env.PORT ?? 8080);
+const appLogLevel = resolveAppLogLevel(process.env.APP_LOG_LEVEL);
 
 // The miner resolves cookies relative to its CWD, so every child shares
 // dataDir as its working directory -- and it has to exist before SQLite
 // opens a file in it or the first login writes a pickle under it.
 mkdirSync(cookiesDir, { recursive: true });
+
+/**
+ * The app event log: what this backend decided, and on what evidence.
+ *
+ * Separate from the miner's own log in every sense -- different writer,
+ * different file, different audience. The miner's output says what
+ * Twitch did; this says what the supervisor, the drops engine and the
+ * user did about it, which is the half that used to leave no trace at
+ * all. Built before anything that logs, so nothing is missed at boot.
+ *
+ * Listeners are attached after buildServer exists, so events logged
+ * during construction still reach the file and the ring -- they simply
+ * have nobody to push to yet, which is correct: no client is connected.
+ */
+const appLogListeners: Array<(event: unknown) => void> = [];
+const appLog = createAppLog({
+  level: appLogLevel,
+  dir: process.env.APP_LOG_DIR ?? join(dataDir, "logs"),
+  maxBytes: resolveAppLogMaxBytes(process.env.APP_LOG_MAX_BYTES),
+  onEvent: (event) => {
+    for (const listener of appLogListeners) listener(event);
+  },
+});
+// Left undefined when logging is off, which is what lets /api/app-log
+// report "switched off" rather than "on but quiet": the two are
+// otherwise indistinguishable -- both are an empty list -- and the UI
+// needs to tell them apart to avoid showing a blank panel that reads as
+// something being broken.
+const appLogFeed = appLog.enabled
+  ? {
+    buffer: appLog.buffer,
+    onEvent: (listener: (event: unknown) => void) => {
+      appLogListeners.push(listener);
+    },
+  }
+  : undefined;
+const bootLog = appLog.log.child({ component: COMPONENT.APP });
 
 /**
  * `python/helpers/state.py` imports TwitchChannelPointsMiner at module
@@ -113,7 +157,12 @@ if (retentionDays > 0) {
     // VACUUM only when something was actually deleted: it rewrites the
     // whole file, which is not worth doing daily to reclaim nothing.
     if (removed > 0) {
-      console.log(`pruned ${removed} point snapshots older than ${retentionDays}d`);
+      bootLog.info({
+        type: EVENT.APP_PRUNED,
+        msg: `pruned ${removed} point snapshot(s) older than ${retentionDays}d`,
+        removed,
+        retentionDays,
+      });
       db.exec("VACUUM");
     }
   };
@@ -148,6 +197,7 @@ const supervisor = new Supervisor({
     MINER_LOG_LEVEL: resolveMinerLogLevel(process.env.MINER_LOG_LEVEL),
   },
   graceMs: resolveStopGraceMs(process.env.MINER_STOP_GRACE_MS),
+  log: appLog.log,
   // Uptime spans, so "the channel was live" and "we were mining it" stay
   // distinguishable on the cards.
   sessions: {
@@ -168,7 +218,12 @@ function resolveStreamers(): Promise<string[]> {
     followersEnabled: () => loadConfig(configPath).followers,
     fetchFollowers: async () =>
       (await helper.request<{ followers: string[] }>("followers")).followers,
-    onError: (cause) => console.warn("could not load followed channels:", cause),
+    onError: (cause) => bootLog.warn({
+      type: EVENT.APP_FOLLOWERS_FAILED,
+      msg: "could not load followed channels; the roster falls back to the "
+        + "configured list alone",
+      err: cause instanceof Error ? cause.message : String(cause),
+    }),
   });
 }
 
@@ -277,6 +332,7 @@ const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 // stays true across one; progress does not, and lives only in memory.
 const catalogue = new CampaignCatalogue({
   path: join(dataDir, "campaigns.json"),
+  log: appLog.log,
 });
 const inventoryCache = new InventoryCache({ client: helper });
 
@@ -284,7 +340,7 @@ const inventoryCache = new InventoryCache({ client: helper });
 // different channels, so the restart is deferred behind a cancellable
 // countdown rather than interrupting whoever is watching. buildServer
 // attaches its SSE hub to this, the hub being inside the server.
-const pendingRestart = new PendingRestart({ supervisor });
+const pendingRestart = new PendingRestart({ supervisor, log: appLog.log });
 
 const engine = new SubscriptionEngine({
   loadConfig: () => loadConfig(configPath),
@@ -296,6 +352,7 @@ const engine = new SubscriptionEngine({
       game: game.name, slug: game.slug, limit: 30,
     }).then((r) => r.channels),
   pending: pendingRestart,
+  log: appLog.log,
 });
 
 const app: AppServer = buildServer({
@@ -304,6 +361,8 @@ const app: AppServer = buildServer({
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
   engine, pendingRestart,
+  log: appLog.log,
+  appLog: appLogFeed,
 });
 
 const loggedIn = await helper
@@ -347,6 +406,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         supervisor.stop(), helper.stop(), app.close(), loginDone,
       ]);
       db.close();
+      // Last, and awaited: this is the final event of the run, and
+      // close() flushes the file. Skipping it would lose the record of
+      // the shutdown itself -- and, on a crash-triggered one, whatever
+      // the supervisor logged on its way out.
+      bootLog.info({
+        type: EVENT.APP_SHUTDOWN,
+        msg: `shutting down on ${signal}`,
+        signal,
+      });
+      await appLog.close();
       process.exit(0);
     })();
   });
@@ -359,11 +428,23 @@ await app.listen({ port, host: "0.0.0.0" });
 // here. Fastify runs with `logger: false`, so without this the process
 // prints nothing at all on a successful start and a healthy server is
 // indistinguishable from one that died on boot.
+const frontendNote = staticRootExists
+  ? `serving the frontend from ${staticRoot}`
+  // Worth saying plainly: the API works but the browser gets a 404 at
+  // the root, which otherwise looks like the server failing entirely.
+  : `no frontend at ${staticRoot} -- API only (run \`pnpm build\` first)`;
+// Kept on stdout as well as in the event log, deliberately: these two
+// lines are the only sign of life a `pnpm dev` terminal gets, and the
+// event log may be switched off entirely. Different readers, both
+// served.
 console.log(`listening on http://localhost:${port}`);
-console.log(
-  staticRootExists
-    ? `serving the frontend from ${staticRoot}`
-    // Worth saying plainly: the API works but the browser gets a 404 at
-    // the root, which otherwise looks like the server failing entirely.
-    : `no frontend at ${staticRoot} -- API only (run \`pnpm build\` first)`,
-);
+console.log(frontendNote);
+bootLog.info({
+  type: EVENT.APP_STARTED,
+  msg: `listening on port ${port}; ${frontendNote}`,
+  version: resolveVersion(process.env.APP_VERSION),
+  port,
+  dataDir,
+  staticRoot: staticRootExists ? staticRoot : null,
+  logLevel: appLogLevel,
+});

@@ -8,6 +8,23 @@ export interface DirectoryChannel {
   viewers: number;
 }
 
+/**
+ * Why a resolution came out the way it did.
+ *
+ * Returned rather than logged from inside, so the function stays pure and
+ * a test can assert the DECISION itself rather than a side effect. The
+ * engine turns this into an event.
+ */
+export type ResolutionDecision =
+  /** At least one incumbent was live, so the pool was left alone. */
+  | "kept"
+  /** Nobody was live, so the pool was rebuilt from the directory. */
+  | "rebuilt"
+  /** No game to ask about: an unknown campaign, or one with no game. */
+  | "no-target"
+  /** The directory could not be reached. */
+  | "directory-failed";
+
 export interface ResolutionResult {
   channels: string[];
   /**
@@ -19,6 +36,17 @@ export interface ResolutionResult {
    * means we never got to ask.
    */
   degraded: boolean;
+  /** Why this result is what it is, for the caller to report. */
+  decision: ResolutionDecision;
+  /**
+   * How many incumbents the directory still reported as live.
+   *
+   * The evidence behind a "kept": one live member out of three is the
+   * case the pool exists for, and is worth being able to see after the
+   * fact. Zero on a rebuild, and undefined when degraded -- we never
+   * found out.
+   */
+  liveCount?: number;
 }
 
 /**
@@ -74,8 +102,12 @@ export function resolveSubscription(
   directory: DirectoryChannel[] | null,
   incumbents: readonly string[] = [],
 ): ResolutionResult {
-  if (target(sub, campaign) === null) return { channels: [], degraded: true };
-  if (directory === null) return { channels: [], degraded: true };
+  if (target(sub, campaign) === null) {
+    return { channels: [], degraded: true, decision: "no-target" };
+  }
+  if (directory === null) {
+    return { channels: [], degraded: true, decision: "directory-failed" };
+  }
 
   // A pool with any live member is returned WHOLE, offline members
   // included. Dropping the offline ones would rewrite the config and
@@ -83,10 +115,14 @@ export function resolveSubscription(
   // miner should pick up again when they come back -- which it can do on
   // its own, without a restart, because they are already in its list.
   const live = new Set(directory.map((c) => c.login.toLowerCase()));
-  const anyLive = incumbents.some((login) => live.has(login.toLowerCase()));
+  const liveCount = incumbents.filter((l) => live.has(l.toLowerCase())).length;
   // The config's own spelling is kept, so a directory that reports a
   // different casing than the config holds does not rewrite the entry.
-  if (anyLive) return { channels: [...incumbents], degraded: false };
+  if (liveCount > 0) {
+    return {
+      channels: [...incumbents], degraded: false, decision: "kept", liveCount,
+    };
+  }
 
   // Nobody left. Viewers descending: a bigger channel is likelier to
   // still be live at the end of a drop, which is what the pool exists to
@@ -98,6 +134,8 @@ export function resolveSubscription(
       .slice(0, sub.poolSize)
       .map((c) => c.login),
     degraded: false,
+    decision: "rebuilt",
+    liveCount: 0,
   };
 }
 

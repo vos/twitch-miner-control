@@ -2,6 +2,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import cookie from "@fastify/cookie";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { LoginLimiter } from "./loginLimiter.js";
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
 
 /** Absolute session lifetime. A captured cookie stops working after this. */
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -16,6 +18,8 @@ export interface AuthOptions {
    * silently drop a Secure cookie. See config/envFlag.ts.
    */
   secureCookie?: boolean;
+  /** Where login outcomes are recorded, for the app event log. */
+  log?: AppLog;
 }
 
 /**
@@ -122,6 +126,8 @@ export async function registerAuth(
 
   await app.register(cookie);
 
+  const log = (opts.log ?? NULL_LOG).child({ component: COMPONENT.AUTH });
+
   app.post("/api/session", async (request, reply) => {
     const key = keyFor(request);
     const retryAfter = limiter.retryAfter(key);
@@ -129,6 +135,12 @@ export async function registerAuth(
       // 429 rather than 401: the caller is being told to stop, not that this
       // particular password was wrong. Answering 401 here would leak whether
       // a guess landed, which is the one bit a locked-out guesser wants.
+      log.warn({
+        type: EVENT.AUTH_THROTTLED,
+        msg: `login attempt refused: locked out for another ${retryAfter}s`,
+        ip: key,
+        retryAfter,
+      });
       return reply
         .code(429)
         .header("retry-after", String(retryAfter))
@@ -137,9 +149,15 @@ export async function registerAuth(
     const body = request.body as { password?: string } | undefined;
     if (!body?.password || !sameSecret(body.password, opts.password)) {
       limiter.fail(key);
+      log.warn({
+        type: EVENT.AUTH_FAILED,
+        msg: "a login attempt was rejected",
+        ip: key,
+      });
       return reply.code(401).send({ error: "invalid password" });
     }
     limiter.succeed(key);
+    log.info({ type: EVENT.AUTH_OK, msg: "signed in", ip: key });
     const issuedAt = now();
     // Sweep on mint so abandoned tokens cannot accumulate unbounded.
     for (const [token, expiresAt] of sessions) {

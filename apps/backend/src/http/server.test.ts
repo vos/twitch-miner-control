@@ -31,7 +31,13 @@ const validConfig = {
 
 let ctx: Awaited<ReturnType<typeof make>>;
 
-async function make(options: { statusTickMs?: number } = {}) {
+async function make(options: {
+  statusTickMs?: number;
+  appLog?: {
+    buffer: { entries: () => unknown[]; total: number };
+    onEvent: (listener: (event: unknown) => void) => void;
+  };
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "srv-"));
   const configPath = join(dir, "config.json");
   // Real directory on disk: the logout route deletes a file from it, and a
@@ -112,6 +118,7 @@ async function make(options: { statusTickMs?: number } = {}) {
     pendingRestart: pending as never,
     staticRoot: PUBLIC_ROOT,
     statusTickMs: options.statusTickMs,
+    appLog: options.appLog as never,
   });
   await app.ready();
   const login = await app.inject({
@@ -1726,4 +1733,45 @@ test("a failed resolve still leaves the subscription created", async () => {
   });
   expect(res.statusCode).toBe(200);
   expect(loadConfig(ctx.configPath).subscriptions).toHaveLength(1);
+});
+
+test("the app log route returns the ring and its total", async () => {
+  const { app, cookie } = await make({
+    appLog: {
+      buffer: {
+        entries: () => [{ type: "a.thing", msg: "happened", level: "info", time: 1 }],
+        total: 7,
+      },
+      onEvent: () => {},
+    },
+  });
+  const res = await app.inject({
+    method: "GET", url: "/api/app-log", cookies: { session: cookie },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({
+    events: [{ type: "a.thing", msg: "happened", level: "info", time: 1 }],
+    total: 7,
+    enabled: true,
+  });
+  await app.close();
+});
+
+test("the app log route reports being switched off, not broken", async () => {
+  // A disabled log is a configuration, not a failure: the UI needs to
+  // tell them apart to avoid showing a blank panel that looks broken.
+  const { app, cookie } = await make();
+  const res = await app.inject({
+    method: "GET", url: "/api/app-log", cookies: { session: cookie },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ events: [], total: 0, enabled: false });
+  await app.close();
+});
+
+test("the app log route needs a session", async () => {
+  const { app } = await make();
+  const res = await app.inject({ method: "GET", url: "/api/app-log" });
+  expect(res.statusCode).toBe(401);
+  await app.close();
 });

@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { PendingRestart, RESTART_DEFERRAL_MS } from "./pendingRestart.js";
+import { memoryLog } from "../appLog/memory.js";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-function make(restartImpl?: () => Promise<void>) {
+function make(restartImpl?: () => Promise<void>, log?: ReturnType<typeof memoryLog>) {
   const restart = vi.fn(restartImpl ?? (async () => {}));
   const broadcast = vi.fn();
-  const p = new PendingRestart({ supervisor: { restart }, broadcast });
+  const p = new PendingRestart({ supervisor: { restart }, broadcast, log });
   return { p, restart, broadcast };
 }
 
@@ -124,4 +125,63 @@ test("a failed restart clears the pending state rather than wedging", async () =
 test("nothing is pending before anything is proposed", () => {
   const { p } = make();
   expect(p.state()).toEqual({ pending: false, dueAt: null, reason: null });
+});
+
+test("records a proposal with its deadline", () => {
+  const log = memoryLog();
+  const { p } = make(undefined, log);
+  p.propose("drop subscriptions resolved new channels");
+  const event = log.ofType("restart.proposed")[0];
+  expect(event?.renewed).toBe(false);
+  expect(event?.reason).toBe("drop subscriptions resolved new channels");
+  expect(typeof event?.dueAt).toBe("number");
+});
+
+test("a second proposal is recorded as a renewal, not a new deadline", () => {
+  // The deadline deliberately does not move; the log has to say so, or a
+  // reader seeing two proposals would expect the restart to have slipped.
+  const log = memoryLog();
+  const { p } = make(undefined, log);
+  p.propose("first");
+  const dueAt = log.ofType("restart.proposed")[0]?.dueAt;
+  p.propose("second");
+  const renewal = log.ofType("restart.proposed")[1];
+  expect(renewal?.renewed).toBe(true);
+  expect(renewal?.dueAt).toBe(dueAt);
+});
+
+test("records the user's veto with how long was left", () => {
+  const log = memoryLog();
+  const { p } = make(undefined, log);
+  p.propose("a drop campaign ended");
+  p.cancel();
+  const event = log.ofType("user.restart.cancelled")[0];
+  expect(event?.reason).toBe("a drop campaign ended");
+  expect(typeof event?.remainingMs).toBe("number");
+});
+
+test("cancelling nothing records nothing", () => {
+  // Only a real veto is a decision; a no-op cancel is not.
+  const log = memoryLog();
+  const { p } = make(undefined, log);
+  p.cancel();
+  expect(log.ofType("user.restart.cancelled")).toEqual([]);
+});
+
+test("records the restart firing", async () => {
+  const log = memoryLog();
+  const { p } = make(undefined, log);
+  p.propose("a drop campaign ended");
+  await p.fireNow();
+  expect(log.ofType("restart.fired")[0]?.reason).toBe("a drop campaign ended");
+});
+
+test("records a restart that failed", async () => {
+  // Currently a silent catch: the miner stays on the previous config and
+  // nothing tells anyone the restart did not happen.
+  const log = memoryLog();
+  const { p } = make(() => Promise.reject(new Error("spawn failed")), log);
+  p.propose("a drop campaign ended");
+  await p.fireNow();
+  expect(log.ofType("restart.failed")[0]?.err).toBe("spawn failed");
 });

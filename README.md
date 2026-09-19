@@ -261,6 +261,36 @@ while diagnosing a miner problem, then put it back.
 This is separate from the **Logs** page in the UI, which shows the
 miner's console output and is not affected by this setting.
 
+### App event log
+
+The backend keeps its own log of what *it* decided, separate from the
+miner's. It records the things the miner's own output cannot show: which
+channels a drop subscription resolved to and why, when a pool was left
+alone because one of its streamers was still live, every automatic
+restart along with the crash count that justified it, and the actions
+taken through the UI.
+
+It is written to `<data dir>/logs/app.ndjson`, one JSON object per line,
+so it can be read back long after the fact:
+
+```sh
+jq -c 'select(.component=="drops")' ./data/logs/app.ndjson
+```
+
+The same events appear in the UI under **Logs → App events**, where they
+can be filtered by level and component. That view survives a backend
+restart — it is seeded from the file on boot — which the miner log tab
+is not.
+
+`APP_LOG_LEVEL` sets how much is recorded (`trace`, `debug`, `info`,
+`warn`, `error`, `fatal`, `silent`; default `info`). At `info` a quiet
+quarter-hour costs a line or two; `debug` adds every resolve pass,
+including the ones that decided nothing needed doing. `silent` switches
+it off completely, opening no file at all.
+
+`APP_LOG_MAX_BYTES` (default 5 MiB) caps the file; one previous
+generation is kept beside it, so the log costs at most twice that.
+
 ### Using the dev container
 
 `.devcontainer/` describes a ready-made environment, so you do not have to

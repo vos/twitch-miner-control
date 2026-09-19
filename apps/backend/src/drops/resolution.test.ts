@@ -136,3 +136,43 @@ test("a game subscription resolves without needing a campaign", () => {
   expect(out.channels).toEqual(["beta", "alpha"]);
   expect(out.degraded).toBe(false);
 });
+
+test("a kept pool reports the decision and how many were live", () => {
+  // The evidence behind the decision, so a reader can check it rather
+  // than take it on trust.
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("alpha", 10), chan("beta", 20), chan("delta", 900),
+  ], ["alpha", "beta", "gamma"]);
+  expect(out.decision).toBe("kept");
+  expect(out.liveCount).toBe(2);
+});
+
+test("a rebuilt pool reports nobody was live", () => {
+  const out = resolveSubscription(sub(), campaign(), [
+    chan("delta", 900),
+  ], ["alpha", "beta", "gamma"]);
+  expect(out.decision).toBe("rebuilt");
+  expect(out.liveCount).toBe(0);
+});
+
+test("a fresh subscription rebuilds rather than keeping nothing", () => {
+  const out = resolveSubscription(sub(), campaign(), [chan("delta", 900)], []);
+  expect(out.decision).toBe("rebuilt");
+});
+
+test("the two degraded causes are told apart", () => {
+  // "We could not reach the directory" and "this campaign has no game"
+  // need different reactions from a reader, so they are different
+  // decisions rather than one degraded flag.
+  expect(resolveSubscription(sub(), campaign(), null, []).decision)
+    .toBe("directory-failed");
+  expect(resolveSubscription(sub(), undefined, [chan("a", 1)], []).decision)
+    .toBe("no-target");
+});
+
+test("a degraded result reports no live count at all", () => {
+  // Not zero: zero would claim we looked and found nobody live, which is
+  // the opposite of what happened.
+  expect(resolveSubscription(sub(), campaign(), null, ["alpha"]).liveCount)
+    .toBeUndefined();
+});

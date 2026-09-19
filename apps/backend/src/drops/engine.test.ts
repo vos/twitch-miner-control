@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { SubscriptionEngine } from "./engine.js";
 import type { AppConfig } from "../config/schema.js";
 import type { Campaign, Catalogue } from "../state/campaignCatalogue.js";
+import { memoryLog } from "../appLog/memory.js";
 
 const campaign = (over: Partial<Campaign> = {}): Campaign => ({
   id: "c1", name: "Alpha",
@@ -25,6 +26,7 @@ function make(over: {
   directory?: (
     game: { name: string; slug: string },
   ) => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
+  log?: ReturnType<typeof memoryLog>;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -50,6 +52,7 @@ function make(over: {
       { login: "gamma", channelId: "id-gamma", viewers: 50 },
     ]),
     pending: { propose } as never,
+    log: over.log,
   });
   return { engine, saveConfig, propose, config };
 }
@@ -297,4 +300,142 @@ test("the timer stops cleanly", () => {
   engine.stop();
   // A second stop must not throw -- shutdown calls it unconditionally.
   expect(() => engine.stop()).not.toThrow();
+});
+
+test("records WHY a pool was kept, with the evidence", async () => {
+  // The event that would have made the pool re-resolve bug visible on
+  // sight: still collecting, so nothing was touched, and here is how
+  // many were live when we decided that.
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "omega", channelId: "id-omega", viewers: 9000 },
+      { login: "beta", channelId: "id-beta", viewers: 5 },
+    ],
+  });
+  await engine.pass();
+  const event = log.ofType("subscription.pool.kept")[0];
+  expect(event).toMatchObject({
+    liveCount: 1,
+    incumbents: ["beta", "gamma"],
+    component: "drops",
+    level: "info",
+  });
+  // It kept the pool, so nothing was reconciled and no restart proposed.
+  expect(log.ofType("subscription.reconciled")).toEqual([]);
+});
+
+test("records a rebuild with what it went from and to", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: {
+      streamers: [owned("beta", "s1")] as never,
+      subscriptions: [sub({ poolSize: 2 })],
+    },
+    directory: async () => [
+      { login: "omega", channelId: "id-omega", viewers: 9000 },
+      { login: "delta", channelId: "id-delta", viewers: 500 },
+    ],
+  });
+  await engine.pass();
+  expect(log.ofType("subscription.pool.rebuilt")[0]).toMatchObject({
+    from: ["beta"],
+    to: ["omega", "delta"],
+    directorySize: 2,
+  });
+});
+
+test("records what the watch list gained and lost", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: {
+      streamers: [owned("beta", "s1")] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+    directory: async () => [{ login: "omega", channelId: "id-o", viewers: 9 }],
+  });
+  await engine.pass();
+  expect(log.ofType("subscription.reconciled")[0]).toMatchObject({
+    added: ["omega"],
+    removed: ["beta"],
+  });
+});
+
+test("records the trigger, so a pass explains why it ran", async () => {
+  const log = memoryLog();
+  const { engine } = make({ log });
+  await engine.pass("subscribe");
+  expect(log.ofType("subscription.pass.start")[0]).toMatchObject({
+    trigger: "subscribe",
+    subscriptions: 1,
+  });
+});
+
+test("a pass that changes nothing stays at debug", async () => {
+  // The common case by design: a healthy quarter-hour must not fill the
+  // log with lines saying nothing happened.
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: {
+      streamers: [manual("alpha"), owned("beta", "s1"),
+                  owned("gamma", "s1")] as never,
+    },
+  });
+  await engine.pass();
+  expect(log.ofType("subscription.pass.noop")[0]?.level).toBe("debug");
+  // Nothing was reconciled and no restart proposed, so the pass produced
+  // no record of a CHANGE -- only the (info) note that the pool still
+  // holds, which is the one line a quiet quarter-hour is worth.
+  expect(log.ofType("subscription.reconciled")).toEqual([]);
+  expect(log.events.filter((e) => e.level === "warn" || e.level === "error"))
+    .toEqual([]);
+});
+
+test("records a directory failure and the pool it preserved", async () => {
+  // Currently a silent catch: the pool survives, but nothing says the
+  // lookup failed or that the channels are stale as a result.
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: { streamers: [owned("beta", "s1")] as never },
+    directory: async () => { throw new Error("hash rotated"); },
+  });
+  await engine.pass();
+  expect(log.ofType("subscription.directory.failed")[0]).toMatchObject({
+    err: "hash rotated",
+  });
+  expect(log.ofType("subscription.degraded")[0]).toMatchObject({
+    reason: "directory-failed",
+    kept: 1,
+  });
+});
+
+test("records a campaign that ended", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: {
+      streamers: [owned("beta", "s1")] as never,
+      subscriptions: [sub({ targetId: "gone" })],
+    },
+  });
+  await engine.pass();
+  expect(log.ofType("subscription.ended")[0]).toMatchObject({
+    targetId: "gone",
+    level: "warn",
+  });
+});
+
+test("an engine with no logger behaves identically", async () => {
+  const { engine, saveConfig } = make();
+  await expect(engine.pass()).resolves.toBeUndefined();
+  expect(saveConfig).toHaveBeenCalledTimes(1);
 });

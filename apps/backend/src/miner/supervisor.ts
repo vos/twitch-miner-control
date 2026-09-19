@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { LogBuffer } from "./logBuffer.js";
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
 
 export type MinerState =
   | "STOPPED" | "STARTING" | "RUNNING" | "RESTARTING" | "CRASHED";
@@ -30,6 +32,14 @@ export interface SupervisorOptions {
    * own tests free of a database.
    */
   sessions?: { open(ts: number): void; close(ts: number): void };
+  /**
+   * Where supervision decisions are recorded, for the app event log.
+   *
+   * Optional and defaulting to a no-op: the miner's behaviour must not
+   * depend on anyone listening, and every existing test constructs a
+   * supervisor without one.
+   */
+  log?: AppLog;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -118,8 +128,11 @@ export class Supervisor extends EventEmitter {
    */
   private generation = 0;
 
+  private readonly log: AppLog;
+
   constructor(private readonly options: SupervisorOptions) {
     super();
+    this.log = (options.log ?? NULL_LOG).child({ component: COMPONENT.MINER });
   }
 
   private get grace() { return this.options.graceMs ?? STOP_GRACE_MS; }
@@ -141,6 +154,12 @@ export class Supervisor extends EventEmitter {
     // keep counting. The guard above means each transition fires once.
     if (state === "RUNNING") this.options.sessions?.open(Date.now());
     else if (was === "RUNNING") this.options.sessions?.close(Date.now());
+    this.log.info({
+      type: EVENT.MINER_STATE,
+      msg: `miner ${was} -> ${state}`,
+      from: was,
+      to: state,
+    });
     this.emit("state", state);
   }
 
@@ -155,8 +174,16 @@ export class Supervisor extends EventEmitter {
     return { lines: this.buffer.lines(), total: this.buffer.total };
   }
 
-  /** Keeps miner output and announces the lines kept, for the live log view. */
-  private log(chunk: string): void {
+  /**
+   * Keeps miner output and announces the lines kept, for the live log view.
+   *
+   * Named logLine rather than log to leave `this.log` for the app event
+   * log: these are different destinations with different audiences. This
+   * one carries the miner's own stdout verbatim to the Logs page; the
+   * other records what the SUPERVISOR decided, which the miner's output
+   * cannot show.
+   */
+  private logLine(chunk: string): void {
     const lines = this.buffer.push(chunk);
     if (lines.length > 0) this.emit("log", { lines, total: this.buffer.total });
   }
@@ -206,8 +233,8 @@ export class Supervisor extends EventEmitter {
       env: { ...process.env, ...this.options.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout?.on("data", (d) => this.log(String(d)));
-    child.stderr?.on("data", (d) => this.log(String(d)));
+    child.stdout?.on("data", (d) => this.logLine(String(d)));
+    child.stderr?.on("data", (d) => this.logLine(String(d)));
     child.on("exit", (code) => this.onExit(generation, code));
     // Without this listener, a spawn failure (e.g. ENOENT for a bad
     // python/venv path) makes Node throw on the unhandled 'error' event
@@ -270,7 +297,13 @@ export class Supervisor extends EventEmitter {
   private onSpawnError(generation: number, err: Error): void {
     if (generation !== this.generation) return;
     this.child = null;
-    this.log(`failed to start miner: ${err.message}`);
+    this.logLine(`failed to start miner: ${err.message}`);
+    this.log.error({
+      type: EVENT.MINER_SPAWN_FAILED,
+      msg: `miner could not be started: ${err.message}`,
+      command: this.options.command,
+      err: err.message,
+    });
     this.setState("CRASHED");
   }
 
@@ -288,7 +321,15 @@ export class Supervisor extends EventEmitter {
     if (uptime < this.fastExit) {
       // Exited almost immediately: the config or environment is broken.
       // Retrying cannot help and risks hammering Twitch auth.
-      this.log(`miner exited after ${uptime}ms with code ${code}`);
+      this.logLine(`miner exited after ${uptime}ms with code ${code}`);
+      this.log.error({
+        type: EVENT.MINER_UNSTARTABLE,
+        msg: `miner exited after ${uptime}ms (code ${code}); too fast to retry, `
+          + "so the config or environment is broken",
+        code,
+        uptimeMs: uptime,
+        fastExitMs: this.fastExit,
+      });
       this.setState("CRASHED");
       return;
     }
@@ -308,9 +349,18 @@ export class Supervisor extends EventEmitter {
 
   private async scheduleRestart(generation: number, code: number | null): Promise<void> {
     if (this.restartCount > (this.options.maxRestarts ?? 5)) {
-      this.log(
+      this.logLine(
         `giving up after ${this.restartCount} restarts within ${this.crashWindow}ms`,
       );
+      this.log.error({
+        type: EVENT.MINER_GAVE_UP,
+        msg: `giving up: ${this.restartCount} crashes within `
+          + `${this.crashWindow}ms exceeds the cap of `
+          + `${this.options.maxRestarts ?? 5}`,
+        crashCount: this.restartCount,
+        maxRestarts: this.options.maxRestarts ?? 5,
+        windowMs: this.crashWindow,
+      });
       this.setState("CRASHED");
       return;
     }
@@ -336,7 +386,16 @@ export class Supervisor extends EventEmitter {
     // down too, instead of the backoff delay ratcheting up forever
     // over the miner's entire lifetime.
     const delay = Math.min(base * 2 ** (this.restartCount - 1), cap);
-    this.log(`miner exited (code ${code}); restarting in ${delay}ms`);
+    this.logLine(`miner exited (code ${code}); restarting in ${delay}ms`);
+    this.log.warn({
+      type: EVENT.MINER_RESTART_SCHEDULED,
+      msg: `miner exited (code ${code}); restarting in ${delay}ms after `
+        + `${this.restartCount} crash(es) in the last ${this.crashWindow}ms`,
+      code,
+      delayMs: delay,
+      crashCount: this.restartCount,
+      windowMs: this.crashWindow,
+    });
     await sleep(delay);
     // A stop()/restart() may have happened while we were sleeping;
     // bail out rather than resurrecting a miner the caller deliberately
@@ -402,7 +461,13 @@ export class Supervisor extends EventEmitter {
       // never fire kill() on an already-reaped pid or keep the event
       // loop alive after shutdown.
       const killTimer = setTimeout(() => {
-        this.log("miner ignored SIGTERM; sending SIGKILL");
+        this.logLine("miner ignored SIGTERM; sending SIGKILL");
+        this.log.warn({
+          type: EVENT.MINER_SIGKILL,
+          msg: `miner ignored SIGTERM for ${this.grace}ms; sending SIGKILL`,
+          graceMs: this.grace,
+          pid: child.pid ?? null,
+        });
         child.kill("SIGKILL");
       }, this.grace);
       child.kill("SIGTERM");

@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
 import { Supervisor } from "./supervisor.js";
+import { memoryLog } from "../appLog/memory.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fake = join(here, "../../test/fixtures/fake-miner.mjs");
@@ -410,4 +411,83 @@ test("runs without a sessions port", async () => {
   const s = make("normal");
   await s.start();
   expect(s.state).toBe("RUNNING");
+});
+
+test("records state transitions with where they came from", async () => {
+  const log = memoryLog();
+  const s = make("normal", { log });
+  await s.start();
+  await s.stop();
+  // The sequence, not just the endpoint: a reader following a restart
+  // needs to see the path the supervisor took through it.
+  expect(log.ofType("miner.state").map((e) => [e.from, e.to])).toEqual([
+    ["STOPPED", "STARTING"],
+    ["STARTING", "RUNNING"],
+    ["RUNNING", "STOPPED"],
+  ]);
+  expect(log.ofType("miner.state")[0]?.component).toBe("miner");
+});
+
+test("records a too-fast exit as unstartable, with the evidence", async () => {
+  const log = memoryLog();
+  const s = make("instant", { fastExitMs: 10_000, log });
+  await s.start();
+  await until(() => s.state === "CRASHED");
+  const event = log.ofType("miner.exit.unstartable")[0];
+  expect(event).toBeDefined();
+  expect(event?.fastExitMs).toBe(10_000);
+  expect(typeof event?.uptimeMs).toBe("number");
+  // Unstartable means no restart was scheduled: the two are alternatives.
+  expect(log.ofType("miner.restart.scheduled")).toEqual([]);
+});
+
+test("records an auto-restart with the backoff and the crash count", async () => {
+  // The auto-restart decision, with the evidence behind the delay it
+  // chose -- which is exactly what a reader needs to tell a healthy
+  // recovery from a crash loop.
+  const log = memoryLog();
+  const s = make("delayed_crash", {
+    fastExitMs: 100, dieAfterMs: 150, backoffBaseMs: 300,
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "150" },
+    log,
+  });
+  await s.start();
+  await until(() => log.ofType("miner.restart.scheduled").length > 0, { timeout: 3000 });
+  const event = log.ofType("miner.restart.scheduled")[0];
+  expect(event?.crashCount).toBe(1);
+  expect(event?.delayMs).toBe(300);
+  expect(typeof event?.windowMs).toBe("number");
+});
+
+test("records giving up once the crash cap trips", async () => {
+  const log = memoryLog();
+  const s = make("delayed_crash", {
+    fastExitMs: 20, backoffBaseMs: 10, maxRestarts: 2, crashWindowMs: 5000,
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "40" },
+    log,
+  });
+  await s.start();
+  await until(() => log.ofType("miner.restart.gaveUp").length > 0, { timeout: 5000 });
+  const event = log.ofType("miner.restart.gaveUp")[0];
+  expect(event?.maxRestarts).toBe(2);
+  expect(event?.crashCount as number).toBeGreaterThan(2);
+});
+
+test("records a SIGKILL escalation", async () => {
+  const log = memoryLog();
+  const s = make("stubborn", { graceMs: 100, log });
+  await s.start();
+  // The fixture installs its SIGTERM-ignoring handler in its script body,
+  // which can run after start() resolves; without waiting for this line a
+  // stop() lands on Node's default disposition and no escalation happens.
+  await until(() => s.logs().lines.join("\n").includes("miner started"));
+  await s.stop();
+  const event = log.ofType("miner.sigkill")[0];
+  expect(event).toBeDefined();
+  expect(event?.graceMs).toBe(100);
+});
+
+test("a supervisor with no logger behaves identically", () => {
+  // Logging is diagnostic: nothing may depend on anyone listening.
+  expect(() => make("normal")).not.toThrow();
 });
