@@ -465,11 +465,13 @@ export function buildServer(deps: ServerDeps): AppServer {
      * describe neither. `progressAvailable` travels with them because an
      * absent drop means "never started" only when the fetch worked.
      */
-    async function campaignPayload(refresh: boolean) {
-      const cat = refresh
+    async function campaignPayload(
+      refresh: { catalogue: boolean; progress: boolean },
+    ) {
+      const cat = refresh.catalogue
         ? await deps.catalogue.refresh()
         : await deps.catalogue.get();
-      const inv = refresh
+      const inv = refresh.progress
         ? await deps.inventory.refresh()
         : await deps.inventory.get();
       return {
@@ -486,12 +488,40 @@ export function buildServer(deps: ServerDeps): AppServer {
       };
     }
 
-    instance.get("/api/campaigns", async () => campaignPayload(false));
+    instance.get("/api/campaigns", async () =>
+      campaignPayload({ catalogue: false, progress: false }));
 
-    // Bypasses the TTL on both halves: a campaign that has just been
-    // announced, and the progress the user has just earned. Each cache
-    // rate limits itself, so a double click costs one sweep.
-    instance.post("/api/campaigns/refresh", async () => campaignPayload(true));
+    /**
+     * Bypasses the TTL, on the half the caller asks for.
+     *
+     * The two halves cost wildly different amounts. Progress is one
+     * Inventory query on a ten-minute clock; the catalogue is a detail
+     * sweep over every active campaign on a 24h one. Someone asking "did
+     * the minutes I just watched land?" -- which is most presses --
+     * must not pay for a sweep that nearly always returns what it
+     * already had.
+     *
+     * `what` defaults to both, preserving the single-button behaviour
+     * for any caller that predates the split. An unrecognised value is
+     * rejected rather than falling back to both, which would quietly
+     * make a typo the expensive path. Each cache still rate limits
+     * itself, so a double click costs one fetch.
+     */
+    instance.post<{ Querystring: { what?: string } }>(
+      "/api/campaigns/refresh",
+      async (request, reply) => {
+        const what = request.query.what ?? "both";
+        if (what !== "both" && what !== "catalogue" && what !== "progress") {
+          return reply.code(400).send({
+            error: `unknown refresh target "${what}"`,
+          });
+        }
+        return campaignPayload({
+          catalogue: what === "both" || what === "catalogue",
+          progress: what === "both" || what === "progress",
+        });
+      },
+    );
 
     /**
      * The subscriptions, each with the channels it currently owns.

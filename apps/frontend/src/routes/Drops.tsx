@@ -477,7 +477,7 @@ function SubscriptionRow({
 export function Drops() {
   const [data, setData] = useState<CampaignsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<"progress" | "catalogue" | null>(null);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<View>("all");
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
@@ -609,15 +609,25 @@ export function Drops() {
     }
   }
 
-  async function refresh() {
-    setRefreshing(true);
+  /**
+   * Refetches one half of the page, past its TTL.
+   *
+   * Split because the halves cost wildly different amounts: progress is
+   * one query on a ten-minute clock, the catalogue a detail sweep over
+   * every active campaign on a 24h one. Reloading both to answer "did my
+   * minutes land?" spent the expensive half on data that had not moved.
+   */
+  async function refresh(what: "progress" | "catalogue") {
+    setRefreshing(what);
     try {
-      setData(await api.post<CampaignsPayload>("/api/campaigns/refresh"));
+      setData(await api.post<CampaignsPayload>(
+        `/api/campaigns/refresh?what=${what}`,
+      ));
       setError(null);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "refresh failed");
     } finally {
-      setRefreshing(false);
+      setRefreshing(null);
     }
   }
 
@@ -698,14 +708,14 @@ export function Drops() {
     // campaign.
     <Stack gap="md" maw={1400} pb={140}>
       {/* One row: the pills pick the slice, the box searches inside it,
-          Refresh reloads both. The label is dropped from the input --
+          the refresh buttons reload it. The label is dropped from the input --
           with the pills beside it the row reads as one control group,
           and a floating "Filter" caption above only one of them puts
           them on different baselines. */}
       {/* The pills and the box are one control group, so they sit
           together on the left rather than being pushed to opposite ends
-          of a 1400px row. Refresh keeps to the far right: it acts on the
-          whole page, not on the filters. */}
+          of a 1400px row. The refresh buttons keep to the far right: they
+          act on the whole page, not on the filters. */}
       <Group wrap="wrap" gap="sm" align="center">
         <Group gap={6} wrap="wrap">
           {VIEWS.map((v) => (
@@ -739,17 +749,38 @@ export function Drops() {
           onChange={(e) => setFilter(e.currentTarget.value)}
           style={{ flex: "1 1 260px", maxWidth: 420 }}
         />
-        {/* Pushed to the far right, away from the filters it does not
-            belong to. */}
-        <Button
-          variant="default"
-          ml="auto"
-          leftSection={<IconRefresh size={16} />}
-          onClick={() => void refresh()}
-          loading={refreshing}
-        >
-          Refresh
-        </Button>
+        {/* Pushed to the far right, away from the filters they do not
+            belong to. Two buttons rather than one: progress moves every
+            few minutes while you watch and costs a single query, where
+            the campaign list is nearly static and costs a sweep over
+            every active campaign. One button made the common press pay
+            for the rare one.
+
+            Progress leads and is the filled one -- "did my minutes
+            land?" is what the page is reloaded for. Campaigns stays
+            subtle beside it: useful when something has just been
+            announced, and otherwise not worth reaching for. */}
+        <Group gap="xs" ml="auto" wrap="nowrap">
+          <Button
+            leftSection={<IconRefresh size={16} />}
+            onClick={() => void refresh("progress")}
+            loading={refreshing === "progress"}
+            disabled={refreshing !== null}
+            data-testid="refresh-progress"
+          >
+            Refresh progress
+          </Button>
+          <Button
+            variant="default"
+            leftSection={<IconRefresh size={16} />}
+            onClick={() => void refresh("catalogue")}
+            loading={refreshing === "catalogue"}
+            disabled={refreshing !== null}
+            data-testid="refresh-catalogue"
+          >
+            Refresh campaigns
+          </Button>
+        </Group>
       </Group>
 
       <Group gap="md" wrap="wrap">

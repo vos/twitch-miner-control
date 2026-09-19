@@ -1342,6 +1342,57 @@ test("POST /api/campaigns/refresh refetches progress, not just the catalogue", a
   expect(res.json().campaigns[0].drops[0].minutes).toBe(45);
 });
 
+test("refreshing progress alone leaves the catalogue untouched", async () => {
+  // The whole point of splitting the button: the catalogue is a detail
+  // sweep over every active campaign on a 24h clock, and someone asking
+  // "did my minutes land?" must not pay for it.
+  let sweeps = 0;
+  ctx.setCampaigns(() => { sweeps += 1; return [aCampaign]; });
+  ctx.helperResponses["inventory"] = { inventory: {} };
+  await ctx.app.inject({ method: "GET", url: "/api/campaigns", cookies: auth() });
+  const before = sweeps;
+
+  ctx.helperResponses["inventory"] = {
+    inventory: { c1: { d1: { minutes: 45, claimed: false, instanceId: null } } },
+  };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh?what=progress", cookies: auth(),
+  });
+
+  expect(res.statusCode).toBe(200);
+  expect(sweeps).toBe(before);
+  expect(res.json().campaigns[0].drops[0].minutes).toBe(45);
+});
+
+test("refreshing the catalogue alone leaves progress untouched", async () => {
+  ctx.setCampaigns(() => [aCampaign]);
+  ctx.helperResponses["inventory"] = { inventory: {} };
+  await ctx.app.inject({ method: "GET", url: "/api/campaigns", cookies: auth() });
+  const before = ctx.client.request.mock.calls.filter(
+    (c: unknown[]) => c[0] === "inventory",
+  ).length;
+
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh?what=catalogue", cookies: auth(),
+  });
+
+  expect(res.statusCode).toBe(200);
+  const after = ctx.client.request.mock.calls.filter(
+    (c: unknown[]) => c[0] === "inventory",
+  ).length;
+  expect(after).toBe(before);
+});
+
+test("an unknown refresh target is rejected rather than sweeping both", async () => {
+  // Falling back to "both" would make a typo the expensive path.
+  ctx.setCampaigns(() => [aCampaign]);
+  ctx.helperResponses["inventory"] = { inventory: {} };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/campaigns/refresh?what=everything", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(400);
+});
+
 test("GET /api/campaigns reports progress unavailable when the fetch fails", async () => {
   // The campaigns must still render -- only the progress is unknown.
   ctx.setCampaigns(() => [aCampaign]);

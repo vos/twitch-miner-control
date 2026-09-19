@@ -190,12 +190,47 @@ test("says when the campaign list itself is stale", async () => {
   expect(screen.getByText("Alpha Campaign")).toBeTruthy();
 });
 
-test("refresh posts to the refresh route", async () => {
+test("refreshing progress asks only for progress", async () => {
+  // The common press. Sweeping the catalogue too would spend a detail
+  // fetch over every active campaign on data that had not moved.
   renderApp(<Drops />);
   await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
-  await userEvent.click(screen.getByRole("button", { name: /refresh/i }));
+  await userEvent.click(screen.getByTestId("refresh-progress"));
+  await waitFor(() => expect(calls.some(
+    (c) => c.url === "/api/campaigns/refresh?what=progress")).toBe(true));
+  expect(calls.some((c) => c.url.includes("what=catalogue"))).toBe(false);
+});
+
+test("refreshing campaigns asks only for the catalogue", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.click(screen.getByTestId("refresh-catalogue"));
+  await waitFor(() => expect(calls.some(
+    (c) => c.url === "/api/campaigns/refresh?what=catalogue")).toBe(true));
+  expect(calls.some((c) => c.url.includes("what=progress"))).toBe(false);
+});
+
+test("a refresh in flight locks both buttons", async () => {
+  // They share one payload, so letting the second fire mid-flight races
+  // two responses into the same setData. The refresh has to be held
+  // open to observe it: a mock that resolves at once is already done.
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    calls.push({ url });
+    await held;
+    return { ok: true, status: 200, json: async () => payload };
+  }));
+
+  await userEvent.click(screen.getByTestId("refresh-progress"));
   await waitFor(() =>
-    expect(calls.some((c) => c.url === "/api/campaigns/refresh")).toBe(true));
+    expect(screen.getByTestId("refresh-catalogue")).toBeDisabled());
+  release();
+  await waitFor(() =>
+    expect(screen.getByTestId("refresh-catalogue")).not.toBeDisabled());
 });
 
 test("reports a failed load instead of rendering an empty list", async () => {
