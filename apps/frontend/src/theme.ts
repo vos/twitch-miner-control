@@ -31,11 +31,24 @@ export const theme = createTheme({
      * forced-dark app -- it was the one floating surface not following
      * the palette. Set here rather than per call site so every tooltip
      * in the app matches, including the ones already written.
+     *
+     * --tw-overlay rather than --tw-surface-alt: the latter sits 7/255
+     * above a card, so a tooltip opening over one had no visible edge
+     * and its text read as bleeding onto the card rather than floating
+     * above it. The border and shadow finish the separation -- on the
+     * darkest backgrounds the fill alone still needs an outline to read
+     * as a panel.
      */
     Tooltip: {
       defaultProps: {
-        bg: "var(--tw-surface-alt)",
+        bg: "var(--tw-overlay)",
         color: "var(--tw-text)",
+      },
+      styles: {
+        tooltip: {
+          border: "1px solid var(--tw-border)",
+          boxShadow: "0 4px 16px rgba(0, 0, 0, 0.55)",
+        },
       },
     },
   },

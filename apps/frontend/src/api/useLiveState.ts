@@ -17,6 +17,8 @@ export interface StreamerState {
    * reads it defensively for that reason.
    */
   ownedByLabel?: string | null;
+  /** The game that campaign is for; see StreamerMeta for why it leads. */
+  ownedByGame?: string | null;
   points: number | null;
   isOnline: boolean | null;
   pointsEnabled: boolean | null;

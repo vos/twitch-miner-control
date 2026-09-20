@@ -1,6 +1,7 @@
 import { Badge, Group, Progress, Text, Tooltip, UnstyledButton } from "@mantine/core";
 import { useState } from "react";
 import { DropBadge } from "./DropBadge.js";
+import { OwnedBadge } from "./OwnedBadge.js";
 import classes from "./StreamerMeta.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -34,6 +35,12 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   const claimPending = s.claimPending ?? false;
   const watching = s.watching ?? false;
   const campaign = s.ownedByLabel ?? null;
+  // The game leads on the badge: it is what a viewer recognises and can
+  // match to a card, where a campaign name mostly cannot be ("DF
+  // Streamer Ladder FINNAL" is Delta Force). The label is the fallback
+  // for a campaign that has left the catalogue, and stays in the
+  // tooltip either way -- it names the thing you unsubscribe from.
+  const ownedGame = s.ownedByGame ?? null;
   // Offline: nothing is being mined, so nothing is being multiplied.
   const idle = s.isOnline !== true;
 
@@ -78,23 +85,12 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
         </Tooltip>
       )}
       {drop !== null && <DropBadge drop={drop} />}
-      {campaign !== null && (
-        <Tooltip
-          label={
-            `Added automatically to collect drops from ${campaign}. `
-            + "It leaves the list when you unsubscribe or the campaign ends."
-          }
-        >
-          {/* Why this channel is on the dashboard at all, which is the
-              question a name you do not recognise actually raises. Sits
-              beside the drop badge rather than replacing it: that one
-              says how far along the drop is, this one says who asked for
-              it, and a channel can legitimately show both. */}
-          <Badge color="grape" variant="outline" size="sm" data-testid="campaign-badge">
-            {campaign}
-          </Badge>
-        </Tooltip>
-      )}
+      {/* Why this channel is on the dashboard at all, which is the
+          question a name you do not recognise actually raises. Sits
+          beside the drop badge rather than replacing it: that one says
+          how far along the drop is, this one says who asked for it, and
+          a channel can legitimately show both. */}
+      <OwnedBadge label={campaign} game={ownedGame} testId="campaign-badge" />
       {s.pointsEnabled === false && (
         <Tooltip label="Channel points are disabled for this channel, so the balance cannot move.">
           <Badge color="yellow" variant="light" size="sm" data-testid="points-disabled">

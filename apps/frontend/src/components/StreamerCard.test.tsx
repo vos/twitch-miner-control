@@ -715,11 +715,28 @@ test("omits the benefits line when the miner reported none", async () => {
   expect(screen.queryByTestId("drop-benefits")).not.toBeInTheDocument();
 });
 
-test("names the drop campaign a subscription-added channel came from", () => {
+test("shows the game a subscription-added channel is here for", () => {
   // An unfamiliar channel on the dashboard raises exactly one question,
-  // and the campaign name is the answer to it.
-  view({ ownedByLabel: "Rust Twitch Drops" });
+  // and the GAME is the answer a viewer recognises. Campaign names are
+  // mostly unrecognisable on their own -- "DF Streamer Ladder FINNAL"
+  // is Delta Force -- and run long enough to break the card.
+  view({ ownedByLabel: "DF Streamer Ladder FINNAL", ownedByGame: "Delta Force" });
+  expect(screen.getByTestId("campaign-badge")).toHaveTextContent("Delta Force");
+});
+
+test("falls back to the campaign name when the game is unknown", () => {
+  // The campaign has left the catalogue, so there is nothing to look up.
+  // The stored label still identifies it, and a guess would be worse.
+  view({ ownedByLabel: "Rust Twitch Drops", ownedByGame: null });
   expect(screen.getByTestId("campaign-badge")).toHaveTextContent("Rust Twitch Drops");
+});
+
+test("the campaign name stays reachable in the tooltip", () => {
+  // The badge shows the game now, so the specific campaign -- the thing
+  // you unsubscribe from -- has to be named somewhere.
+  view({ ownedByLabel: "DF Streamer Ladder FINNAL", ownedByGame: "Delta Force" });
+  expect(screen.getByTestId("campaign-badge").getAttribute("aria-label"))
+    .toMatch(/DF Streamer Ladder FINNAL/);
 });
 
 test("a hand-added channel carries no campaign badge", () => {

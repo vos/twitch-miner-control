@@ -1397,10 +1397,12 @@ test("reports the campaign a subscription-owned channel came from", async () => 
   const owned = new StateService({
     client: { request: vi.fn(async () => alpha(100)) } as never,
     history, streamers, getStreamers: () => ["alpha"], now: () => clock,
-    ownerLabel: (login) => (login === "alpha" ? "Rust Twitch Drops" : null),
+    ownerLabel: (login) => (login === "alpha"
+      ? { label: "Rust Twitch Drops", game: "Rust" } : null),
   });
   await owned.refresh();
   expect(owned.snapshot().streamers[0].ownedByLabel).toBe("Rust Twitch Drops");
+  expect(owned.snapshot().streamers[0].ownedByGame).toBe("Rust");
 
   await service.refresh();
   // A hand-added channel, and a service with no lookup wired, both say
@@ -1416,7 +1418,21 @@ test("deriveLocal carries the owning campaign onto the first paint", () => {
   const service = new StateService({
     client: { request: vi.fn() } as never,
     history, streamers, getStreamers: () => ["alpha"], now: () => clock,
-    ownerLabel: () => "Rust Twitch Drops",
+    ownerLabel: () => ({ label: "Rust Twitch Drops", game: "Rust" }),
   });
   expect(service.deriveLocal(["alpha"])[0].ownedByLabel).toBe("Rust Twitch Drops");
+  expect(service.deriveLocal(["alpha"])[0].ownedByGame).toBe("Rust");
+});
+
+test("an owning campaign with no known game reports a null game", () => {
+  // The campaign has left the catalogue, or never carried one. The label
+  // still identifies it, and the card falls back to that -- a guessed
+  // game would be worse than none.
+  seedHistory("alpha", clock);
+  const service = new StateService({
+    client: { request: vi.fn() } as never,
+    history, streamers, getStreamers: () => ["alpha"], now: () => clock,
+    ownerLabel: () => ({ label: "Rust Twitch Drops", game: null }),
+  });
+  expect(service.deriveLocal(["alpha"])[0].ownedByGame).toBeNull();
 });

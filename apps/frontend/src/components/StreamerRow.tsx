@@ -2,6 +2,7 @@ import { ActionIcon, Badge, Card, Switch, Text, Tooltip } from "@mantine/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { IconGripVertical, IconSettings, IconX } from "@tabler/icons-react";
+import { OwnedBadge } from "./OwnedBadge.js";
 import { StatusPill } from "./StatusPill.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import classes from "./StreamerRow.module.css";
@@ -47,6 +48,14 @@ interface Props {
    * campaign name answers it outright.
    */
   ownedByLabel?: string | null;
+  /**
+   * The game that campaign is for, or null when it is not known.
+   *
+   * What the badge actually shows: a viewer recognises "Delta Force"
+   * and cannot place "DF Streamer Ladder FINNAL", which is the same
+   * campaign. The label stays the fallback and the `title`.
+   */
+  ownedByGame?: string | null;
   onToggle: () => void;
   onRemove: () => void;
   onOpenSettings: () => void;
@@ -65,7 +74,7 @@ interface Props {
 export function StreamerRow(
   {
     username, enabled, status, index, watching, ownedByLabel = null,
-    onToggle, onRemove, onOpenSettings,
+    ownedByGame = null, onToggle, onRemove, onOpenSettings,
   }: Props,
 ) {
   const {
@@ -153,16 +162,12 @@ export function StreamerRow(
             </Badge>
           )}
           {owned && (
-            <Badge
-              size="xs" variant="light" color="grape" data-testid="owned-tag"
-              className={classes.badge}
-              title={
-                `Added automatically to collect drops from ${ownedByLabel}. `
-                + "Unsubscribe on the Drops screen to remove it."
-              }
-            >
-              {ownedByLabel}
-            </Badge>
+            <OwnedBadge
+              label={ownedByLabel}
+              game={ownedByGame}
+              testId="owned-tag"
+              size="xs"
+            />
           )}
           {/* Live state is what the ordering decision is actually made on,
               so it sits on the row being dragged. Absent when the miner is

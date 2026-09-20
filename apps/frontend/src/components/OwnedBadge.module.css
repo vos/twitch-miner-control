@@ -1,0 +1,15 @@
+/* The one badge in either strip that is not short by nature: it carries
+   a game or campaign name, and those run to 38 characters ("LEGO Batman:
+   Legacy of the Dark Knight"). Pinned at flex-shrink: 0 like its
+   neighbours it won its full width and pushed the row past the card's
+   edge, where overflow clipped the controls.
+
+   It shrinks and truncates instead. The floor keeps a readable word or
+   two before the ellipsis. */
+.owned {
+  flex: 0 1 auto;
+  min-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -31,7 +31,7 @@ interface StreamerEntry {
   ownedBy?: string;
 }
 /** The subscriptions, so an owned row can name the campaign it came from. */
-interface SubscriptionEntry { id: string; label: string }
+interface SubscriptionEntry { id: string; label: string; game?: string | null }
 /**
  * The slice of the live snapshot this screen reads.
  *
@@ -62,7 +62,7 @@ export function Streamers() {
 
   const [status, setStatus] = useState<Map<string, StreamerStatus>>(new Map());
   /** Subscription id to campaign label, for the badge on owned rows. */
-  const [campaigns, setCampaigns] = useState<Map<string, string>>(new Map());
+  const [campaigns, setCampaigns] = useState<Map<string, SubscriptionEntry>>(new Map());
   const [refreshing, setRefreshing] = useState(false);
   /** Index of the streamer whose settings dialog is open, if any. */
   const [editing, setEditing] = useState<number | null>(null);
@@ -121,7 +121,7 @@ export function Streamers() {
   useEffect(() => {
     api.get<{ subscriptions: SubscriptionEntry[] }>("/api/subscriptions")
       .then(({ subscriptions }) => {
-        setCampaigns(new Map(subscriptions.map((sub) => [sub.id, sub.label])));
+        setCampaigns(new Map(subscriptions.map((sub) => [sub.id, sub])));
       })
       .catch(() => {});
   }, []);
@@ -254,6 +254,7 @@ export function Streamers() {
                 index={index}
                 watching={status.get(streamer.username.toLowerCase())?.watching === true}
                 ownedByLabel={labelFor(streamer, campaigns)}
+                ownedByGame={gameFor(streamer, campaigns)}
                 onToggle={() => toggle(index)}
                 onRemove={() => remove(index)}
                 onOpenSettings={() => setEditing(index)}
@@ -291,10 +292,24 @@ export function Streamers() {
  */
 function labelFor(
   streamer: StreamerEntry,
-  campaigns: Map<string, string>,
+  campaigns: Map<string, SubscriptionEntry>,
 ): string | null {
   if (streamer.ownedBy === undefined) return null;
-  return campaigns.get(streamer.ownedBy) ?? "drop campaign";
+  return campaigns.get(streamer.ownedBy)?.label ?? "drop campaign";
+}
+
+/**
+ * The game the owning subscription is for, or null when unknown.
+ *
+ * What the row's badge shows; see StreamerRow for why the game leads
+ * and the campaign label is only the fallback.
+ */
+function gameFor(
+  streamer: StreamerEntry,
+  campaigns: Map<string, SubscriptionEntry>,
+): string | null {
+  if (streamer.ownedBy === undefined) return null;
+  return campaigns.get(streamer.ownedBy)?.game ?? null;
 }
 
 function countChanges(before: StreamerEntry[], after: StreamerEntry[]): number {

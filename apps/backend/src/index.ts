@@ -30,6 +30,7 @@ import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
 import { InventoryCache } from "./state/inventory.js";
+import type { OwnerLabel } from "./state/service.js";
 import { StateService } from "./state/service.js";
 import { resolveVersion } from "./config/version.js";
 import { createAppLog } from "./appLog/pino.js";
@@ -235,14 +236,39 @@ function resolveStreamers(): Promise<string[]> {
  * literal comparison would silently drop the badge on any channel whose
  * capitalisation happens to differ.
  */
-function subscriptionLabelFor(username: string): string | null {
+function subscriptionLabelFor(username: string): OwnerLabel | null {
   const config = loadConfig(configPath);
   const key = normaliseUsername(username);
   const entry = config.streamers.find(
     (s) => normaliseUsername(s.username) === key,
   );
   if (entry?.ownedBy === undefined) return null;
-  return config.subscriptions.find((sub) => sub.id === entry.ownedBy)?.label ?? null;
+  const sub = config.subscriptions.find((s) => s.id === entry.ownedBy);
+  if (sub === undefined) return null;
+  return { label: sub.label, game: gameForSubscription(sub) };
+}
+
+/**
+ * The game a subscription is for, from the catalogue we already hold.
+ *
+ * Read from the cached campaigns rather than stored on the subscription:
+ * the engine records a label and a target id, and the game is a property
+ * of the campaign. A game subscription targets the game directly; a
+ * campaign subscription has to go through the campaign to reach it.
+ *
+ * Null once the campaign leaves the catalogue, where there is nothing to
+ * look up -- the card falls back to the label, which is stored precisely
+ * so it still reads correctly then.
+ */
+function gameForSubscription(
+  sub: { kind: string; targetId: string },
+): string | null {
+  const campaigns = catalogue.peek()?.campaigns ?? [];
+  const game = sub.kind === "campaign"
+    ? campaigns.find((c) => c.id === sub.targetId)?.game
+    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
+  const name = game?.displayName;
+  return name === undefined || name === "" ? null : name;
 }
 
 const streamers = new Streamers(db);

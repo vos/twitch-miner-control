@@ -288,6 +288,19 @@ export class CampaignCatalogue {
     return this.inflight;
   }
 
+  /**
+   * What is held right now, without fetching. Null before anything is.
+   *
+   * For synchronous readers that cannot await -- the owner lookup on a
+   * streamer card runs on every derivation and only wants a name. They
+   * get the disk copy loaded at construction, or whatever the last
+   * fetch left; staleness does not matter for a game name, which does
+   * not change for the life of a campaign.
+   */
+  peek(): Catalogue | null {
+    return this.campaigns === null ? null : this.snapshot();
+  }
+
   /** The catalogue, fetching only if what we hold has expired. */
   async get(): Promise<Catalogue> {
     const fresh =

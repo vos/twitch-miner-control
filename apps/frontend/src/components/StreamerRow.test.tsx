@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { screen } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
@@ -86,7 +87,10 @@ test("a channel that is not being watched renders no tag", () => {
  * the screen's job is to say where the channel came from and to keep the
  * user from staging an edit that the next pass would silently undo.
  */
-function ownedRow(ownedByLabel: string | null = "Rust Twitch Drops") {
+function ownedRow(
+  ownedByLabel: string | null = "Rust Twitch Drops",
+  ownedByGame: string | null = null,
+) {
   return renderApp(
     <DndContext>
       <SortableContext items={["alpha"]}>
@@ -96,6 +100,7 @@ function ownedRow(ownedByLabel: string | null = "Rust Twitch Drops") {
           index={0}
           watching={false}
           ownedByLabel={ownedByLabel}
+          ownedByGame={ownedByGame}
           status={null}
           onToggle={() => {}}
           onRemove={() => {}}
@@ -106,9 +111,40 @@ function ownedRow(ownedByLabel: string | null = "Rust Twitch Drops") {
   );
 }
 
-test("names the campaign that a subscription-owned channel came from", () => {
-  ownedRow();
+test("shows the game a subscription-owned channel is here for", () => {
+  // The game is what a viewer recognises; campaign names mostly are not
+  // ("DF Streamer Ladder FINNAL" is Delta Force) and run long enough to
+  // push the row past the card's edge.
+  ownedRow("DF Streamer Ladder FINNAL", "Delta Force");
+  expect(screen.getByTestId("owned-tag")).toHaveTextContent("Delta Force");
+});
+
+test("falls back to the campaign name when the game is unknown", () => {
+  // Left the catalogue, so there is nothing to look up. The stored label
+  // still identifies it.
+  ownedRow("Rust Twitch Drops", null);
   expect(screen.getByTestId("owned-tag")).toHaveTextContent("Rust Twitch Drops");
+});
+
+test("the campaign name stays reachable on an owned row", async () => {
+  // The badge shows the game now, so the campaign -- the thing you
+  // unsubscribe from -- has to stay named somewhere. A Mantine Tooltip
+  // rather than a native `title`, matching the dashboard card: the two
+  // screens show the same badge and must explain it the same way.
+  ownedRow("DF Streamer Ladder FINNAL", "Delta Force");
+  await userEvent.hover(screen.getByTestId("owned-tag"));
+  const tip = await screen.findByRole("tooltip");
+  expect(tip).toHaveTextContent("DF Streamer Ladder FINNAL");
+});
+
+test("an owned row explains the badge the way the dashboard does", async () => {
+  // Same wording on both screens: a user who learned what the badge
+  // means on one must not meet a different sentence on the other.
+  ownedRow("DF Streamer Ladder FINNAL", "Delta Force");
+  await userEvent.hover(screen.getByTestId("owned-tag"));
+  const tip = await screen.findByRole("tooltip");
+  expect(tip).toHaveTextContent("Auto-added for drops");
+  expect(tip).toHaveTextContent("Unsubscribe on Drops");
 });
 
 test("an owned row offers no reorder, settings or remove control", () => {

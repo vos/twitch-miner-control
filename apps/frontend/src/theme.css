@@ -2,6 +2,14 @@
   --tw-bg: #0E0E10;
   --tw-surface: #18181B;
   --tw-surface-alt: #1F1F23;
+  /* A floating panel, deliberately lighter than any fixed surface.
+     Tooltips used --tw-surface-alt, which sits 7/255 above the card it
+     usually opens over: the panel had no visible edge and its text read
+     as bleeding onto the card. A popover has to look like it is ON TOP
+     of the page, which means clearing the surface beneath it, not
+     matching it. Paired with --tw-border and a shadow at the call
+     site. */
+  --tw-overlay: #33333A;
   --tw-border: #2F2F35;
   --tw-purple: #9147FF;
   --tw-purple-hover: #772CE8;

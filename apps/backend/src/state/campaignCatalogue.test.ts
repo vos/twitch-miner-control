@@ -243,3 +243,20 @@ test("a corrupt cache file is ignored rather than fatal", async () => {
   const out = await cache.get();
   expect(out.campaigns).toEqual([campaign()]);
 });
+
+test("peek reads what is held without fetching", async () => {
+  // The owner lookup on a streamer card is synchronous and runs on every
+  // derivation, so it cannot await a fetch. It reads whatever the
+  // catalogue already has -- which after construction is the disk copy.
+  const source = vi.fn(async () => [campaign()]);
+  const cat = new CampaignCatalogue({
+    source,
+    path: join(mkdtempSync(join(tmpdir(), "cat-")), "c.json"),
+    now: () => clock,
+  });
+  expect(cat.peek()).toBeNull();
+  expect(source).not.toHaveBeenCalled();
+
+  await cat.get();
+  expect(cat.peek()?.campaigns[0]?.id).toBe("c1");
+});

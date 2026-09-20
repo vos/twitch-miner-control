@@ -15,12 +15,23 @@ test("sets monospace to the tabular-figure face used for every number", () => {
   expect(theme.fontFamilyMonospace).toMatch(/JetBrains Mono/);
 });
 
-test("tooltips use the dark surface, not Mantine's light default", () => {
+test("tooltips use the dark overlay, not Mantine's light default", () => {
   // The app is forced dark. Mantine's stock tooltip is near-white, which
   // glares against every surface it is summoned over -- and it is the
   // only floating surface that did not follow the palette.
   const props = theme.components?.Tooltip?.defaultProps as
     { bg?: string; color?: string } | undefined;
-  expect(props?.bg).toBe("var(--tw-surface-alt)");
+  expect(props?.bg).toBe("var(--tw-overlay)");
   expect(props?.color).toBe("var(--tw-text)");
+});
+
+test("a tooltip is separated from the surface it opens over", () => {
+  // --tw-overlay alone is not enough on the darkest backgrounds: the
+  // panel needs an edge, or it reads as text bleeding onto the card
+  // rather than a panel floating above it. This is the whole reason the
+  // tooltip stopped sharing --tw-surface-alt with inset elements.
+  const styles = theme.components?.Tooltip?.styles as
+    { tooltip?: { border?: string; boxShadow?: string } } | undefined;
+  expect(styles?.tooltip?.border).toMatch(/var\(--tw-border\)/);
+  expect(styles?.tooltip?.boxShadow).toBeTruthy();
 });

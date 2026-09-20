@@ -23,6 +23,21 @@ export interface StreamerState {
    * the campaign ends and leaves the catalogue.
    */
   ownedByLabel: string | null;
+  /**
+   * The game that campaign is for, or null when it is not known.
+   *
+   * Carried beside the label rather than replacing it because they
+   * answer different questions: the game is what a viewer recognises
+   * and what the card shows, while the label identifies the specific
+   * campaign and is what the tooltip names. Campaign names are mostly
+   * unrecognisable on their own ("DF Streamer Ladder FINNAL" is Delta
+   * Force), which is why the game leads.
+   *
+   * Null when the campaign has left the catalogue or never carried a
+   * game -- the card falls back to the label, since a guess would be
+   * worse than none.
+   */
+  ownedByGame: string | null;
   displayName: string | null;
   points: number | null;
   isOnline: boolean | null;
@@ -155,6 +170,7 @@ export type RawStreamerState = Omit<
   | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
   | "game" | "streamTitle" | "viewers" | "drop" | "ownedByLabel"
+  | "ownedByGame"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
   streamStartedAt: number | null;
@@ -231,6 +247,28 @@ export interface StateSnapshot {
   error: string | null;
 }
 
+/**
+ * Who a subscription-owned channel came from: the campaign's own label,
+ * and the game it is for when the catalogue still knows one.
+ *
+ * One lookup returning both rather than two: the caller resolves the
+ * subscription once, and the game is read off the same campaign.
+ */
+export interface OwnerLabel {
+  label: string;
+  game: string | null;
+}
+
+/** The two owner fields from one lookup, both null when unowned. */
+function ownerFields(
+  owner: OwnerLabel | null,
+): { ownedByLabel: string | null; ownedByGame: string | null } {
+  return {
+    ownedByLabel: owner?.label ?? null,
+    ownedByGame: owner?.game ?? null,
+  };
+}
+
 export interface StateServiceDeps {
   client: { request<T>(op: string, params?: object): Promise<T> };
   history: History;
@@ -258,7 +296,7 @@ export interface StateServiceDeps {
    * Optional, and absent means every channel reports a null label --
    * which is what every caller that does not care already gets.
    */
-  ownerLabel?: (username: string) => string | null;
+  ownerLabel?: (username: string) => OwnerLabel | null;
   intervalMs?: number;
   debounceMs?: number;
   staleAfterMs?: number;
@@ -669,7 +707,7 @@ export class StateService extends EventEmitter {
       // visibly rename the card to its lowercase login until the
       // next good poll.
       displayName: s.displayName ?? known?.displayName ?? null,
-      ownedByLabel: this.deps.ownerLabel?.(s.username) ?? null,
+      ...ownerFields(this.deps.ownerLabel?.(s.username) ?? null),
       gained24h,
       gainedSince: window === null || typeof s.points !== "number" ? null : window.ts,
       gainedStream:

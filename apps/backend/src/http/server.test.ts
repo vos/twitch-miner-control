@@ -1496,6 +1496,34 @@ test("GET /api/subscriptions lists them with the channels they own", async () =>
   expect(sub.channels).toEqual(["beta"]);
 });
 
+test("GET /api/subscriptions names the game each one is for", async () => {
+  // The Streamers screen holds no catalogue of its own, so it cannot
+  // resolve the game the way the Drops page does. Without this the
+  // owned badge there can only show the campaign label, which is mostly
+  // unrecognisable ("DF Streamer Ladder FINNAL" is Delta Force).
+  withSubs([aSub()]);
+  ctx.setCampaigns(() => [aCampaign]);
+  await ctx.catalogue.refresh();
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  const [sub] = res.json().subscriptions;
+  expect(sub.game).toBe("A Game");
+});
+
+test("a subscription whose campaign has left the catalogue reports no game", async () => {
+  // Nothing to look up, and a guess would be worse than silence. The
+  // stored label still identifies it.
+  withSubs([aSub({ targetId: "gone" })]);
+  ctx.setCampaigns(() => [aCampaign]);
+  await ctx.catalogue.refresh();
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  const [sub] = res.json().subscriptions;
+  expect(sub.game).toBeNull();
+});
+
 test("POST /api/subscriptions assigns an id and the next rank", async () => {
   withSubs([]);
   const res = await ctx.app.inject({

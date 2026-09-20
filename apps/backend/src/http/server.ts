@@ -22,7 +22,7 @@ import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { SubscriptionEngine } from "../drops/engine.js";
 import type { PendingRestart } from "../drops/pendingRestart.js";
-import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
+import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
 import { gainWindow } from "../state/gains.js";
 import type { InventoryCache } from "../state/inventory.js";
@@ -228,6 +228,24 @@ export const STATUS_TICK_MS = 5_000;
 export interface AppServer extends FastifyInstance {
   /** How many SSE clients are attached right now. */
   readonly clientCount: number;
+}
+
+/**
+ * The game a subscription is for, from the campaigns on hand.
+ *
+ * A game subscription targets the game directly; a campaign
+ * subscription reaches it through the campaign. Null when the target is
+ * unknown or the campaign carries no game -- a guess would be worse.
+ */
+function gameForSubscription(
+  sub: { kind: string; targetId: string },
+  campaigns: readonly Campaign[],
+): string | null {
+  const game = sub.kind === "campaign"
+    ? campaigns.find((c) => c.id === sub.targetId)?.game
+    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
+  const name = game?.displayName;
+  return name === undefined || name === "" ? null : name;
 }
 
 export function buildServer(deps: ServerDeps): AppServer {
@@ -582,6 +600,9 @@ export function buildServer(deps: ServerDeps): AppServer {
      */
     instance.get("/api/subscriptions", async () => {
       const config = loadConfig(deps.configPath);
+      // Read once for the whole list rather than per subscription: every
+      // row resolves against the same catalogue.
+      const campaigns = deps.catalogue.peek()?.campaigns ?? [];
       return {
         subscriptions: [...config.subscriptions]
           .sort((a, b) => a.rank - b.rank)
@@ -590,6 +611,12 @@ export function buildServer(deps: ServerDeps): AppServer {
             channels: config.streamers
               .filter((s) => s.ownedBy === sub.id)
               .map((s) => s.username),
+            // The game the subscription is for, which is what the owned
+            // badge on the Streamers screen shows -- that screen holds
+            // no catalogue of its own and cannot look it up the way the
+            // Drops page does. Null once the campaign leaves the
+            // catalogue; the stored label still identifies it.
+            game: gameForSubscription(sub, campaigns),
           })),
       };
     });
