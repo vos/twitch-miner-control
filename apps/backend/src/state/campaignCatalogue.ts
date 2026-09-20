@@ -52,7 +52,12 @@ export interface CampaignDrop {
   name: string;
   benefits: CampaignBenefit[];
   requiredMinutes: number;
-  /** Non-zero means it can never be earned by watching -- see dropState. */
+  /**
+   * Non-zero means it can never be earned by watching -- see dropState.
+   *
+   * Always 0 from the current source, which never sets the field it is
+   * derived from; dropState has two further signals for these drops.
+   */
   requiredSubs: number;
   /**
    * The drop's own window, which can be narrower than its campaign's.

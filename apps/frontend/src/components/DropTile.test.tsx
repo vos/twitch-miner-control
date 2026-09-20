@@ -35,12 +35,19 @@ test("a claimable drop is called out as ready", () => {
   expect(screen.getByTestId("drop-state").textContent).toMatch(/ready/i);
 });
 
-test("a sub-gated drop explains why it cannot be earned", () => {
+test("an unobtainable drop says watching cannot earn it", () => {
   // Without the reason it reads as a bug rather than a rule: "collect
   // all drops" will never complete for this one and the user needs to
   // know that is by design.
+  //
+  // Phrased about watching rather than about subs: the gate is a gift
+  // sub on some, an account link or an external hunt on others, and the
+  // signals that detect them (zero required minutes, an unmet
+  // precondition) do not say which. "Needs sub" was a guess that read
+  // as fact.
   renderApp(<DropTile drop={drop({ status: "unobtainable" })} />);
-  expect(screen.getByTestId("drop-state").textContent).toMatch(/sub/i);
+  expect(screen.getByTestId("drop-state").textContent)
+    .toMatch(/not earned by watching/i);
   expect(screen.queryByTestId("drop-bar")).toBeNull();
 });
 

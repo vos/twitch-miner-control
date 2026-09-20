@@ -263,7 +263,7 @@ test("the progress bar counts claimed drops against obtainable ones", () => {
     .toMatch(/1 of 2 drops claimed/);
 });
 
-test("sub-gated drops are left out of the progress bar", () => {
+test("unobtainable drops are left out of the progress bar", () => {
   // Counted, a campaign whose only unearned drop needs a sub would show
   // a bar that can never fill however long you watch.
   renderApp(<CampaignCard campaign={campaign({
@@ -456,8 +456,8 @@ test("a fully claimed campaign fills both segments", () => {
   ])).toEqual({ required: 60, watched: 60, claimed: 60 });
 });
 
-test("sub-gated drops are left out of the span", () => {
-  // They can never be earned by watching, so a 240m sub-only drop must
+test("unobtainable drops are left out of the span", () => {
+  // They can never be earned by watching, so a 240m gated drop must
   // not stretch the bar to a length no amount of watching reaches.
   expect(watchTime([
     mins({ requiredMinutes: 60, minutes: 60, status: "claimed" }),
@@ -572,7 +572,7 @@ test("two drops at the same threshold share one mark", () => {
   ]);
 });
 
-test("sub-gated drops get no mark", () => {
+test("unobtainable drops get no mark", () => {
   // They can never be reached by watching, so a tick for one points at
   // a milestone that never arrives.
   expect(milestones([

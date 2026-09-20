@@ -218,11 +218,12 @@ by campaign id and drop id:
 
 | State | Determined by |
 |---|---|
-| **Unobtainable** | `required_subs > 0` |
+| **Unobtainable** | `required_subs > 0`, or `required_minutes <= 0`, or `self_edge.hasPreconditionsMet === false` |
 | **Claimed** | `self_edge.is_claimed` |
 | **Ready to claim** | `drop_instance_id` set, not claimed |
 | **In progress** | `current_minutes_watched > 0` |
-| **Not started** | no inventory entry for the drop id |
+| **Claimed** (finished campaign) | no entry, but a reward of it in `earnedDropRewards` |
+| **Not started** | no inventory entry, and no reward earned |
 | **Unknown** | inventory fetch failed |
 
 **Unobtainable overrides everything.** `Drop.update` sets `is_claimable`
@@ -231,12 +232,55 @@ can never be earned by watching. Rendering them as merely "not started"
 would mean "collect all drops" silently never completes, and the user
 would never learn why.
 
-**Unknown is not "not started".** Absence from the inventory legitimately
-means the campaign was never begun — the inventory only holds campaigns
-you have started. But if the inventory *call fails*, every drop is
-absent, and reading that as not-started would fill the page with
-confident zeros. When the inventory is unavailable the page renders
-metadata only, with no bars and an explicit notice.
+**Three signals, because `required_subs` alone detects nothing.** The
+public tracker the catalogue comes from leaves `requiresSub` false on
+every drop it lists -- 246 of 246 in a live fetch, including a campaign
+named "RL Worlds Sub Drops" -- so the original rule was dead in
+practice. A campaign like "Dawnwalker Launch", whose second drop is
+granted for buying a gift subscription, sat permanently at "in progress"
+with a full watch bar.
+
+- `required_minutes <= 0` is the workhorse. A drop earnable by watching
+  must cost some watching, so a zero-minute requirement means the gate
+  is something else. It is available for every drop, including ones with
+  no inventory entry, and it isolates exactly the non-watch drops (12 of
+  246 live: chat badges, gift-sub rewards, streamer-ladder prizes).
+- `hasPreconditionsMet === false` is Twitch's own verdict, from the
+  Inventory query's self edge -- which is not Kasada-gated. It is
+  authoritative, but exists only for campaigns in
+  `dropCampaignsInProgress`, so it supplements the rule above.
+
+A **claimed or claimable** drop is never reported unobtainable whatever
+the preconditions say: the reward is already earned or already minted,
+so the gate was passed. Only the two catalogue-level signals, which
+describe the drop rather than this viewer's progress, override that.
+An **absent or null** precondition means the source did not say, and is
+never read as "blocked".
+
+**Absence from the inventory means two different things.** The progress
+map comes from `dropCampaignsInProgress`, and that field means what it
+says: a campaign whose drops are *all* claimed leaves it entirely. So
+absence is either "never begun" or "finished and collected", and read as
+the former it badged a completed campaign "not started" — the whole
+reason `earnedDropRewards` is fetched beside it.
+
+That second field is the other half of the same Inventory response, which
+the vendored parser discards (`gql/data/Parser.py` keeps only the
+in-progress campaigns). `helpers/state.py` therefore reissues the query
+raw and parses it itself, exactly as `_directory` does — the session for
+transport, our own parse for the shape. It identifies a reward by *item*
+id, which is not a drop id, so the match runs through the catalogue's
+benefit names.
+
+**Unknown is neither.** If the inventory *call fails*, every drop is
+absent and no rewards are reported, and reading that as not-started would
+fill the page with confident zeros. When the inventory is unavailable the
+page renders metadata only, with no bars and an explicit notice — and the
+earned rewards are ignored for the same reason.
+
+The two halves degrade independently: the earned half failing returns an
+empty map rather than costing the page its progress, which only loses a
+finished campaign its "collected" badge.
 
 Campaign-level state aggregates its drops: **fully collected**,
 **partially collected**, or **untouched**. This is what you actually scan

@@ -24,6 +24,23 @@ export interface DropProgressEntry {
   claimed: boolean;
   /** Set once Twitch mints an instance -- the drop is sitting there. */
   instanceId: string | null;
+  /**
+   * Twitch's own verdict on whether this drop's gate is open.
+   *
+   * `hasPreconditionsMet` from the Inventory query's self edge, which is
+   * false on a drop blocked behind something watching cannot satisfy --
+   * a subscription, a gift sub, an account link. The authoritative
+   * signal where it exists, and the reason dropState reads it before
+   * deciding a drop is merely in progress.
+   *
+   * Null when the source did not say: a helper predating the field, or
+   * a drop with no inventory entry at all. Silence is NOT "unmet" --
+   * see dropState.ts, which must never read null as blocked.
+   *
+   * Optional on top of nullable because a running helper from an older
+   * build omits the key entirely.
+   */
+  preconditionsMet?: boolean | null;
 }
 
 /** campaign id -> drop id -> progress. */
@@ -32,8 +49,23 @@ export type InventoryMap = Record<
   Record<string, DropProgressEntry> | undefined
 >;
 
+/**
+ * campaign id -> names of the rewards already claimed from it.
+ *
+ * The other half of the Inventory response, and the only thing that
+ * still knows about a campaign finished and gone from the progress map
+ * above -- that map's source field is `dropCampaignsInProgress`, which a
+ * fully-claimed campaign leaves entirely.
+ *
+ * Reward NAMES rather than drop ids because the response identifies a
+ * reward by item id, which is not a drop id. The catalogue's benefit
+ * names are what the two sides share; dropState.ts does the matching.
+ */
+export type EarnedMap = Record<string, string[] | undefined>;
+
 export interface InventorySnapshot {
   progress: InventoryMap;
+  earned: EarnedMap;
   fetchedAt: number;
   /**
    * Whether the progress above can be trusted as complete.
@@ -65,6 +97,7 @@ export interface InventoryDeps {
  */
 export class InventoryCache {
   private progress: InventoryMap = {};
+  private earned: EarnedMap = {};
   private fetchedAt = 0;
   private available = false;
   private lastRefreshAt = 0;
@@ -82,8 +115,15 @@ export class InventoryCache {
       try {
         const res = await this.deps.client.request<{
           inventory: InventoryMap;
+          earned?: EarnedMap;
         }>("inventory");
         this.progress = res.inventory ?? {};
+        // Optional: the helper degrades this half to {} on its own
+        // failure rather than losing the progress beside it, and a
+        // helper predating the field omits it entirely. Either way an
+        // empty map costs a finished campaign its "collected" badge --
+        // the behaviour before this existed -- and nothing more.
+        this.earned = res.earned ?? {};
         this.fetchedAt = this.now();
         this.available = true;
       } catch {
@@ -104,6 +144,7 @@ export class InventoryCache {
   private snapshot(): InventorySnapshot {
     return {
       progress: this.progress,
+      earned: this.earned,
       fetchedAt: this.fetchedAt,
       available: this.available,
     };

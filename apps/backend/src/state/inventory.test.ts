@@ -170,3 +170,20 @@ test("a failed refresh keeps the last progress, marked unavailable", async () =>
   expect(out.progress["c1"]?.["d1"]).toEqual(progress);
   expect(out.available).toBe(false);
 });
+
+test("carries the claimed rewards through", async () => {
+  // The half that still knows about a campaign finished and gone from
+  // dropCampaignsInProgress -- see dropState.ts.
+  const { cache } = make([
+    { inventory: {}, earned: { c1: ["Crate", "Charm"] } },
+  ]);
+  const out = await cache.get();
+  expect(out.earned["c1"]).toEqual(["Crate", "Charm"]);
+});
+
+test("a response with no earned rewards reports an empty map", async () => {
+  // A helper predating the field, or one whose earned half degraded.
+  const { cache } = make([{ inventory: { c1: { d1: progress } } }]);
+  const out = await cache.get();
+  expect(out.earned).toEqual({});
+});

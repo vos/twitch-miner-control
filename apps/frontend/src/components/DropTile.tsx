@@ -37,7 +37,14 @@ export interface ResolvedDrop {
 const STATE: Record<DropStatus, { label: string; colour: string }> = {
   // Says *why* it can never be earned. Left as a bare "not started" it
   // reads as a bug when "collect all drops" never completes.
-  unobtainable: { label: "needs sub", colour: "gray" },
+  //
+  // Phrased about watching rather than about subs, because that is the
+  // most the signals actually support: a zero-minute requirement and an
+  // unmet precondition both mean "the gate is something other than
+  // watch time" without saying which, and the gate is a gift sub on
+  // some drops, an account link or an external hunt on others. The
+  // older "needs sub" stated a reason the app had not established.
+  unobtainable: { label: "not earned by watching", colour: "gray" },
   claimed: { label: "claimed", colour: "gray" },
   // Filled orange below: the one state that wants acting on, matching
   // the language DropBadge already set on the dashboard.

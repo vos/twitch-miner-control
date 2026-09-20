@@ -266,6 +266,53 @@ _DIRECTORY_QUERY = {
 }
 
 
+# The same operation the vendored client already issues for progress,
+# reissued raw so the half its parser discards is reachable. Kept here
+# rather than imported from the miner's constants so a vendor bump cannot
+# silently change the variables we depend on: fetchRewardCampaigns is what
+# makes earnedDropRewards present at all.
+_INVENTORY_QUERY = {
+    "operationName": "Inventory",
+    "variables": {"fetchRewardCampaigns": True},
+    "extensions": {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash":
+                "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+        }
+    },
+}
+
+
+def _earned_rewards(payload) -> dict:
+    """Claimed rewards grouped by campaign id, from a raw Inventory response.
+
+    The vendored parser keeps only `dropCampaignsInProgress` and discards
+    the rest of the response (gql/data/Parser.py), so this reads the raw
+    payload the way _directory does -- the session for transport, our own
+    parse for the shape.
+
+    A reward missing either its campaign or its name is skipped: it cannot
+    be attributed to a drop, and a guess here marks the wrong drop claimed.
+    Only CLAIMED counts; the field carries a status and an unclaimed one is
+    not a claim.
+    """
+    data = (payload or {}).get("data") or {}
+    inventory = (data.get("currentUser") or {}).get("inventory") or {}
+    edges = (inventory.get("earnedDropRewards") or {}).get("edges") or []
+    out: dict = {}
+    for edge in edges:
+        node = edge.get("node") if isinstance(edge, dict) else None
+        if not isinstance(node, dict) or node.get("status") != "CLAIMED":
+            continue
+        campaign_id = (node.get("campaign") or {}).get("id")
+        name = (node.get("item") or {}).get("name")
+        if not campaign_id or not name:
+            continue
+        out.setdefault(campaign_id, []).append(name)
+    return out
+
+
 def _directory_channel(edge) -> dict | None:
     """One live channel from a directory edge, or None when unusable.
 
@@ -326,7 +373,8 @@ class Handler:
             if op == "inventory":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
-                        "data": {"inventory": self._inventory()}}
+                        "data": {"inventory": self._inventory(),
+                                 "earned": self._earned()}}
             if op == "directory":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
@@ -498,10 +546,21 @@ class Handler:
         channels -- which is why the Drops page needs no per-channel
         query to show progress.
 
-        A campaign absent from here was never started. That reading is
-        only valid when the call SUCCEEDED: a failure makes everything
-        absent, so the caller distinguishes the two with `available`
-        rather than inferring from an empty map (see inventory.ts).
+        A campaign absent from here is NOT necessarily one never started:
+        the underlying field is `dropCampaignsInProgress`, and a campaign
+        whose drops are all claimed leaves it entirely. Absence alone
+        cannot tell a finished campaign from an untouched one, which is
+        why _earned() is fetched beside it.
+
+        Absence is only meaningful at all when the call SUCCEEDED: a
+        failure makes everything absent, so the caller distinguishes the
+        two with `available` rather than inferring from an empty map
+        (see inventory.ts).
+
+        Carries `preconditionsMet` beside the progress: it is the only
+        authoritative signal for a drop gated behind a subscription, and
+        it exists ONLY here -- the campaign catalogue's source never
+        marks such a drop (see campaignSource.ts).
         """
         inventory = self.session.gql.get_inventory()
         out: dict = {}
@@ -518,11 +577,58 @@ class Handler:
                     # Set once Twitch mints an instance: the drop is
                     # earned and sitting there to be collected.
                     "instanceId": getattr(edge, "drop_instance_id", None),
+                    # Twitch's own verdict on whether this drop's gate is
+                    # open: false on one blocked behind a subscription or
+                    # a gift sub, which no amount of watching satisfies.
+                    # The catalogue cannot see this -- the public tracker
+                    # leaves requiresSub false on every drop it lists --
+                    # so without forwarding it the backend has no
+                    # authoritative way to tell a gated drop from a
+                    # merely unstarted one.
+                    #
+                    # Defaults to None, NOT False: the attribute is
+                    # absent on an older vendored parser, and reporting
+                    # "gate shut" for every drop would mark a whole
+                    # inventory unobtainable. dropState.ts treats only a
+                    # strict false as blocking.
+                    "preconditionsMet": getattr(
+                        edge, "has_preconditions_met", None),
                 }
             campaign_id = getattr(campaign, "id", None)
             if campaign_id is not None:
                 out[campaign_id] = drops
         return out
+
+    def _earned(self) -> dict:
+        """Reward names claimed, keyed by campaign id.
+
+        The other half of the Inventory response, and the only thing that
+        still knows about a campaign finished and gone from
+        `dropCampaignsInProgress`. Named rather than keyed by drop id
+        because the response identifies a reward by ITEM id, which is not
+        a drop id -- the catalogue's benefit names are what the two sides
+        share (see dropState.ts, which does the matching).
+
+        Raw rather than through the vendored parser, which keeps only the
+        in-progress campaigns; _directory does the same for the same
+        reason. One request, so the extra half costs no extra round trip.
+
+        Returns {} rather than raising when the call fails: progress is
+        the half the page is mostly read for, and losing it because this
+        half broke turns a partial answer into none. An empty map costs a
+        finished campaign its "collected" badge -- the behaviour before
+        this existed -- while an auth failure still propagates, since
+        that is about the session rather than about this query.
+        """
+        request = copy.deepcopy(_INVENTORY_QUERY)
+        try:
+            return self.session.gql.post_gql_request_single(
+                _INVENTORY_QUERY["operationName"], request, _earned_rewards
+            )
+        except Exception as exc:
+            if _is_auth_error(exc):
+                raise
+            return {}
 
     def _directory(self, game: str, slug: str, limit: int) -> list:
         """Live channels streaming a game with drops enabled, by viewers.

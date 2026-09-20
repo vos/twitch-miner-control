@@ -123,9 +123,10 @@ export function elapsedPercent(
 /**
  * How many of a campaign's drops are already claimed, and how many could be.
  *
- * Sub-gated drops are excluded from both halves, matching the campaign
- * status rule: they can never be earned by watching, so counting them
- * would leave a fully-earned campaign showing a bar that never fills.
+ * Unobtainable drops are excluded from both halves, matching the
+ * campaign status rule: they can never be earned by watching, so
+ * counting them would leave a fully-earned campaign showing a bar that
+ * never fills.
  */
 export function claimedCount(drops: ResolvedDrop[]): {
   claimed: number;
@@ -155,9 +156,10 @@ export function claimedCount(drops: ResolvedDrop[]): {
  *     forever while the total runs on -- reading the first drop, or the
  *     in-progress one alone, understates it.
  *
- * Sub-gated drops are excluded throughout, matching the campaign status
- * rule: they can never be earned by watching, so a 240m sub-only drop
- * would stretch the track to a length no amount of watching reaches.
+ * Unobtainable drops are excluded throughout, matching the campaign
+ * status rule: they can never be earned by watching, so a 240m gated
+ * drop would stretch the track to a length no amount of watching
+ * reaches.
  *
  * Null when there is nothing to draw -- no obtainable drops, or none of
  * them costing any time, which would divide by a zero span.
@@ -207,7 +209,7 @@ export function watchTime(drops: ResolvedDrop[]): {
  * tick is indistinguishable from the border and marks nothing new.
  * Duplicates collapse to one mark, since two rewards at the same watch
  * time are one milestone -- drawn twice they would only thicken the
- * line. Sub-gated drops get none, matching the span they are excluded
+ * line. Unobtainable drops get none, matching the span they are excluded
  * from: a mark for a drop no amount of watching reaches points at a
  * milestone that never arrives.
  */

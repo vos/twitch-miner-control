@@ -56,6 +56,16 @@ interface SourceDrop {
   id?: string;
   name?: string;
   requiredMinutesWatched?: number;
+  /**
+   * Never actually set by this source.
+   *
+   * The field is present on every drop and false on every drop -- 246
+   * of 246 in a live fetch, including a campaign named "RL Worlds Sub
+   * Drops". Parsed anyway because it costs nothing and is correct when
+   * a source does fill it, but the gated drops are caught downstream by
+   * requiredMinutes and by the Inventory query's hasPreconditionsMet.
+   * See resolveDrop.
+   */
   requiresSub?: boolean;
   /** A drop's window can be narrower than its campaign's. */
   startAt?: string;
@@ -147,6 +157,7 @@ function toDrop(drop: SourceDrop): CampaignDrop {
     requiredMinutes: drop.requiredMinutesWatched ?? 0,
     // A boolean upstream, a count here: the rest of the app reads
     // requiredSubs > 0 as unobtainable, matching Twitch's own field.
+    // Always 0 in practice -- see SourceDrop.requiresSub.
     requiredSubs: drop.requiresSub === true ? 1 : 0,
     startsAt: epochMs(drop.startAt),
     endsAt: epochMs(drop.endAt),

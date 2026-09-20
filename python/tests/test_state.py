@@ -1083,16 +1083,25 @@ def test_drops_survives_a_drop_without_benefits_or_deadline():
     assert row["minutes"] == 45
 
 
-def _inventory_drop(did="d1", watched=30, claimed=False, instance=None):
-    """A drop as the *inventory* reports it -- progress, via self_edge."""
-    return SimpleNamespace(
-        id=did,
-        self_edge=SimpleNamespace(
-            current_minutes_watched=watched,
-            is_claimed=claimed,
-            drop_instance_id=instance,
-        ),
+_UNSET = object()
+
+
+def _inventory_drop(did="d1", watched=30, claimed=False, instance=None,
+                    preconditions=_UNSET):
+    """A drop as the *inventory* reports it -- progress, via self_edge.
+
+    `preconditions` is left off the edge entirely by default, standing
+    for a vendored parser that never set it: the helper must report None
+    rather than raise, since a missing attribute is not a closed gate.
+    """
+    edge = SimpleNamespace(
+        current_minutes_watched=watched,
+        is_claimed=claimed,
+        drop_instance_id=instance,
     )
+    if preconditions is not _UNSET:
+        edge.has_preconditions_met = preconditions
+    return SimpleNamespace(id=did, self_edge=edge)
 
 
 def _inventory_handler(campaigns=None):
@@ -1114,8 +1123,33 @@ def test_inventory_keys_progress_by_campaign_and_drop():
     assert out["ok"] is True
     assert out["data"]["inventory"]["c1"]["d1"] == {
         "minutes": 30, "claimed": False, "instanceId": None,
+        "preconditionsMet": None,
     }
     assert out["data"]["inventory"]["c1"]["d2"]["instanceId"] == "i9"
+
+
+def test_inventory_forwards_unmet_preconditions():
+    # Twitch's own verdict that the drop is gated behind something
+    # watching cannot satisfy -- a sub or a gift sub. The tracker never
+    # sets requiresSub, so this is the authoritative signal and the
+    # backend cannot apply it unless the helper passes it through.
+    h = _inventory_handler([
+        SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=0, preconditions=False),
+        ]),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["inventory"]["c1"]["d1"]["preconditionsMet"] is False
+
+
+def test_inventory_forwards_met_preconditions():
+    h = _inventory_handler([
+        SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=30, preconditions=True),
+        ]),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["inventory"]["c1"]["d1"]["preconditionsMet"] is True
 
 
 def test_inventory_reports_a_claimed_drop():
@@ -1222,3 +1256,126 @@ def test_directory_propagates_a_failure_rather_than_saying_nobody_is_live():
                     "game": "Once Human", "slug": "once-human", "limit": 30})
     assert out["ok"] is False
     assert out["code"] == "GQL"
+
+
+def _earned_edge(cid="c1", name="Crate"):
+    """One claimed reward as earnedDropRewards reports it."""
+    return {"node": {"campaign": {"id": cid}, "item": {"name": name},
+                     "status": "CLAIMED"}}
+
+
+def _earned_handler(campaigns=None, edges=None, error=None):
+    """A handler whose Inventory call answers BOTH halves of the response.
+
+    get_inventory() is the vendored parser's view -- in-progress campaigns
+    only. The raw post is how we reach earnedDropRewards, which that parser
+    discards.
+    """
+    h = _inventory_handler(campaigns)
+
+    def fake_post(operation_name, request_json, parse):
+        if error is not None:
+            raise error
+        return parse({"data": {"currentUser": {"inventory": {
+            "earnedDropRewards": {"edges": list(edges or [])},
+        }}}})
+
+    h.session.gql.post_gql_request_single = fake_post
+    return h
+
+
+def test_inventory_reports_rewards_claimed_in_a_finished_campaign():
+    """A campaign whose drops are ALL claimed leaves dropCampaignsInProgress
+    entirely -- the field means "in progress", not "started". Read on its own
+    it makes a finished campaign indistinguishable from one never begun, and
+    the page badges it "not started". earnedDropRewards is what still knows."""
+    h = _earned_handler(campaigns=[], edges=[
+        _earned_edge("c1", "Crate"), _earned_edge("c1", "Charm"),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["ok"] is True
+    assert out["data"]["earned"] == {"c1": ["Crate", "Charm"]}
+
+
+def test_inventory_earned_rewards_are_grouped_by_campaign():
+    h = _earned_handler(campaigns=[], edges=[
+        _earned_edge("c1", "Crate"), _earned_edge("c2", "Hat"),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["earned"] == {"c1": ["Crate"], "c2": ["Hat"]}
+
+
+def test_inventory_still_reports_progress_alongside_earned_rewards():
+    """The two halves are independent: a campaign part-watched reports
+    progress, one finished reports earned rewards, and both must survive."""
+    h = _earned_handler(
+        campaigns=[SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=30),
+        ])],
+        edges=[_earned_edge("c2", "Hat")],
+    )
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["inventory"]["c1"]["d1"]["minutes"] == 30
+    assert out["data"]["earned"] == {"c2": ["Hat"]}
+
+
+def test_inventory_skips_an_earned_reward_missing_its_campaign_or_name():
+    """A reward we cannot attribute is dropped rather than guessed at."""
+    h = _earned_handler(campaigns=[], edges=[
+        {"node": {"item": {"name": "Orphan"}, "status": "CLAIMED"}},
+        {"node": {"campaign": {"id": "c1"}, "status": "CLAIMED"}},
+        _earned_edge("c1", "Crate"),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["earned"] == {"c1": ["Crate"]}
+
+
+def test_inventory_counts_only_rewards_actually_claimed():
+    """Every status observed live is CLAIMED, but the field exists, so a
+    non-claimed status must not be read as a claim."""
+    h = _earned_handler(campaigns=[], edges=[
+        _earned_edge("c1", "Crate"),
+        {"node": {"campaign": {"id": "c1"}, "item": {"name": "Pending"},
+                  "status": "PENDING"}},
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["earned"] == {"c1": ["Crate"]}
+
+
+def test_inventory_survives_a_failed_earned_rewards_fetch():
+    """The two halves degrade independently.
+
+    Progress is the half the page is mostly read for; losing it because
+    the earned-rewards half failed would turn a partial answer into no
+    answer. An empty `earned` costs a finished campaign its "collected"
+    badge, which is the pre-existing behaviour, not a regression.
+    """
+    h = _earned_handler(
+        campaigns=[SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=30),
+        ])],
+        error=RuntimeError("boom"),
+    )
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["ok"] is True
+    assert out["data"]["inventory"]["c1"]["d1"]["minutes"] == 30
+    assert out["data"]["earned"] == {}
+
+
+def test_inventory_earned_failure_on_an_expired_session_reports_auth():
+    """An expired cookie must still surface as AUTH rather than being
+    swallowed as a missing-rewards degradation.
+
+    Wrapped in RetryError, which is how a real 401 arrives: the miner
+    never lets a raw HTTPError escape post_gql_request_single (see
+    test_retry_error_wrapped_401_is_classified_auth). The session reports
+    itself logged out, which is what separates a dead cookie from a
+    transient 401 on a session that is still good.
+    """
+    h = _earned_handler(
+        campaigns=[], error=_retry_error_wrapping(_http_error(401))
+    )
+    h.session.is_logged_in = lambda: False
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"
