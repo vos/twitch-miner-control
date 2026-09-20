@@ -67,13 +67,17 @@ const SOURCE_HREF = "https://twitch-drops.fenrisapps.com/";
  * `unclaimed` is the one the tracker has no equivalent for: it needs
  * this viewer's inventory, which a public site does not have.
  */
-type View = "all" | "running" | "scheduled" | "unclaimed";
+type View = "all" | "running" | "scheduled" | "unclaimed" | "collected";
 
 const VIEWS: { value: View; label: string }[] = [
   { value: "all", label: "All" },
   { value: "running", label: "Running now" },
   { value: "scheduled", label: "Scheduled" },
   { value: "unclaimed", label: "Unclaimed" },
+  // The inverse of Unclaimed, and the only view that surfaces what has
+  // actually been earned: every other pill either buries it at the
+  // bottom or leaves it out.
+  { value: "collected", label: "Collected" },
 ];
 
 /** What the empty grid says, per view -- each a claim about that view. */
@@ -82,6 +86,7 @@ const EMPTY: Record<View, string> = {
   running: "No campaigns are running right now.",
   scheduled: "No campaigns are scheduled.",
   unclaimed: "Nothing left to claim -- every campaign here is done.",
+  collected: "Nothing collected yet.",
 };
 
 /** Whether a campaign's window has yet to open. */
@@ -111,6 +116,11 @@ function inView(c: ResolvedCampaign, view: View, now: number): boolean {
       return isScheduled(c, now);
     case "unclaimed":
       return !hasEnded(c, now) && c.status !== "collected";
+    // Ended ones included, unlike Unclaimed: a campaign collected before
+    // it closed is still collected, and this is the view for reviewing
+    // what was earned rather than what is left to do.
+    case "collected":
+      return c.status === "collected";
     case "all":
       return true;
   }
@@ -648,20 +658,31 @@ export function Drops() {
             // per field would not earn its width.
             matchesHeader(c, needle) || matchesDrop(c, needle));
 
-    // Four tiers, then soonest deadline within each.
+    // Five tiers, then soonest deadline within each.
     //
     //   1. Live, with progress on them -- watch time already committed
     //      outranks anything else, even something expiring sooner.
-    //      `collected` is not promoted: it is finished, and lifting it
-    //      would push campaigns that still need something down the page.
     //   2. Everything else live.
     //   3. Scheduled, sorted by when they open. Below everything live,
     //      because a campaign you cannot earn yet must not outrank one
     //      expiring tonight; above ended, because it is still to come.
-    //   4. Ended, whatever progress sits on it, because that progress is
+    //   4. Collected. Nothing about it needs acting on ever again, so it
+    //      sits below even a scheduled campaign -- which at least
+    //      becomes actionable later. It used to rank in tier 2 by
+    //      deadline, which scattered finished campaigns through the live
+    //      ones and put a done campaign expiring tonight above an
+    //      untouched one with a week left. Above ended rather than last,
+    //      because the rewards are real and worth seeing.
+    //   5. Ended, whatever progress sits on it, because that progress is
     //      frozen and can never be finished. Kept rather than hidden:
     //      the tracker still lists them and a drop already earned is
     //      worth seeing.
+    //
+    // Collected is tested before the live checks, so a collected
+    // campaign sinks whether or not its window is still open -- the
+    // whole point is that an open window no longer means anything for
+    // it. Ended is tested first of all: frozen progress is not
+    // actionable however complete it is.
     //
     // Within a tier: soonest deadline first, so 40/60 minutes expiring
     // tonight outranks 10/60 with a week left. Scheduled sorts on its
@@ -670,7 +691,8 @@ export function Drops() {
     // urgent one -- and ties break by name so a refresh does not
     // reshuffle the list.
     const tier = (c: ResolvedCampaign) => {
-      if (hasEnded(c, now)) return 3;
+      if (hasEnded(c, now)) return 4;
+      if (c.status === "collected") return 3;
       if (isScheduled(c, now)) return 2;
       return c.status === "partial" ? 0 : 1;
     };

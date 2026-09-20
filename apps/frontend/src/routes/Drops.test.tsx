@@ -414,6 +414,11 @@ test("campaigns with progress sort above everything live", async () => {
   expect(cards[1]?.textContent).toMatch(/Urgent Untouched/);
 });
 
+// Superseded in strength by "collected campaigns sink below everything
+// still earnable" below, which asserts the full ordering. Kept because
+// it pins the narrower promise -- a collected campaign never leads the
+// list -- against a future tier shuffle that satisfies one and not the
+// other.
 test("collected campaigns are not promoted, having nothing left to do", async () => {
   body = {
     ...payload,
@@ -428,6 +433,52 @@ test("collected campaigns are not promoted, having nothing left to do", async ()
   await waitFor(() => expect(screen.getByText("Soon One")).toBeTruthy());
   const cards = screen.getAllByTestId("campaign-card");
   expect(cards[0]?.textContent).toMatch(/Soon One/);
+});
+
+test("collected campaigns sink below everything still earnable", async () => {
+  // Finished business: nothing about it needs acting on, so it must not
+  // sit between two campaigns that do. Even a collected one expiring in
+  // an hour ranks below an untouched one with a week left.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "done", name: "All Done",
+        status: "collected", endsAt: Date.now() + 3_600_000 },
+      { ...payload.campaigns[0], id: "todo", name: "Still To Do",
+        status: "untouched", endsAt: Date.now() + 7 * 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("All Done")).toBeTruthy());
+  const cards = screen.getAllByTestId("campaign-card");
+  expect(cards[0]?.textContent).toMatch(/Still To Do/);
+  expect(cards[1]?.textContent).toMatch(/All Done/);
+});
+
+test("collected sinks below scheduled but stays above ended", async () => {
+  // Below scheduled: a campaign yet to open is still something to act
+  // on, where a collected one never is again. Above ended: the rewards
+  // are real and still worth seeing, where an ended campaign's progress
+  // is frozen and can never be finished.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "done", name: "All Done",
+        status: "collected", endsAt: Date.now() + 3_600_000 },
+      { ...payload.campaigns[0], id: "over", name: "Long Over",
+        status: "partial", endsAt: Date.now() - 86_400_000 },
+      { ...payload.campaigns[0], id: "later", name: "Not Yet",
+        status: "untouched", startsAt: Date.now() + 86_400_000,
+        endsAt: Date.now() + 7 * 86_400_000 },
+    ],
+  };
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("All Done")).toBeTruthy());
+  const order = screen.getAllByTestId("campaign-card")
+    .map((c) => c.textContent ?? "");
+  const at = (name: string) => order.findIndex((t) => t.includes(name));
+  expect(at("All Done")).toBeGreaterThan(at("Not Yet"));
+  expect(at("All Done")).toBeLessThan(at("Long Over"));
 });
 
 test("within the progress tier, the soonest deadline still wins", async () => {
@@ -1169,6 +1220,40 @@ test("Unclaimed leaves out what is finished or out of reach", async () => {
     expect(games).toContain("Scheduled Game");
     expect(games).not.toContain("Collected Game");
     expect(games).not.toContain("Ended Game");
+  });
+});
+
+test("Collected shows only what is finished", async () => {
+  // The inverse of Unclaimed: a place to review what has actually been
+  // earned, which the other pills all bury or hide.
+  body = mixedPayload();
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Collected" }));
+  await waitFor(async () => {
+    const games = await shownGames();
+    expect(games).toEqual(["Collected Game"]);
+  });
+});
+
+test("says the collected view is empty rather than claiming none exist", async () => {
+  // "No drop campaigns are running" under Collected would be a claim
+  // about the catalogue, when it is only a claim about the filter.
+  body = {
+    ...payload,
+    campaigns: [
+      { ...payload.campaigns[0], id: "todo", name: "Still To Do",
+        status: "untouched" },
+    ],
+  };
+  const user = userEvent.setup();
+  renderApp(<Drops />);
+  await screen.findAllByTestId("campaign-card");
+  await user.click(screen.getByRole("button", { name: "Collected" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("campaigns-empty").textContent)
+      .toMatch(/nothing collected yet/i);
   });
 });
 
