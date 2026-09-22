@@ -528,11 +528,15 @@ const asSub = (over: object = {}) => ({
 function withSubs(
   subscriptions: unknown[],
   restart: { pending: boolean } = { pending: false },
+  campaignQueue = false,
 ) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
     if (url.startsWith("/api/subscriptions")) {
-      return { ok: true, status: 200, json: async () => ({ subscriptions }) };
+      return {
+        ok: true, status: 200,
+        json: async () => ({ subscriptions, campaignQueue }),
+      };
     }
     if (url.startsWith("/api/status")) {
       return {
@@ -589,6 +593,49 @@ test("the panel is hidden when nothing is subscribed", async () => {
   renderApp(<Drops />);
   await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
   expect(screen.queryByTestId("subscriptions")).toBeNull();
+});
+
+// --- the one-at-a-time queue ---
+
+test("the queue switch posts the new setting", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  const toggle = screen.getByRole("switch", { name: /one campaign at a time/i });
+  expect((toggle as HTMLInputElement).checked).toBe(false);
+  await userEvent.click(toggle);
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/subscriptions/queue");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ enabled: true });
+  });
+});
+
+test("with the queue on, each row shows its place and waiting rows say why", async () => {
+  withSubs([
+    asSub({ channels: ["beta"], queue: { state: "active", position: 0 } }),
+    asSub({ id: "s2", targetId: "c2", label: "Beta Campaign", rank: 1,
+            queue: { state: "waiting", position: 1 } }),
+    asSub({ id: "s3", targetId: "c3", label: "Gamma Campaign", rank: 2,
+            queue: { state: "scheduled", position: 2 } }),
+  ], { pending: false }, true);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getAllByTestId("subscription-queue")).toHaveLength(3));
+  const toggle = screen.getByRole("switch", { name: /one campaign at a time/i });
+  expect((toggle as HTMLInputElement).checked).toBe(true);
+  const rows = screen.getAllByTestId("subscription-row");
+  expect(within(rows[0]!).getByTestId("subscription-queue").textContent).toMatch(/collecting/i);
+  expect(rows[0]!.textContent).toMatch(/watching beta/);
+  expect(within(rows[1]!).getByTestId("subscription-queue").textContent).toMatch(/waiting #1/i);
+  expect(rows[1]!.textContent).toMatch(/starts when the campaigns above it/i);
+  expect(rows[2]!.textContent).toMatch(/not open yet/i);
+  expect(rows[2]!.textContent).toMatch(/waits for its campaign to open/i);
+});
+
+test("with the queue off, rows carry no queue badge", async () => {
+  withSubs([asSub({ queue: null })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.queryByTestId("subscription-queue")).toBeNull();
 });
 
 test("re-resolve asks the engine for a pass now", async () => {

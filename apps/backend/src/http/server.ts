@@ -24,6 +24,7 @@ import type { SubscriptionEngine } from "../drops/engine.js";
 import type { PendingRestart } from "../drops/pendingRestart.js";
 import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
+import { campaignQueue } from "../drops/queue.js";
 import { gainWindow } from "../state/gains.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { StateService } from "../state/service.js";
@@ -603,9 +604,25 @@ export function buildServer(deps: ServerDeps): AppServer {
       // Read once for the whole list rather than per subscription: every
       // row resolves against the same catalogue.
       const campaigns = deps.catalogue.peek()?.campaigns ?? [];
+      const ordered = [...config.subscriptions].sort((a, b) => a.rank - b.rank);
+      const now = Date.now();
+      const campaignOf = (sub: { targetId: string }) =>
+        campaigns.find((c) => c.id === sub.targetId);
+      // The engine's own rule, so the panel shows the order it will act
+      // on. An ended campaign is left out as the engine's next pass will
+      // remove it; completion needs progress, which this read does not
+      // fetch, so a complete one shows active until that pass.
+      const queue = config.campaignQueue
+        ? campaignQueue(ordered, campaignOf, now, new Set(ordered
+          .filter((sub) => {
+            const endsAt = campaignOf(sub)?.endsAt;
+            return endsAt != null && endsAt <= now;
+          })
+          .map((sub) => sub.id)))
+        : null;
       return {
-        subscriptions: [...config.subscriptions]
-          .sort((a, b) => a.rank - b.rank)
+        campaignQueue: config.campaignQueue,
+        subscriptions: ordered
           .map((sub) => ({
             ...sub,
             channels: config.streamers
@@ -617,6 +634,9 @@ export function buildServer(deps: ServerDeps): AppServer {
             // Drops page does. Null once the campaign leaves the
             // catalogue; the stored label still identifies it.
             game: gameForSubscription(sub, campaigns),
+            // Null when the queue is off, and for a game subscription,
+            // which is never queued.
+            queue: queue?.get(sub.id) ?? null,
           })),
       };
     });
@@ -785,6 +805,31 @@ export function buildServer(deps: ServerDeps): AppServer {
         subscriptionId: id,
         channelsReleased: released.map((s) => s.username),
       });
+      // With the queue on, removing the active subscription is what lets
+      // the next one start, and that should not wait out the timer.
+      // Swallowed like the subscribe route's: the removal is saved.
+      await deps.engine.pass("remove").catch(() => {});
+      return { ok: true };
+    });
+
+    /** Turns the one-campaign-at-a-time queue on or off. */
+    instance.post("/api/subscriptions/queue", async (request, reply) => {
+      const enabled = (request.body as { enabled?: unknown } | null)?.enabled;
+      if (typeof enabled !== "boolean") {
+        return reply.code(400).send({ error: "enabled must be true or false" });
+      }
+      const config = loadConfig(deps.configPath);
+      saveConfig(deps.configPath, { ...config, campaignQueue: enabled });
+      log.info({
+        type: EVENT.USER_SUB_QUEUE,
+        msg: enabled
+          ? "campaign queue turned on: one campaign subscription is collected at a time"
+          : "campaign queue turned off: every campaign subscription is collected at once",
+        enabled,
+      });
+      // The flag alone moves no channels: the pass releases the waiting
+      // subscriptions' channels, or resolves them all when turned off.
+      await deps.engine.pass("queue").catch(() => {});
       return { ok: true };
     });
 

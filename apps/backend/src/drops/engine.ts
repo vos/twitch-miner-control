@@ -3,6 +3,7 @@ import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { PendingRestart } from "./pendingRestart.js";
+import { campaignQueue } from "./queue.js";
 import { reconcile, type DesiredEntry } from "./reconcile.js";
 import {
   directoryTarget,
@@ -52,6 +53,8 @@ export type PassTrigger =
   | "subscribe"
   | "reorder"
   | "pool-size"
+  | "remove"
+  | "queue"
   | "manual";
 
 /**
@@ -63,6 +66,12 @@ export type PassTrigger =
  */
 export class SubscriptionEngine {
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * The queue's active subscription as of the last pass, so its start is
+   * logged once rather than on every pass. In memory only: after a
+   * restart the current one is logged again, which is harmless.
+   */
+  private activeInQueue: string | null = null;
 
   private readonly log: AppLog;
 
@@ -182,10 +191,43 @@ export class SubscriptionEngine {
         ended.add(sub.id);
         continue;
       }
+    }
+
+    // Worked out after the endings, so a subscription leaving on this
+    // pass hands the slot straight to the next one in line.
+    const queue = config.campaignQueue
+      ? campaignQueue(ordered, (sub) => byId.get(sub.targetId), now, ended)
+      : null;
+
+    const active = queue === null
+      ? null
+      : [...queue].find(([, e]) => e.state === "active")?.[0] ?? null;
+
+    for (const sub of ordered) {
+      if (ended.has(sub.id)) continue;
+      const campaign = byId.get(sub.targetId);
 
       const incumbents = config.streamers
         .filter((s) => s.ownedBy === sub.id)
         .map((s) => s.username);
+
+      // A waiting subscription owns no channels, so any it held (it was
+      // active before a reorder, or before the queue was turned on) are
+      // released by the reconcile below.
+      const place = queue?.get(sub.id);
+      if (place !== undefined && place.state !== "active") continue;
+      if (place?.state === "active" && this.activeInQueue !== sub.id) {
+        const waiting = [...queue!.values()].filter((e) => e.state !== "active").length;
+        this.log.info({
+          type: EVENT.QUEUE_STARTED,
+          msg: `campaign "${sub.label}" is first in the queue and is now being `
+            + `collected; ${waiting} more waiting`,
+          subscriptionId: sub.id,
+          label: sub.label,
+          targetId: sub.targetId,
+          waiting,
+        });
+      }
 
       const keepExisting = () => {
         for (const username of incumbents) {
@@ -269,6 +311,8 @@ export class SubscriptionEngine {
         desired.push({ username: login, ownedBy: sub.id });
       }
     }
+
+    this.activeInQueue = active;
 
     const { streamers, changed, added, removed } = reconcile(config.streamers, desired);
     if (!changed && ended.size === 0) {

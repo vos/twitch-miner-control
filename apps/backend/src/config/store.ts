@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   miner: {},
   streamers: [],
   subscriptions: [],
+  campaignQueue: false,
 };
 
 export function loadConfig(path: string): AppConfig {

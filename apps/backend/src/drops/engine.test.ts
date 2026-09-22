@@ -280,8 +280,9 @@ test("a game subscription outlives the campaign catalogue", async () => {
     catalogue: { campaigns: [] },
   });
   await engine.pass();
-  expect(written(saveConfig).streamers.map((s) => s.username))
-    .toEqual(["beta", "gamma"]);
+  const after = written(saveConfig).streamers;
+  expect(after.some((s) => s.username === "delta")).toBe(false);
+  expect(new Set(after.map((s) => s.ownedBy))).toEqual(new Set(["s1"]));
 });
 
 test("one subscription failing does not sink the others", async () => {
@@ -548,6 +549,110 @@ test("a game subscription is never ended by one campaign", async () => {
   });
   await engine.pass();
   expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
+});
+
+// --- the one-at-a-time queue ---
+
+const queued = (over: object = {}) => make({
+  // Per game: one channel can only belong to one subscription.
+  directory: async (game) => [
+    { login: `${game.slug}-1`, channelId: `${game.slug}-1`, viewers: 500 },
+    { login: `${game.slug}-2`, channelId: `${game.slug}-2`, viewers: 50 },
+  ],
+  catalogue: { campaigns: [
+    campaign(),
+    campaign({ id: "c2", name: "Beta", game: { id: "g2", slug: "b-game", displayName: "B Game" } }),
+  ] },
+  ...over,
+});
+const twoSubs = [
+  sub(),
+  sub({ id: "s2", targetId: "c2", label: "Beta", rank: 1 }),
+];
+
+test("with the queue on, only the first campaign subscription gets channels", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig } = queued({
+    log,
+    config: { streamers: [], subscriptions: twoSubs, campaignQueue: true },
+  });
+  await engine.pass();
+  expect(written(saveConfig).streamers.map((s) => s.ownedBy))
+    .toEqual(["s1", "s1"]);
+  expect(log.ofType("subscription.queue.started")[0]).toMatchObject({
+    subscriptionId: "s1", waiting: 1, level: "info",
+  });
+});
+
+test("with the queue off, every campaign subscription gets channels", async () => {
+  const { engine, saveConfig } = queued({
+    config: { streamers: [], subscriptions: twoSubs },
+  });
+  await engine.pass();
+  expect(new Set(written(saveConfig).streamers.map((s) => s.ownedBy)))
+    .toEqual(new Set(["s1", "s2"]));
+});
+
+test("a waiting subscription's channels are released", async () => {
+  // It held them before the queue was turned on, or before a reorder
+  // put another campaign first.
+  const { engine, saveConfig } = queued({
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1"), owned("delta", "s2")] as never,
+      subscriptions: twoSubs, campaignQueue: true,
+    },
+  });
+  await engine.pass();
+  const after = written(saveConfig).streamers;
+  expect(after.some((s) => s.username === "delta")).toBe(false);
+  expect(new Set(after.map((s) => s.ownedBy))).toEqual(new Set(["s1"]));
+});
+
+test("when the active campaign completes, the next starts on the same pass", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig } = make({
+    log,
+    catalogue: { campaigns: [
+      campaign({ drops: [drop()] }),
+      campaign({ id: "c2", name: "Beta" }),
+    ] },
+    inventory: { progress: { c1: { d1: entry() } } },
+    config: {
+      streamers: [owned("beta", "s1"), owned("gamma", "s1")] as never,
+      subscriptions: twoSubs, campaignQueue: true,
+    },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s2"]);
+  expect(written(saveConfig).streamers.map((s) => s.ownedBy)).toEqual(["s2", "s2"]);
+  expect(log.ofType("subscription.completed")).toHaveLength(1);
+  expect(log.ofType("subscription.queue.started")[0]).toMatchObject({
+    subscriptionId: "s2", waiting: 0,
+  });
+});
+
+test("the queue start is logged once, not on every pass", async () => {
+  const log = memoryLog();
+  const { engine } = queued({
+    log,
+    config: { streamers: [], subscriptions: twoSubs, campaignQueue: true },
+  });
+  await engine.pass();
+  await engine.pass();
+  expect(log.ofType("subscription.queue.started")).toHaveLength(1);
+});
+
+test("game subscriptions keep their channels with the queue on", async () => {
+  const { engine, saveConfig } = queued({
+    config: {
+      streamers: [],
+      subscriptions: [...twoSubs, sub({ id: "g", kind: "game", targetId: "g1", rank: 2 })],
+      campaignQueue: true,
+    },
+  });
+  await engine.pass();
+  expect(new Set(written(saveConfig).streamers.map((s) => s.ownedBy)))
+    .toEqual(new Set(["s1", "g"]));
 });
 
 test("an engine with no logger behaves identically", async () => {

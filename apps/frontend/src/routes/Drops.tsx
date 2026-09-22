@@ -1,6 +1,6 @@
 import {
-  ActionIcon, Alert, Anchor, Button, Card, Group, Loader, NumberInput, Stack,
-  Text, TextInput, Tooltip,
+  ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Loader, NumberInput,
+  Stack, Switch, Text, TextInput, Tooltip,
 } from "@mantine/core";
 import {
   DndContext, KeyboardSensor, PointerSensor, closestCenter,
@@ -31,7 +31,24 @@ export interface SubscriptionRow {
   rank: number;
   /** Logins the engine currently has in the config for this one. */
   channels: string[];
+  /**
+   * Its place in the one-at-a-time queue: null with the queue off and
+   * for a game subscription, which is never queued. Optional because a
+   * backend predating the queue omits it.
+   */
+  queue?: {
+    state: "active" | "waiting" | "scheduled";
+    /** 1-based among the waiting and scheduled; 0 for the active one. */
+    position: number;
+  } | null;
 }
+
+/** The queue badge beside a row's label: its colour and what it says. */
+const QUEUE_BADGE = {
+  active: { colour: "teal", label: () => "collecting" },
+  waiting: { colour: "gray", label: (n: number) => `waiting #${n}` },
+  scheduled: { colour: "violet", label: (n: number) => `waiting #${n} · not open yet` },
+} as const;
 
 export interface CampaignsPayload {
   campaigns: ResolvedCampaign[];
@@ -358,6 +375,17 @@ function SubscriptionRow({
               )}
             </Anchor>
           )}
+          {sub.queue != null && (
+            <Badge
+              size="xs"
+              variant="light"
+              color={QUEUE_BADGE[sub.queue.state].colour}
+              style={{ flexShrink: 0 }}
+              data-testid="subscription-queue"
+            >
+              {QUEUE_BADGE[sub.queue.state].label(sub.queue.position)}
+            </Badge>
+          )}
           {game !== null && (
             <Text
               size="xs"
@@ -388,7 +416,11 @@ function SubscriptionRow({
                 An empty pool is an answer, not a wait -- the
                 engine resolves on subscribe, so "finding
                 channels…" here would never resolve. */}
-            {sub.channels.length === 0
+            {sub.queue != null && sub.queue.state !== "active"
+              ? sub.queue.state === "scheduled"
+                ? "waits for its campaign to open, then takes its turn by rank"
+                : "starts when the campaigns above it end or complete"
+              : sub.channels.length === 0
               ? "nobody is streaming this right now"
               : (
                 <>
@@ -491,6 +523,7 @@ export function Drops() {
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<View>("all");
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
+  const [campaignQueue, setCampaignQueue] = useState(false);
   /**
    * What is running, and which campaign it belongs to.
    *
@@ -526,9 +559,11 @@ export function Drops() {
 
   async function loadSubs() {
     try {
-      const res = await api.get<{ subscriptions?: SubscriptionRow[] }>(
-        "/api/subscriptions",
-      );
+      const res = await api.get<{
+        subscriptions?: SubscriptionRow[];
+        campaignQueue?: boolean;
+      }>("/api/subscriptions");
+      setCampaignQueue(res.campaignQueue === true);
       // Guarded rather than trusted: a response without the field would
       // otherwise put undefined where an array is expected and take the
       // whole page down on the next render.
@@ -612,6 +647,9 @@ export function Drops() {
       await api.post("/api/subscriptions/reorder", {
         ids: moved.map((s) => s.id),
       });
+      // With the queue on, a new order can change which campaign is
+      // collected and what each row owns.
+      if (campaignQueue) await loadSubs();
       await loadRestart();
     } catch (cause: unknown) {
       setSubs(previous);
@@ -881,6 +919,33 @@ export function Drops() {
         <Card withBorder padding="sm" data-testid="subscriptions">
           <Group justify="space-between" align="center" mb={4}>
             <Text fw={600} size="sm">Subscriptions</Text>
+            <Tooltip
+              label={
+                "Collect one campaign at a time, top of the list first. The "
+                + "others wait without channels of their own, so queuing many "
+                + "campaigns does not fill the streamer list. The next one "
+                + "starts when the current one ends, completes or is removed. "
+                + "Game subscriptions are not queued."
+              }
+              multiline
+              w={300}
+            >
+              <Switch
+                size="xs"
+                ml="auto"
+                label="One campaign at a time"
+                checked={campaignQueue}
+                disabled={busy !== null}
+                onChange={(event) => {
+                  const enabled = event.currentTarget.checked;
+                  void mutate(
+                    "panel",
+                    enabled ? "Queuing campaigns…" : "Finding channels to watch…",
+                    () => api.post("/api/subscriptions/queue", { enabled }),
+                  );
+                }}
+              />
+            </Tooltip>
             <Button
               size="compact-xs"
               variant="default"

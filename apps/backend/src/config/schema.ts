@@ -240,6 +240,14 @@ export const configSchema = z
         (list) => new Set(list.map((s) => s.id)).size === list.length,
         { message: "duplicate subscription" },
       ),
+    /**
+     * Collect one campaign subscription at a time, in rank order.
+     *
+     * The rest wait with no channels of their own, so many campaigns can
+     * be queued without filling the streamer list. Game subscriptions
+     * are not queued.
+     */
+    campaignQueue: z.boolean().default(false),
   })
   .strict();
 

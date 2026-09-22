@@ -32,6 +32,7 @@ const valid = {
   miner: {},
   streamers: [{ username: "alpha", enabled: true, settings: {} }],
   subscriptions: [],
+  campaignQueue: false,
 };
 
 describe("schema", () => {

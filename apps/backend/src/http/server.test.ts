@@ -1099,7 +1099,7 @@ test("GET /api/events returns recent events newest first", async () => {
 function seedCookie(username = "alex"): string {
   saveConfig(ctx.configPath, {
     version: 1, username, followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [],
+    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   const file = join(ctx.cookiesDir, `${username}.pkl`);
@@ -1175,7 +1175,7 @@ test("a successful login clears a stale error from the signed-out session", asyn
   );
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [],
+    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   await ctx.state.refresh();
@@ -1200,7 +1200,7 @@ test("a successful login starts the miner", async () => {
   // logout/login round trip left it stopped with no hint why.
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [],
+    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
 
@@ -1597,6 +1597,61 @@ test("subscribing to a live, unfinished campaign is accepted", async () => {
     payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(200);
+});
+
+test("GET /api/subscriptions reports each campaign's place in the queue", async () => {
+  withSubs([
+    aSub(),
+    aSub({ id: "s2", targetId: "c2", label: "Beta", rank: 1 }),
+    aSub({ id: "g", kind: "game", targetId: "g1", label: "A Game", rank: 2 }),
+  ]);
+  saveConfig(ctx.configPath, { ...loadConfig(ctx.configPath), campaignQueue: true });
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  expect(res.json().campaignQueue).toBe(true);
+  expect(res.json().subscriptions.map((s: { queue: unknown }) => s.queue)).toEqual([
+    { state: "active", position: 0 },
+    { state: "waiting", position: 1 },
+    null,
+  ]);
+});
+
+test("with the queue off, no subscription reports a place", async () => {
+  withSubs([aSub()]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  expect(res.json().campaignQueue).toBe(false);
+  expect(res.json().subscriptions[0].queue).toBeNull();
+});
+
+test("POST /api/subscriptions/queue saves the flag and re-resolves", async () => {
+  withSubs([aSub()]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/queue", cookies: auth(),
+    payload: { enabled: true },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(loadConfig(ctx.configPath).campaignQueue).toBe(true);
+  expect(ctx.engine.pass).toHaveBeenCalledWith("queue");
+});
+
+test("POST /api/subscriptions/queue rejects a non-boolean", async () => {
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/queue", cookies: auth(),
+    payload: { enabled: "yes" },
+  });
+  expect(res.statusCode).toBe(400);
+});
+
+test("removing a subscription re-resolves, so the queue moves on", async () => {
+  withSubs([aSub()]);
+  await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/remove", cookies: auth(),
+  });
+  expect(ctx.engine.pass).toHaveBeenCalledWith("remove");
 });
 
 test("POST /api/subscriptions rejects a malformed body", async () => {
