@@ -30,6 +30,11 @@ export interface ResolvedCampaign {
   endsAt: number | null;
   drops: ResolvedDrop[];
   status: CampaignStatus;
+  /**
+   * Whether watching has nothing left to add: every drop that can be
+   * earned is claimed or claimable. Wider than status "collected".
+   */
+  complete: boolean;
 }
 
 const STATUS: Record<CampaignStatus, { label: string; colour: string }> = {
@@ -305,6 +310,13 @@ export function CampaignCard({
   const status = badge(campaign.status, campaign.startsAt, campaign.endsAt, now);
   const count = campaign.drops.length;
   const over = campaign.endsAt !== null && campaign.endsAt <= now;
+  // Why a subscription could do nothing here. The backend refuses one and
+  // removes an existing one on its next pass; Unsubscribe stays usable.
+  const finished = over
+    ? "This campaign has ended"
+    : campaign.complete
+      ? "Every drop here is already earned"
+      : null;
   const elapsed = elapsedPercent(campaign.startsAt, campaign.endsAt, now);
   const { claimed, obtainable } = claimedCount(campaign.drops);
   const time = watchTime(campaign.drops);
@@ -595,7 +607,21 @@ export function CampaignCard({
             subscribing inherits the brand, leaving orange to mean "drop
             in progress" on the badge beside it. Subscribed goes neutral,
             unsubscribing not being an action to encourage. */}
-        {onSubscribe !== undefined && (
+        {onSubscribe !== undefined && (subscribed !== true && finished !== null ? (
+          // data-disabled rather than disabled: a disabled button fires
+          // no mouse events, so the tooltip saying why would never open.
+          <Tooltip label={finished}>
+            <Button
+              size="compact-xs"
+              ml="auto"
+              data-disabled
+              aria-disabled
+              onClick={(event) => event.preventDefault()}
+            >
+              Subscribe
+            </Button>
+          </Tooltip>
+        ) : (
           <Button
             size="compact-xs"
             ml="auto"
@@ -611,7 +637,7 @@ export function CampaignCard({
           >
             {subscribed === true ? "Unsubscribe" : "Subscribe"}
           </Button>
-        )}
+        ))}
       </Group>
 
       <Collapse expanded={open} keepMounted={false}>

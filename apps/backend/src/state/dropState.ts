@@ -42,6 +42,8 @@ export interface ResolvedDrop {
 export interface ResolvedCampaign extends Omit<Campaign, "drops"> {
   drops: ResolvedDrop[];
   status: CampaignStatus;
+  /** Whether watching has nothing left to add; see campaignComplete. */
+  complete: boolean;
 }
 
 /**
@@ -168,7 +170,28 @@ export function resolveCampaign(
   const drops = campaign.drops.map((d) =>
     resolveDrop(d, entries[d.id], inv.available, earned),
   );
-  return { ...campaign, drops, status: campaignStatus(drops, inv.available) };
+  return {
+    ...campaign,
+    drops,
+    status: campaignStatus(drops, inv.available),
+    complete: campaignComplete(drops, inv.available),
+  };
+}
+
+/**
+ * Whether watching has nothing left to add to a campaign.
+ *
+ * Wider than "collected": claimable counts as done, because the minutes
+ * are in and the miner claims from the inventory whichever channels it
+ * is watching. Unobtainable drops are ignored as in campaignStatus, and
+ * a campaign of nothing else is not complete -- nothing was earned.
+ * Unread progress never completes anything.
+ */
+function campaignComplete(drops: ResolvedDrop[], available: boolean): boolean {
+  if (!available) return false;
+  const obtainable = drops.filter((d) => d.status !== "unobtainable");
+  return obtainable.length > 0
+    && obtainable.every((d) => d.status === "claimed" || d.status === "claimable");
 }
 
 /**

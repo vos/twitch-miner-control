@@ -637,6 +637,21 @@ export function buildServer(deps: ServerDeps): AppServer {
       if (clash) {
         return reply.code(409).send({ error: "already subscribed to that" });
       }
+      // The engine removes a finished campaign's subscription on its first
+      // pass, so accepting one would only add channels, restart the miner
+      // and take them away again. A campaign missing from the catalogue is
+      // let through: that is the engine's call, on a catalogue it trusts.
+      if (body.data.kind === "campaign") {
+        const campaign = (await deps.catalogue.get()).campaigns
+          .find((c) => c.id === body.data.targetId);
+        if (campaign?.endsAt != null && campaign.endsAt <= Date.now()) {
+          return reply.code(409).send({ error: "that campaign has ended" });
+        }
+        if (campaign !== undefined
+            && resolveCampaign(campaign, await deps.inventory.get()).complete) {
+          return reply.code(409).send({ error: "that campaign is already complete" });
+        }
+      }
       const subscription = {
         ...body.data,
         id: randomUUID(),

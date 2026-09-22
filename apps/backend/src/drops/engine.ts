@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config/schema.js";
-import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
+import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
-import type { InventoryCache, InventorySnapshot } from "../state/inventory.js";
+import type { InventoryCache } from "../state/inventory.js";
 import type { PendingRestart } from "./pendingRestart.js";
 import { reconcile, type DesiredEntry } from "./reconcile.js";
 import {
@@ -37,23 +37,6 @@ export interface EngineDeps {
   now?: () => number;
   /** Where resolution decisions are recorded, for the app event log. */
   log?: AppLog;
-}
-
-/**
- * Whether watching has nothing left to add to a campaign.
- *
- * Claimable counts as done: the minutes are in, and the miner claims from
- * the inventory whichever channels it is watching. Unobtainable drops are
- * ignored, as in the campaign status, but a campaign of nothing else is
- * not complete -- nothing was earned. Null progress (a failed fetch)
- * never completes anything.
- */
-function isComplete(campaign: Campaign, inventory: InventorySnapshot | null): boolean {
-  if (inventory === null || !inventory.available) return false;
-  const obtainable = resolveCampaign(campaign, inventory).drops
-    .filter((d) => d.status !== "unobtainable");
-  return obtainable.length > 0
-    && obtainable.every((d) => d.status === "claimed" || d.status === "claimable");
 }
 
 /**
@@ -187,7 +170,7 @@ export class SubscriptionEngine {
       }
 
       if (sub.kind === "campaign" && campaign !== undefined
-          && isComplete(campaign, inventory)) {
+          && inventory !== null && resolveCampaign(campaign, inventory).complete) {
         this.log.info({
           type: EVENT.SUBSCRIPTION_COMPLETED,
           msg: `campaign "${sub.label}" is 100% complete, so its subscription `

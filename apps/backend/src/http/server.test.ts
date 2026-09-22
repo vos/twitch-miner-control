@@ -1557,6 +1557,48 @@ test("subscribing twice to the same target is rejected", async () => {
   expect(res.statusCode).toBe(409);
 });
 
+test("subscribing to an ended campaign is rejected", async () => {
+  withSubs([]);
+  ctx.setCampaigns(() => [{ ...aCampaign, endsAt: Date.now() - 1_000 }]);
+  await ctx.catalogue.refresh();
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toBe("that campaign has ended");
+  expect(loadConfig(ctx.configPath).subscriptions).toEqual([]);
+});
+
+test("subscribing to a complete campaign is rejected", async () => {
+  withSubs([]);
+  ctx.setCampaigns(() => [{ ...aCampaign, endsAt: Date.now() + 86_400_000 }]);
+  await ctx.catalogue.refresh();
+  ctx.helperResponses["inventory"] = {
+    inventory: { c1: { d1: { minutes: 60, claimed: true, instanceId: null } } },
+  };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(409);
+  expect(res.json().error).toBe("that campaign is already complete");
+});
+
+test("subscribing to a live, unfinished campaign is accepted", async () => {
+  withSubs([]);
+  ctx.setCampaigns(() => [{ ...aCampaign, endsAt: Date.now() + 86_400_000 }]);
+  await ctx.catalogue.refresh();
+  ctx.helperResponses["inventory"] = {
+    inventory: { c1: { d1: { minutes: 30, claimed: false, instanceId: null } } },
+  };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+  });
+  expect(res.statusCode).toBe(200);
+});
+
 test("POST /api/subscriptions rejects a malformed body", async () => {
   withSubs([]);
   const res = await ctx.app.inject({

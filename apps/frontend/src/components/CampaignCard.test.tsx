@@ -14,6 +14,7 @@ const campaign = (over: Partial<ResolvedCampaign> = {}): ResolvedCampaign => ({
   startsAt: 1_000,
   endsAt: Date.now() + 3 * 24 * 60 * 60 * 1000,
   status: "untouched",
+  complete: false,
   drops: [
     { id: "d1", name: "Crate",
       benefits: [{ name: "Crate", imageUrl: "https://cdn/crate.png" }],
@@ -163,6 +164,28 @@ test("a busy card cannot be clicked again", async () => {
                           busy="Finding channels…" />);
   await userEvent.click(screen.getByRole("button", { name: /subscribe/i }));
   expect(onSubscribe).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["ended", { endsAt: Date.now() - 1_000 }, /has ended/i],
+  ["complete", { complete: true }, /already earned/i],
+])("an %s campaign cannot be subscribed to, and says why", async (_n, over, why) => {
+  const onSubscribe = vi.fn();
+  renderApp(<CampaignCard campaign={campaign(over)} onSubscribe={onSubscribe} />);
+  const btn = screen.getByRole("button", { name: /subscribe/i });
+  expect(btn.getAttribute("aria-disabled")).toBe("true");
+  await userEvent.click(btn);
+  expect(onSubscribe).not.toHaveBeenCalled();
+  await userEvent.hover(btn);
+  expect(await screen.findByText(why)).toBeTruthy();
+});
+
+test("a finished campaign can still be unsubscribed from", async () => {
+  const onUnsubscribe = vi.fn();
+  renderApp(<CampaignCard campaign={campaign({ complete: true })} subscribed
+                          onSubscribe={() => {}} onUnsubscribe={onUnsubscribe} />);
+  await userEvent.click(screen.getByRole("button", { name: /unsubscribe/i }));
+  expect(onUnsubscribe).toHaveBeenCalledTimes(1);
 });
 
 test("carries an id so a link elsewhere on the page can reach it", () => {
