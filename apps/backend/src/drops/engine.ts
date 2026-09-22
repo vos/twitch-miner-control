@@ -1,5 +1,7 @@
 import type { AppConfig } from "../config/schema.js";
-import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
+import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
+import { resolveCampaign } from "../state/dropState.js";
+import type { InventoryCache, InventorySnapshot } from "../state/inventory.js";
 import type { PendingRestart } from "./pendingRestart.js";
 import { reconcile, type DesiredEntry } from "./reconcile.js";
 import {
@@ -30,8 +32,28 @@ export interface EngineDeps {
   /** Live channels for a game, by display name and slug. Throws on failure. */
   directory: (game: { name: string; slug: string }) => Promise<DirectoryChannel[]>;
   pending: Pick<PendingRestart, "propose">;
+  /** Drop progress, to end a subscription whose campaign is complete. */
+  inventory?: Pick<InventoryCache, "get">;
+  now?: () => number;
   /** Where resolution decisions are recorded, for the app event log. */
   log?: AppLog;
+}
+
+/**
+ * Whether watching has nothing left to add to a campaign.
+ *
+ * Claimable counts as done: the minutes are in, and the miner claims from
+ * the inventory whichever channels it is watching. Unobtainable drops are
+ * ignored, as in the campaign status, but a campaign of nothing else is
+ * not complete -- nothing was earned. Null progress (a failed fetch)
+ * never completes anything.
+ */
+function isComplete(campaign: Campaign, inventory: InventorySnapshot | null): boolean {
+  if (inventory === null || !inventory.available) return false;
+  const obtainable = resolveCampaign(campaign, inventory).drops
+    .filter((d) => d.status !== "unobtainable");
+  return obtainable.length > 0
+    && obtainable.every((d) => d.status === "claimed" || d.status === "claimable");
 }
 
 /**
@@ -107,6 +129,13 @@ export class SubscriptionEngine {
     const byId = new Map(catalogue.campaigns.map((c) => [c.id, c]));
     // Only a catalogue we actually read can tell us a campaign is gone.
     const trustworthy = catalogue.available && !catalogue.stale;
+    const now = this.deps.now?.() ?? Date.now();
+    // Only campaign subscriptions complete, so a game-only list skips the
+    // fetch. InventoryCache.get() never rejects.
+    const inventory = this.deps.inventory !== undefined
+      && config.subscriptions.some((s) => s.kind === "campaign")
+      ? await this.deps.inventory.get()
+      : null;
 
     // Rank order: lower ranks fill the miner's watch slots first, and
     // the written order is what upstream's priority_order consumes.
@@ -130,6 +159,39 @@ export class SubscriptionEngine {
           type: EVENT.SUBSCRIPTION_ENDED,
           msg: `campaign "${sub.label}" is gone from a fresh catalogue, so its `
             + "subscription has ended and its channels are released",
+          subscriptionId: sub.id,
+          label: sub.label,
+          targetId: sub.targetId,
+          reason: "gone",
+        });
+        ended.add(sub.id);
+        continue;
+      }
+
+      // The tracker keeps an ended campaign listed for a while, so its
+      // end date is checked too. A date read from a stale catalogue is
+      // still that campaign's end date, so this needs no trustworthy test.
+      if (sub.kind === "campaign" && campaign?.endsAt != null && campaign.endsAt <= now) {
+        this.log.info({
+          type: EVENT.SUBSCRIPTION_ENDED,
+          msg: `campaign "${sub.label}" has ended, so its subscription was `
+            + "removed and its channels are released",
+          subscriptionId: sub.id,
+          label: sub.label,
+          targetId: sub.targetId,
+          reason: "expired",
+          endsAt: campaign.endsAt,
+        });
+        ended.add(sub.id);
+        continue;
+      }
+
+      if (sub.kind === "campaign" && campaign !== undefined
+          && isComplete(campaign, inventory)) {
+        this.log.info({
+          type: EVENT.SUBSCRIPTION_COMPLETED,
+          msg: `campaign "${sub.label}" is 100% complete, so its subscription `
+            + "was removed and its channels are released",
           subscriptionId: sub.id,
           label: sub.label,
           targetId: sub.targetId,
@@ -256,7 +318,7 @@ export class SubscriptionEngine {
     });
     this.deps.pending.propose(
       ended.size > 0
-        ? "a drop campaign ended"
+        ? "a drop campaign ended or completed"
         : "drop subscriptions resolved new channels",
     );
   }

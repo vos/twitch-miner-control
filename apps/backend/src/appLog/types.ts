@@ -31,8 +31,11 @@ export const EVENT = {
   DEGRADED: "subscription.degraded",
   /** A directory lookup failed for one subscription. */
   DIRECTORY_FAILED: "subscription.directory.failed",
-  /** A campaign left a trustworthy catalogue, so its subscription ended. */
+  /** A campaign left a trustworthy catalogue or passed its end date, so
+   * its subscription was removed. `reason` says which. */
   SUBSCRIPTION_ENDED: "subscription.ended",
+  /** Every obtainable drop was earned, so the subscription was removed. */
+  SUBSCRIPTION_COMPLETED: "subscription.completed",
   /** The streamer list actually changed, and how. */
   RECONCILED: "subscription.reconciled",
 

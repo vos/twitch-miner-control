@@ -1,7 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { SubscriptionEngine } from "./engine.js";
 import type { AppConfig } from "../config/schema.js";
-import type { Campaign, Catalogue } from "../state/campaignCatalogue.js";
+import type { Campaign, CampaignDrop, Catalogue } from "../state/campaignCatalogue.js";
+import type { InventorySnapshot } from "../state/inventory.js";
 import { memoryLog } from "../appLog/memory.js";
 
 const campaign = (over: Partial<Campaign> = {}): Campaign => ({
@@ -27,6 +28,8 @@ function make(over: {
     game: { name: string; slug: string },
   ) => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
   log?: ReturnType<typeof memoryLog>;
+  inventory?: Partial<InventorySnapshot>;
+  now?: number;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -52,6 +55,13 @@ function make(over: {
       { login: "gamma", channelId: "id-gamma", viewers: 50 },
     ]),
     pending: { propose } as never,
+    inventory: {
+      get: async (): Promise<InventorySnapshot> => ({
+        progress: {}, earned: {}, fetchedAt: 1, available: true,
+        ...over.inventory,
+      }),
+    },
+    now: over.now === undefined ? undefined : () => over.now as number,
     log: over.log,
   });
   return { engine, saveConfig, propose, config };
@@ -432,6 +442,112 @@ test("records a campaign that ended", async () => {
     targetId: "gone",
     level: "warn",
   });
+});
+
+const drop = (over: Partial<CampaignDrop> = {}): CampaignDrop => ({
+  id: "d1", name: "Hat", benefits: [{ name: "Hat", imageUrl: null }],
+  requiredMinutes: 60, requiredSubs: 0, ...over,
+});
+const entry = (over: object = {}) =>
+  ({ minutes: 60, claimed: true, instanceId: null, ...over });
+
+test("a campaign past its end date is removed even while still listed", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig, propose } = make({
+    log,
+    now: 5_000,
+    catalogue: { campaigns: [campaign({ endsAt: 4_000 })] },
+    config: { streamers: [manual("alpha"), owned("beta", "s1")] as never },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions).toEqual([]);
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["alpha"]);
+  expect(propose).toHaveBeenCalledTimes(1);
+  expect(log.ofType("subscription.ended")[0]).toMatchObject({
+    reason: "expired", label: "Alpha", endsAt: 4_000, level: "info",
+  });
+});
+
+test("an end date is trusted from a stale catalogue", async () => {
+  const { engine, saveConfig } = make({
+    now: 5_000,
+    catalogue: { campaigns: [campaign({ endsAt: 4_000 })], stale: true },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions).toEqual([]);
+});
+
+test("a campaign with every drop claimed or claimable is removed as complete", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig } = make({
+    log,
+    catalogue: { campaigns: [campaign({
+      drops: [drop(), drop({ id: "d2", name: "Cape" })],
+    })] },
+    inventory: { progress: { c1: {
+      d1: entry(),
+      d2: entry({ claimed: false, instanceId: "i2" }),
+    } } },
+    config: { streamers: [owned("beta", "s1")] as never },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions).toEqual([]);
+  expect(written(saveConfig).streamers).toEqual([]);
+  expect(log.ofType("subscription.completed")[0]).toMatchObject({
+    subscriptionId: "s1", label: "Alpha", level: "info",
+  });
+});
+
+test("a finished campaign known only from earned rewards is complete", async () => {
+  // A fully-claimed campaign leaves the progress map; the reward names
+  // are all that still say it was finished.
+  const { engine, saveConfig } = make({
+    catalogue: { campaigns: [campaign({ drops: [drop()] })] },
+    inventory: { earned: { c1: ["Hat"] } },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions).toEqual([]);
+});
+
+test("unobtainable drops do not hold a campaign open", async () => {
+  const { engine, saveConfig } = make({
+    catalogue: { campaigns: [campaign({
+      drops: [drop(), drop({ id: "gift", requiredMinutes: 0 })],
+    })] },
+    inventory: { progress: { c1: { d1: entry() } } },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions).toEqual([]);
+});
+
+test.each([
+  ["partly watched", { progress: { c1: { d1: entry({ minutes: 30, claimed: false }) } } }],
+  ["unavailable progress", { available: false, earned: { c1: ["Hat"] } }],
+])("a campaign with %s keeps its subscription", async (_name, inventory) => {
+  const { engine, saveConfig } = make({
+    catalogue: { campaigns: [campaign({ drops: [drop()] })] },
+    inventory,
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
+});
+
+test("a campaign of only unobtainable drops is never complete", async () => {
+  const { engine, saveConfig } = make({
+    catalogue: { campaigns: [campaign({ drops: [drop({ requiredMinutes: 0 })] })] },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
+});
+
+test("a game subscription is never ended by one campaign", async () => {
+  const { engine, saveConfig } = make({
+    now: 5_000,
+    catalogue: { campaigns: [campaign({ endsAt: 4_000 })] },
+    config: { subscriptions: [sub({ kind: "game", targetId: "g1" })] },
+  });
+  await engine.pass();
+  expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
 });
 
 test("an engine with no logger behaves identically", async () => {

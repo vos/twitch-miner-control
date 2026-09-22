@@ -378,6 +378,7 @@ const engine = new SubscriptionEngine({
       game: game.name, slug: game.slug, limit: 30,
     }).then((r) => r.channels),
   pending: pendingRestart,
+  inventory: inventoryCache,
   log: appLog.log,
 });
 
