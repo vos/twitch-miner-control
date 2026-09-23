@@ -23,6 +23,7 @@
     "@mantine/spotlight": "9.6.0",
     "@tabler/icons-react": "^3.46.0",
     "@tanstack/react-query": "^5.62.0",
+    "modern-screenshot": "4.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.2.1"

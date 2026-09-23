@@ -1,0 +1,87 @@
+/* Fixed width, so the exported PNG is the same at any window size. */
+.card {
+  width: 600px;
+  box-sizing: border-box;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--tw-border);
+  background: linear-gradient(135deg, #1f1f23 0%, #1f1f23 55%, #2b1b4d 100%);
+  color: var(--tw-text);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--tw-text-dim);
+}
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.figure {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.caption {
+  font-size: 12px;
+  color: var(--tw-text-dim);
+}
+
+.change {
+  font-size: 12px;
+  color: var(--tw-text-dim);
+  margin-top: 2px;
+}
+
+.section {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--tw-text-dim);
+  margin-bottom: 8px;
+}
+
+.channel {
+  display: grid;
+  grid-template-columns: 24px 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--tw-surface-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.points {
+  font-family: var(--mantine-font-family-monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.highlights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 20px;
+  font-size: 13px;
+}
