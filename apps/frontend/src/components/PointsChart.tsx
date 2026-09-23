@@ -3,7 +3,7 @@ import { Group, SegmentedControl, Stack, Text } from "@mantine/core";
 import { useState } from "react";
 import { bucketPoints, type PointSample } from "../lib/bucketPoints.js";
 import type { RangeKey } from "../lib/detailRanges.js";
-import { formatClock, formatDateHour, formatDay } from "../lib/formatClock.js";
+import { formatClock, formatDay } from "../lib/formatClock.js";
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -13,11 +13,10 @@ const nf = new Intl.NumberFormat("en-US");
  *  chart's own markup. */
 const CHART_HEIGHT = 240;
 
-/** Precise to the bucket: 7d buckets are six hours wide, so a date alone
- *  labels four neighbouring points identically. */
+/** Precise to the bucket: an hour for 24h, a day for everything else. */
 const LABEL: Record<RangeKey, (ts: number) => string> = {
   "24h": formatClock,
-  "7d": formatDateHour,
+  "7d": formatDay,
   "30d": formatDay,
   all: formatDay,
 };

@@ -30,16 +30,16 @@ export const formatClock = (ts: number): string => clock.format(ts);
 /**
  * A date with its time, for labels that span more than one day.
  *
- * The hour keeps its minutes here even though the callers bucket by the
- * hour or wider. On a 24-hour dial an hour alone renders as a bare
- * number -- "Sep 17, 15" -- which reads as a quantity, not a time; the
- * 12-hour dial got away with it because "3 PM" carries its own unit.
- * ":00" is what makes it a clock time at a glance.
+ * The hour keeps its minutes even on the hour. On a 24-hour dial an
+ * hour alone renders as a bare number -- "Sep 17, 15" -- which reads as
+ * a quantity, not a time; the 12-hour dial got away with it because
+ * "3 PM" carries its own unit. ":00" is what makes it a clock time at a
+ * glance.
  *
  * The date and the time are formatted separately and joined, rather than
  * asked for in one formatter, because a combined format inserts the
  * locale's own date/time separator ("at", ", ") and that stretches the
- * label past the width a chart tick can hold.
+ * label past the width a compact label can hold.
  */
 const dayOnly = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 
