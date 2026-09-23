@@ -27,6 +27,7 @@ import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js"
 import { resolveCampaign } from "../state/dropState.js";
 import { campaignQueue } from "../drops/queue.js";
 import { buildCalendar } from "../insights/calendar.js";
+import { buildRecap } from "../insights/recap.js";
 import { gainWindow } from "../state/gains.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { StateService } from "../state/service.js";
@@ -986,6 +987,21 @@ export function buildServer(deps: ServerDeps): AppServer {
         { history: deps.history, daily: deps.dailyPoints, streamers: deps.streamers },
         Date.now(),
         days,
+      );
+    });
+
+    instance.get("/api/insights/recap", async (request, reply) => {
+      const q = request.query as { period?: unknown; offset?: unknown };
+      if (q.period !== "week" && q.period !== "month") {
+        return reply.code(400).send({ error: "period must be week or month" });
+      }
+      const raw = Number(q.offset ?? 0);
+      const offset = Number.isFinite(raw) ? Math.min(0, Math.trunc(raw)) : 0;
+      return buildRecap(
+        { history: deps.history, daily: deps.dailyPoints, streamers: deps.streamers },
+        Date.now(),
+        q.period,
+        offset,
       );
     });
 

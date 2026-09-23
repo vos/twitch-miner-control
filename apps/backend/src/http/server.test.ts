@@ -1990,3 +1990,25 @@ describe("GET /api/insights/calendar", () => {
     expect((await get("?days=abc")).json().days).toHaveLength(365);
   });
 });
+
+describe("GET /api/insights/recap", () => {
+  const get = (query: string) => ctx.app.inject({
+    method: "GET", url: `/api/insights/recap${query}`, cookies: auth(),
+  });
+
+  test("needs a week or a month", async () => {
+    expect((await get("")).statusCode).toBe(400);
+    expect((await get("?period=year")).statusCode).toBe(400);
+  });
+
+  test("defaults to the current period", async () => {
+    const body = (await get("?period=week")).json();
+    expect(body.period.partial).toBe(true);
+    expect(body.top).toEqual([]);
+  });
+
+  test("never looks into the future", async () => {
+    expect((await get("?period=month&offset=3")).json().period.partial).toBe(true);
+    expect((await get("?period=month&offset=-1")).json().period.partial).toBe(false);
+  });
+});
