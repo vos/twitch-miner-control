@@ -388,3 +388,34 @@ test("a range change keeps the old history on screen, dimmed, until the new one 
   await waitFor(() => expect(screen.getByTestId("detail-history")).toHaveAttribute("aria-busy", "false"));
 });
 
+test("while a new range loads, the gain does not show the old range's figure", async () => {
+  let answer: (() => void) | null = null;
+  const body = (gained: number) => ({
+    series: [], events: [], sessions: [],
+    coverage: { live: [], mined: [] }, firstSeen: null, retentionFloor: null,
+    gained, gainedSince: null,
+  });
+  let first = true;
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
+    if (url.includes("/schedule")) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ since: 0, now: 0, spans: [] }) });
+    }
+    if (first) {
+      first = false;
+      return Promise.resolve({ ok: true, status: 200, json: async () => body(700) });
+    }
+    return new Promise((resolve) => {
+      answer = () => resolve({ ok: true, status: 200, json: async () => body(3000) });
+    });
+  }));
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  await waitFor(() => expect(screen.getByTestId("detail-gain")).toHaveTextContent("+700"));
+
+  await userEvent.click(screen.getByText("30 days"));
+  // The 7-day figure under a "30 days" label would be a wrong claim.
+  await waitFor(() => expect(screen.getByTestId("detail-gain")).not.toHaveTextContent("700"));
+  expect(screen.getByTestId("detail-gain")).toHaveTextContent("—");
+
+  answer!();
+  await waitFor(() => expect(screen.getByTestId("detail-gain")).toHaveTextContent("+3,000"));
+});

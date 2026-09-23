@@ -133,14 +133,16 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
             <IconCoins className={classes.coin} stroke={2} aria-hidden />
             <RollingNumber value={s.points} animate={animateBalance} />
           </Text>
-          {/* Null until the fetch lands, which renders the em dash --
-              honest: we do not yet know the gain over this window. The
-              balance beside it comes from the dashboard's snapshot and
-              is already painted. */}
+          {/* Null until this range's fetch lands, which renders the em
+              dash -- honest: we do not yet know the gain over this window.
+              That includes a range change, where the previous range's
+              figure is still in `detail` but would sit under the new
+              range's label. The balance beside it comes from the
+              dashboard's snapshot and is already painted. */}
           <Gain
-            value={detail?.gained ?? null}
+            value={loading ? null : detail?.gained ?? null}
             label={RANGE_LABELS[range]}
-            since={detail?.gainedSince ?? null}
+            since={loading ? null : detail?.gainedSince ?? null}
             size="sm"
             testId="detail-gain"
           />
