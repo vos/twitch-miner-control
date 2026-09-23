@@ -2,7 +2,7 @@ import {
   Alert, Button, Group, Select, SimpleGrid, Stack, Switch, Text, UnstyledButton,
 } from "@mantine/core";
 import { IconCoins, IconUserFilled } from "@tabler/icons-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useLiveState } from "../api/useLiveState.js";
 import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
@@ -13,13 +13,6 @@ import { SORT_KEYS, SORT_LABELS, sortStreamers, type SortKey } from "../lib/sort
 import { useLocalChoice } from "../lib/useLocalChoice.js";
 import { useLocalToggle } from "../lib/useLocalToggle.js";
 import classes from "./Dashboard.module.css";
-
-// Split out: the dialog brings recharts, which nearly doubles the bundle,
-// and the dashboard must not wait on it to paint a grid most visits never
-// open a card from.
-const StreamerDetailModal = lazy(() =>
-  import("../components/StreamerDetailModal.js")
-    .then((m) => ({ default: m.StreamerDetailModal })));
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -120,21 +113,14 @@ function SectionHeading({ children, testId, collapsed, onToggle }: {
   );
 }
 
-export function Dashboard({ loginRequired = false, onSignIn }: {
+export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
   loginRequired?: boolean;
   onSignIn?: () => void;
+  /** Opens a streamer's detail dialog, which the shell hosts. */
+  onOpenStreamer?: (login: string) => void;
 } = {}) {
   const { snapshot, loadError } = useLiveState();
-  // One dialog for the whole grid, not one per card: a fifty-streamer
-  // roster would otherwise mount fifty modals to show at most one.
-  const [openLogin, setOpenLogin] = useState<string | null>(null);
-  // Mounted from the first open onward, never before: mounting it with the
-  // grid would fetch the chunk this split exists to defer.
-  const [detailUsed, setDetailUsed] = useState(false);
-  const openDetail = (login: string) => {
-    setOpenLogin(login);
-    setDetailUsed(true);
-  };
+  const openDetail = (login: string) => onOpenStreamer?.(login);
   const [feedOn, toggleFeed] = useLocalToggle("dashboard.feed", true);
   // Offline streamers are the bulk of a big roster and the least
   // interesting part of it, so they start shown but collapse away.
@@ -371,15 +357,6 @@ export function Dashboard({ loginRequired = false, onSignIn }: {
           miner's own log lines are long, and a narrow column truncated
           almost every one of them. */}
       <EventsFeed enabled={feedOn} />
-      {detailUsed && (
-        <Suspense fallback={null}>
-          <StreamerDetailModal
-            streamer={snapshot.streamers.find((s) => s.username === openLogin) ?? null}
-            opened={openLogin !== null}
-            onClose={() => setOpenLogin(null)}
-          />
-        </Suspense>
-      )}
     </>,
   );
 }

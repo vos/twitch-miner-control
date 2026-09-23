@@ -10,6 +10,7 @@ import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadg
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
+import { StreamerDetailHost } from "./components/StreamerDetailHost.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
 import { START_HELD_NOTE, shownState } from "./lib/minerState.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
@@ -30,7 +31,11 @@ const SCREENS = {
   dashboard: {
     label: "Dashboard",
     element: (p: ScreenProps) => (
-      <Dashboard loginRequired={p.loginRequired} onSignIn={() => p.navigate("account")} />
+      <Dashboard
+        loginRequired={p.loginRequired}
+        onSignIn={() => p.navigate("account")}
+        onOpenStreamer={p.openStreamer}
+      />
     ),
   },
   streamers: { label: "Streamers", element: () => <Streamers /> },
@@ -43,6 +48,8 @@ const SCREENS = {
 interface ScreenProps {
   loginRequired: boolean;
   navigate: (key: ScreenKey) => void;
+  /** Opens a streamer's detail dialog over whatever screen is showing. */
+  openStreamer: (login: string) => void;
 }
 
 export type ScreenKey = keyof typeof SCREENS;
@@ -81,6 +88,9 @@ export function App() {
 function Shell() {
   const { onLoggedOut } = useSession();
   const [screen, setScreen] = useState<ScreenKey>("dashboard");
+  // Which streamer's detail dialog is open. Here rather than on the
+  // dashboard so the command palette can open one from any screen.
+  const [openLogin, setOpenLogin] = useState<string | null>(null);
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
   // render a STOPPED badge next to a still-ticking uptime.
@@ -262,7 +272,9 @@ function Shell() {
         {SCREENS[screen].element({
           loginRequired: loginRequired && loginKnown,
           navigate,
+          openStreamer: setOpenLogin,
         })}
+        <StreamerDetailHost login={openLogin} onClose={() => setOpenLogin(null)} />
       </AppShell.Main>
     </AppShell>
   );
