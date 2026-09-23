@@ -395,7 +395,7 @@ let minerStartHeld = false;
 
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
-  streamers,
+  streamers, dailyPoints,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
   engine, pendingRestart,

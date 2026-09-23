@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
+import { DailyPoints } from "../db/dailyPoints.js";
 import { Streamers } from "../db/streamers.js";
 import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
@@ -47,6 +48,7 @@ async function make(options: {
   const db = openDb(":memory:");
   const history = new History(db);
   const streamers = new Streamers(db);
+  const dailyPoints = new DailyPoints(db);
   // A real emitter: a test drives its "state" event to check the status push.
   const supervisor = Object.assign(new EventEmitter(), {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
@@ -109,6 +111,7 @@ async function make(options: {
     stateService: state,
     history,
     streamers,
+    dailyPoints,
     helper: client as never,
     loginRunner: loginRunner as never,
     loginStatus,
@@ -127,7 +130,7 @@ async function make(options: {
     method: "POST", url: "/api/session", payload: { password: PASSWORD },
   });
   return {
-    app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
+    app, supervisor, client, history, streamers, dailyPoints, state, loginRunner, loginStatus, configPath,
     cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held,
     cookie: login.cookies[0].value,
   };
@@ -887,6 +890,7 @@ async function makeLive() {
   const app = buildServer({
     configPath, password: PASSWORD, doorbellToken: "doorbell-token",
     supervisor: supervisor as never, stateService: state, history,
+    dailyPoints: new DailyPoints(openDb(":memory:")),
     helper, loginRunner: loginRunner as never, loginStatus: new LoginStatus(),
     cookiesDir: join(dir, "cookies"),
     // This server never exercises the campaign routes; the caches are
@@ -1260,6 +1264,7 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
     supervisor: ctx.supervisor as never,
     stateService: idle,
     history: ctx.history,
+    dailyPoints: ctx.dailyPoints,
     helper: ctx.client as never,
     loginRunner: ctx.loginRunner as never,
     loginStatus: ctx.loginStatus,
@@ -1964,5 +1969,24 @@ describe("GET /api/streamers/:login/schedule", () => {
   test("looks back no further than twelve weeks", async () => {
     ctx.streamers.see("alpha", NOW - 20 * WEEK);
     expect((await get("alpha")).json().since).toBe(NOW - 12 * WEEK);
+  });
+});
+
+describe("GET /api/insights/calendar", () => {
+  const get = (query = "") => ctx.app.inject({
+    method: "GET", url: `/api/insights/calendar${query}`, cookies: auth(),
+  });
+
+  test("covers a year by default", async () => {
+    const body = (await get()).json();
+    expect(body.days).toHaveLength(365);
+    expect(body.since).toBeNull();
+    expect(body.streak).toEqual({ current: 0, longest: 0 });
+  });
+
+  test("clamps the number of days", async () => {
+    expect((await get("?days=0")).json().days).toHaveLength(1);
+    expect((await get("?days=5000")).json().days).toHaveLength(730);
+    expect((await get("?days=abc")).json().days).toHaveLength(365);
   });
 });

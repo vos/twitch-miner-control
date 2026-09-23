@@ -13,6 +13,7 @@ import { COMPONENT, EVENT } from "../appLog/types.js";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { UpdateChecker } from "../config/updateCheck.js";
 import { resolveVersion } from "../config/version.js";
+import type { DailyPoints } from "../db/dailyPoints.js";
 import type { History } from "../db/history.js";
 import type { Streamers } from "../db/streamers.js";
 import type { LoginProgress, LoginRunner } from "../helpers/loginRunner.js";
@@ -25,6 +26,7 @@ import type { PendingRestart } from "../drops/pendingRestart.js";
 import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
 import { campaignQueue } from "../drops/queue.js";
+import { buildCalendar } from "../insights/calendar.js";
 import { gainWindow } from "../state/gains.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { StateService } from "../state/service.js";
@@ -173,6 +175,8 @@ export interface ServerDeps {
    * with an unfloored figure, rather than failing to build.
    */
   streamers?: Streamers;
+  /** Points earned per day, kept past the snapshot prune; Insights reads it. */
+  dailyPoints: DailyPoints;
   helper: NdjsonClient;
   loginRunner: LoginRunner;
   /**
@@ -973,6 +977,16 @@ export function buildServer(deps: ServerDeps): AppServer {
         now,
         spans: clip(deps.history.streamerSpans(login.data, since), since, now),
       };
+    });
+
+    instance.get("/api/insights/calendar", async (request) => {
+      const raw = Number((request.query as { days?: unknown }).days ?? 365);
+      const days = Number.isFinite(raw) ? Math.min(730, Math.max(1, Math.floor(raw))) : 365;
+      return buildCalendar(
+        { history: deps.history, daily: deps.dailyPoints, streamers: deps.streamers },
+        Date.now(),
+        days,
+      );
     });
 
     instance.get("/api/logs", async () => deps.supervisor.logs());
