@@ -1,12 +1,14 @@
 import { Alert, Button, Group, Modal, SegmentedControl, Stack, Text } from "@mantine/core";
 import { IconActivity, IconCoins } from "@tabler/icons-react";
 import { useState } from "react";
+import { useLiveSchedule } from "../api/useLiveSchedule.js";
 import { useStreamerDetail } from "../api/useStreamerDetail.js";
 import {
   RANGE_KEYS, RANGE_LABELS, rangeWindow, type RangeKey,
 } from "../lib/detailRanges.js";
 import { CoverageTimeline } from "./CoverageTimeline.js";
 import { Gain } from "./Gain.js";
+import { LiveSchedule } from "./LiveSchedule.js";
 import { PointsChart } from "./PointsChart.js";
 import { RollingNumber } from "./RollingNumber.js";
 import { StatusPill } from "./StatusPill.js";
@@ -61,6 +63,8 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
     opened && s !== null ? s.username : null,
     range,
   );
+  // Once per open, not per range: the grid has its own fixed window.
+  const schedule = useLiveSchedule(opened && s !== null ? s.username : null);
 
   if (s === null) return null;
 
@@ -181,6 +185,7 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
                 coverage={detail.coverage}
                 days={COVERAGE_DAYS[range]}
               />
+              <LiveSchedule data={schedule.data} error={schedule.error} />
             </>
           );
         })()}

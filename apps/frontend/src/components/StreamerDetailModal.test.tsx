@@ -326,3 +326,22 @@ test("the activity view lets the feed own the scrolling, not the modal too", asy
   expect(stack?.getAttribute("style")).toContain("min-height: 0");
   expect(stack?.getAttribute("style")).toContain("flex: 1");
 });
+
+test("the history view ends with when the channel is usually live", async () => {
+  const now = Date.now();
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+    ok: true, status: 200,
+    json: async () => (url.includes("/schedule")
+      ? { since: now - 3 * 7 * 86_400_000, now, spans: [] }
+      : {
+          series: [], events: [], sessions: [],
+          coverage: { live: [], mined: [] }, firstSeen: null, retentionFloor: null,
+          gained: null, gainedSince: null,
+        }),
+  })));
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  expect(await screen.findByTestId("live-schedule")).toHaveTextContent(/last 3 weeks/i);
+  expect(screen.getAllByTestId("schedule-cell")).toHaveLength(168);
+  const calls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls;
+  expect(calls.some(([url]) => url === "/api/streamers/alpha/schedule")).toBe(true);
+});

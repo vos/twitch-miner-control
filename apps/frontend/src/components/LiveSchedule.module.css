@@ -1,0 +1,26 @@
+/* 24 hour columns after a column of weekday labels. The 2px gap is the
+   surface showing between cells, so neighbouring cells never merge. */
+.grid {
+  display: grid;
+  grid-template-columns: 30px repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.cell {
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* The hour it is now, so "are they usually on at this time?" is answered
+   at a glance. An outline, not a fill: the fill is the data. */
+.now {
+  outline: 1px solid var(--tw-text);
+  outline-offset: 1px;
+}
+
+.legendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
