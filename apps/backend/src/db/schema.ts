@@ -94,6 +94,43 @@ export function openDb(path: string): Db {
       earned   INTEGER NOT NULL,
       PRIMARY KEY (day, streamer)
     );
+
+    -- One row per place notifications can go. Web Push devices get a
+    -- random id. Credentials never live here: prefs are not secrets.
+    CREATE TABLE IF NOT EXISTS notify_destinations (
+      id            TEXT PRIMARY KEY,
+      channel       TEXT    NOT NULL,
+      label         TEXT    NOT NULL,
+      -- Web Push only: the upsert key, and how a browser finds its own row.
+      endpoint      TEXT    UNIQUE,
+      subscription  TEXT,
+      prefs         TEXT    NOT NULL,
+      -- 0 = paused: nothing is sent.
+      enabled       INTEGER NOT NULL,
+      created_ts    INTEGER NOT NULL,
+      last_ok_ts    INTEGER,
+      last_error    TEXT,
+      last_error_ts INTEGER
+    );
+
+    -- The in-app inbox. Only kinds whose catalogue entry says inbox.
+    CREATE TABLE IF NOT EXISTS notifications (
+      id       INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts       INTEGER NOT NULL,
+      kind     TEXT    NOT NULL,
+      title    TEXT    NOT NULL,
+      body     TEXT    NOT NULL,
+      streamer TEXT,
+      link     TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications (ts);
+
+    -- "Already told them" keys that must survive a restart, such as
+    -- 'app.update:1.4.0' or 'campaign.completed:<id>'.
+    CREATE TABLE IF NOT EXISTS notify_seen (
+      key TEXT PRIMARY KEY,
+      ts  INTEGER NOT NULL
+    );
   `);
   addEventColumns(db);
   return db;
