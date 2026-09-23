@@ -581,3 +581,12 @@ test("dragging past an owned row does not move it", async () => {
   expect(rows[0].textContent).toContain("beta");
   expect(rows[2].textContent).toContain("alpha");
 });
+
+test("a prefill lands in the add box without adding anything", async () => {
+  renderApp(<Streamers prefill={{ value: "newbie", id: 1 }} />);
+  const field = await screen.findByLabelText("Add streamer");
+  expect(field).toHaveValue("newbie");
+  // Adding is a staged draft that still needs Apply: the prefill only
+  // saves typing, it must not look the channel up or stage it.
+  expect(calls.some((c) => c.url.startsWith("/api/streamers/lookup"))).toBe(false);
+});

@@ -3,8 +3,13 @@ import { IconSearch } from "@tabler/icons-react";
 import { useState } from "react";
 import { parseStreamerInput } from "../lib/parseStreamerInput.js";
 
-export function AddStreamer({ onAdd }: { onAdd: (username: string) => Promise<void> }) {
-  const [value, setValue] = useState("");
+export function AddStreamer({ onAdd, initialValue = "", autoFocus = false }: {
+  onAdd: (username: string) => Promise<void>;
+  /** Read once, on mount; remount (via `key`) to apply a new one. */
+  initialValue?: string;
+  autoFocus?: boolean;
+}) {
+  const [value, setValue] = useState(initialValue);
   const [busy, setBusy] = useState(false);
   const [invalid, setInvalid] = useState<string | null>(null);
 
@@ -36,6 +41,7 @@ export function AddStreamer({ onAdd }: { onAdd: (username: string) => Promise<vo
         placeholder="username or https://twitch.tv/username"
         leftSection={<IconSearch size={16} stroke={1.7} />}
         error={invalid}
+        autoFocus={autoFocus}
         value={value}
         onChange={(e) => { setValue(e.currentTarget.value); setInvalid(null); }}
         onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}

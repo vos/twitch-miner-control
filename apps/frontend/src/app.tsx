@@ -12,6 +12,7 @@ import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { StreamerDetailHost } from "./components/StreamerDetailHost.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
+import { type ScreenIntent, type ScreenParams, stamped } from "./lib/screenIntent.js";
 import { START_HELD_NOTE, shownState } from "./lib/minerState.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
 import { Dashboard } from "./routes/Dashboard.js";
@@ -38,8 +39,14 @@ const SCREENS = {
       />
     ),
   },
-  streamers: { label: "Streamers", element: () => <Streamers /> },
-  drops: { label: "Drops", element: () => <Drops /> },
+  streamers: {
+    label: "Streamers",
+    element: (p: ScreenProps) => <Streamers prefill={stamped(p.intent, "prefill")} />,
+  },
+  drops: {
+    label: "Drops",
+    element: (p: ScreenProps) => <Drops jump={stamped(p.intent, "campaign")} />,
+  },
   logs: { label: "Logs", element: () => <Logs /> },
   settings: { label: "Settings", element: () => <Settings /> },
   account: { label: "Twitch account", element: () => <TwitchLogin /> },
@@ -47,7 +54,9 @@ const SCREENS = {
 
 interface ScreenProps {
   loginRequired: boolean;
-  navigate: (key: ScreenKey) => void;
+  navigate: (key: ScreenKey, params?: ScreenParams) => void;
+  /** The params of the navigation that led here, if it carried any. */
+  intent: ScreenIntent | null;
   /** Opens a streamer's detail dialog over whatever screen is showing. */
   openStreamer: (login: string) => void;
 }
@@ -91,6 +100,10 @@ function Shell() {
   // Which streamer's detail dialog is open. Here rather than on the
   // dashboard so the command palette can open one from any screen.
   const [openLogin, setOpenLogin] = useState<string | null>(null);
+  // The params of the latest navigation, tagged with the screen they are
+  // for. A navigation without params clears them, which makes them one-shot.
+  const [intent, setIntent] = useState<(ScreenIntent & { key: ScreenKey }) | null>(null);
+  const intentSeq = useRef(0);
   // One value rather than two pieces of state, so a status update can never
   // land a new state beside the previous run's start time -- which would
   // render a STOPPED badge next to a still-ticking uptime.
@@ -199,8 +212,10 @@ function Shell() {
 
   const liveCount = snapshot?.streamers.filter((s) => s.isOnline).length ?? 0;
 
-  const navigate = (key: ScreenKey) => {
+  const navigate = (key: ScreenKey, params?: ScreenParams) => {
     setScreen(key);
+    intentSeq.current += 1;
+    setIntent(params === undefined ? null : { key, params, id: intentSeq.current });
     // On mobile the sidebar is a slide-over; leaving it open over the
     // screen the user just chose hides the thing they navigated to. The
     // wide-screen sidebar covers nothing, so it stays as the user set it.
@@ -272,6 +287,7 @@ function Shell() {
         {SCREENS[screen].element({
           loginRequired: loginRequired && loginKnown,
           navigate,
+          intent: intent?.key === screen ? intent : null,
           openStreamer: setOpenLogin,
         })}
         <StreamerDetailHost login={openLogin} onClose={() => setOpenLogin(null)} />

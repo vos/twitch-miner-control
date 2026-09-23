@@ -20,6 +20,7 @@ import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
 import { formatDateHour } from "../lib/formatClock.js";
 import { formatSpan } from "../lib/formatSpan.js";
+import type { Stamped } from "../lib/screenIntent.js";
 import classes from "./Drops.module.css";
 
 /** A subscription as the API reports it, with its resolved channels. */
@@ -557,7 +558,10 @@ function SubscriptionRow({
  * day apart -- campaign metadata barely moves, progress does -- and one
  * combined figure would describe neither.
  */
-export function Drops() {
+export function Drops({ jump = null }: {
+  /** A campaign the command palette wants opened and scrolled to. */
+  jump?: Stamped<string> | null;
+} = {}) {
   const [data, setData] = useState<CampaignsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<"progress" | "catalogue" | null>(null);
@@ -585,6 +589,28 @@ export function Drops() {
    * links does not leave a trail of opened cards behind.
    */
   const [jumpedTo, setJumpedTo] = useState<string | null>(null);
+  // The palette's jump, applied once the catalogue is here to jump into.
+  // Tracked by id so the same jump is applied once, however often this
+  // renders, while a second jump to the same campaign still applies.
+  const [appliedJump, setAppliedJump] = useState<number | null>(null);
+  // Set alongside a jump; the effect below consumes it after the card has
+  // rendered, which is the earliest it can be scrolled to.
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  if (jump !== null && data !== null && jump.id !== appliedJump) {
+    setAppliedJump(jump.id);
+    // The view and the filter could both hide the campaign being jumped
+    // to, and a jump that lands on nothing looks broken.
+    setView("all");
+    setFilter("");
+    setJumpedTo(jump.value);
+    setScrollTo(jump.value);
+  }
+  useEffect(() => {
+    if (scrollTo === null) return;
+    document.getElementById(`campaign-${scrollTo}`)
+      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    setScrollTo(null);
+  }, [scrollTo]);
 
   useEffect(() => {
     let live = true;

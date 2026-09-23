@@ -52,3 +52,14 @@ test("drops the error as soon as the field is edited again", async () => {
   await userEvent.type(field, "c");
   expect(screen.queryByText("Enter a Twitch username or channel link")).not.toBeInTheDocument();
 });
+
+test("starts with the value it is given, focused when asked", () => {
+  render(
+    <MantineProvider>
+      <AddStreamer onAdd={vi.fn()} initialValue="newbie" autoFocus />
+    </MantineProvider>,
+  );
+  const field = screen.getByLabelText("Add streamer");
+  expect(field).toHaveValue("newbie");
+  expect(field).toHaveFocus();
+});

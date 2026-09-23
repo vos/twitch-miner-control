@@ -12,6 +12,7 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { AddStreamer } from "../components/AddStreamer.js";
+import type { Stamped } from "../lib/screenIntent.js";
 import { StreamerSettingsModal } from "../components/StreamerSettingsModal.js";
 import { PendingBar } from "../components/PendingBar.js";
 import { StreamerRow } from "../components/StreamerRow.js";
@@ -53,7 +54,10 @@ interface Config {
   defaults: Record<string, unknown>; streamers: StreamerEntry[];
 }
 
-export function Streamers() {
+export function Streamers({ prefill = null }: {
+  /** Text the command palette wants in the add box. */
+  prefill?: Stamped<string> | null;
+} = {}) {
   const [saved, setSaved] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Config | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -232,7 +236,14 @@ export function Streamers() {
           </Tooltip>
       </Group>
       {error && <Alert role="alert" color="red">{error}</Alert>}
-      <AddStreamer onAdd={add} />
+      {/* Keyed to the navigation, so each prefill remounts the box with
+          its own text and a plain visit gets an empty one. */}
+      <AddStreamer
+        key={prefill?.id ?? 0}
+        onAdd={add}
+        initialValue={prefill?.value}
+        autoFocus={prefill !== null}
+      />
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

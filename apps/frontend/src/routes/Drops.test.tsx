@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { MantineProvider } from "@mantine/core";
 import { Drops } from "./Drops.js";
+import { theme } from "../theme.js";
 import { dragBy, renderApp, restoreRects, stubRowRects } from "../test-utils.js";
 
 const aDrop = {
@@ -1454,4 +1456,29 @@ test("the game is not capped to a share of the row", async () => {
   const row = await screen.findByTestId("subscription-row");
   const game = await within(row).findByTestId("subscription-game");
   expect(game.style.maxWidth).toBe("");
+});
+
+test("a jump opens that campaign and scrolls it into view", async () => {
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+  renderApp(<Drops jump={{ value: "c1", id: 1 }} />);
+  // Crate is c1's only drop, and only an opened card shows it.
+  expect(await screen.findByText("Crate")).toBeTruthy();
+  await waitFor(() => expect(scroll).toHaveBeenCalled());
+  expect((scroll.mock.contexts[0] as Element).id).toBe("campaign-c1");
+  scroll.mockRestore();
+});
+
+test("a jump clears a filter that would hide its campaign", async () => {
+  const { rerender } = renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.type(screen.getByLabelText(/filter/i), "Beta");
+  expect(screen.queryByText("Alpha Campaign")).toBeNull();
+
+  rerender(
+    <MantineProvider theme={theme} forceColorScheme="dark">
+      <Drops jump={{ value: "c1", id: 1 }} />
+    </MantineProvider>,
+  );
+  expect(await screen.findByText("Alpha Campaign")).toBeTruthy();
+  expect(screen.getByLabelText(/filter/i)).toHaveValue("");
 });
