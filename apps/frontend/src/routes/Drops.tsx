@@ -18,6 +18,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
+import { matchesCampaign, matchesDrop, matchesHeader } from "../lib/campaignMatch.js";
 import { formatDateHour } from "../lib/formatClock.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import type { Stamped } from "../lib/screenIntent.js";
@@ -158,17 +159,6 @@ function age(at: number): string | null {
   if (at <= 0) return null;
   const delta = Date.now() - at;
   return delta < 60_000 ? "just now" : `${formatSpan(delta)} ago`;
-}
-
-/** Whether a campaign's own name or its game contains the needle. */
-function matchesHeader(c: ResolvedCampaign, needle: string): boolean {
-  return c.name.toLowerCase().includes(needle)
-    || (c.game?.displayName.toLowerCase().includes(needle) ?? false);
-}
-
-/** Whether any drop inside the campaign contains the needle. */
-function matchesDrop(c: ResolvedCampaign, needle: string): boolean {
-  return c.drops.some((d) => d.name.toLowerCase().includes(needle));
 }
 
 /**
@@ -755,13 +745,9 @@ export function Drops({ jump = null }: {
     const matched =
       needle === "" || data === null
         ? inScope
-        : inScope.filter((c) =>
-            // Name, game or drop: the game is how most campaigns are
-            // actually found, and the drop is often the only name the
-            // player knows -- they are hunting a particular skin, not
-            // whatever the campaign offering it is called. A separate box
-            // per field would not earn its width.
-            matchesHeader(c, needle) || matchesDrop(c, needle));
+        // One box for all three fields: a separate box per field would not
+        // earn its width.
+        : inScope.filter((c) => matchesCampaign(c, needle));
 
     // Five tiers, then soonest deadline within each.
     //
