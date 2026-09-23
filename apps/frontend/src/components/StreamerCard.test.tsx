@@ -2,6 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
+import { FLOAT_MS } from "./GainFloat.js";
 import { StreamerCard } from "./StreamerCard.js";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -769,3 +770,39 @@ test("an animated balance rolls, and lands on the new figure", () => {
 });
 
 afterEach(() => vi.useRealTimers());
+
+const animated = (points: number, animate = true) => {
+  // jsdom has a real requestAnimationFrame; faked, so no roll outlives
+  // the test. The afterEach added in Task 3 restores real timers.
+  vi.useFakeTimers({
+    toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+  });
+  return (
+    <MantineProvider>
+      <StreamerCard streamer={{ ...base, points }} animate={animate} />
+    </MantineProvider>
+  );
+};
+
+test("a gain floats its amount over the balance, then goes", () => {
+  const { rerender } = render(animated(1000));
+  rerender(animated(1050));
+  const float = screen.getByTestId("gain-float");
+  expect(float).toHaveTextContent("+50");
+  // Decoration only: the balance itself already says what changed.
+  expect(float).toHaveAttribute("aria-hidden", "true");
+  act(() => vi.advanceTimersByTime(FLOAT_MS));
+  expect(screen.queryByTestId("gain-float")).toBeNull();
+});
+
+test("spending floats nothing", () => {
+  const { rerender } = render(animated(1000));
+  rerender(animated(900));
+  expect(screen.queryByTestId("gain-float")).toBeNull();
+});
+
+test("a card that is not animating floats nothing", () => {
+  const { rerender } = render(animated(1000, false));
+  rerender(animated(1050, false));
+  expect(screen.queryByTestId("gain-float")).toBeNull();
+});

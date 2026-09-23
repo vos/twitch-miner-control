@@ -1,0 +1,26 @@
+/* Rises from just above the balance's right edge and fades. Absolute, so
+   it never pushes the gains beside the balance around. */
+.float {
+  position: absolute;
+  right: 0;
+  bottom: 75%;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tw-success);
+  white-space: nowrap;
+  pointer-events: none;
+  /* Duration set inline from FLOAT_MS, which also times its removal. */
+  animation: rise ease-out forwards;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  15% { opacity: 1; }
+  to { opacity: 0; transform: translateY(-16px); }
+}
+
+/* No float at all rather than a still one: a +N that sits there reads as
+   part of the balance. */
+@media (prefers-reduced-motion: reduce) {
+  .float { display: none; }
+}

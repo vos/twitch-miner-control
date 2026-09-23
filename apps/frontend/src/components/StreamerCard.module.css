@@ -57,6 +57,8 @@
 }
 
 .balance {
+  /* The anchor for GainFloat's rising +N. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;

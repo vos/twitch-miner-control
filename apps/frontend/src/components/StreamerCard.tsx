@@ -1,6 +1,7 @@
 import { Stack, Text } from "@mantine/core";
 import { IconCoins } from "@tabler/icons-react";
 import { Gain } from "./Gain.js";
+import { GainFloat } from "./GainFloat.js";
 import { RollingNumber } from "./RollingNumber.js";
 import { Sparkline } from "./Sparkline.js";
 import { StreamContext } from "./StreamContext.js";
@@ -8,6 +9,7 @@ import { ViewerCount } from "./ViewerCount.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamerMeta } from "./StreamerMeta.js";
 import { StreamerTimes } from "./StreamerTimes.js";
+import { useGainFloat } from "../lib/useGainFloat.js";
 import { useLiveDuration } from "../lib/useLiveDuration.js";
 import { StatusPill } from "./StatusPill.js";
 import classes from "./StreamerCard.module.css";
@@ -25,6 +27,7 @@ export function StreamerCard({ streamer: s, onOpen, animate = false }: {
   // statement -- so the two belong in one element instead of repeating
   // each other down the card.
   const elapsed = useLiveDuration(live ? s.liveSince ?? null : null);
+  const [float, clearFloat] = useGainFloat(s.points, animate);
   return (
     <div
       className={`${classes.card} ${live ? classes.live : classes.offline}${
@@ -119,6 +122,7 @@ export function StreamerCard({ streamer: s, onOpen, animate = false }: {
                 glyph's face would be a wrong claim. */}
             <IconCoins className={classes.coin} stroke={2} aria-hidden />
             <RollingNumber value={s.points} animate={animate} />
+            <GainFloat float={float} onDone={clearFloat} />
           </Text>
           <div className={classes.gains}>
             {/* A zero stream gain is dropped, not printed. "0 stream"
