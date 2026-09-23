@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { RECONNECT_DELAY_MS } from "./api/useLiveState.js";
 import { App } from "./app.js";
+import { palette } from "./components/CommandPalette.js";
 import { renderApp } from "./test-utils.js";
 
 // I3: `/api/status` already reports `loginRequired` correctly (see
@@ -41,6 +42,8 @@ function stub(loginRequired: boolean, status: object = {}) {
 }
 
 afterEach(() => {
+  // The palette's store is module-level; an open one would leak onward.
+  act(() => palette.close());
   vi.unstubAllGlobals();
   // The sidebar collapse preference persists, and jsdom shares localStorage
   // across the tests in a file -- one test's collapse would otherwise be the
@@ -357,4 +360,31 @@ test("keeps the sidebar open on a wide screen when a nav row is chosen", async (
   view();
   await userEvent.click(await screen.findByRole("button", { name: /^streamers$/i }));
   expect(desktopCollapsed()).toBe(false);
+});
+
+// --- the command palette ---
+
+test("Ctrl+K opens the command palette", async () => {
+  stub(false);
+  view();
+  await screen.findByTestId("miner-state");
+  await userEvent.keyboard("{Control>}k{/Control}");
+  expect(await screen.findByPlaceholderText(/search streamers/i)).toBeInTheDocument();
+});
+
+test("the header's search button opens it too", async () => {
+  stub(false);
+  view();
+  await userEvent.click(await screen.findByTestId("palette-button"));
+  expect(await screen.findByPlaceholderText(/search streamers/i)).toBeInTheDocument();
+});
+
+test("a screen chosen in the palette is navigated to", async () => {
+  stub(false);
+  view();
+  await userEvent.click(await screen.findByTestId("palette-button"));
+  // Logs, because this file's generic fetch stub is shaped to render it.
+  await userEvent.type(await screen.findByPlaceholderText(/search streamers/i), "logs");
+  await userEvent.click(await screen.findByTestId("palette-screen:logs"));
+  expect(await screen.findByTestId("screen-title")).toHaveTextContent("Logs");
 });

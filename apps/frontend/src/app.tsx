@@ -6,6 +6,7 @@ import { LiveStateProvider, useLiveState, useStreamEvent } from "./api/useLiveSt
 import {
   RestartBanner, type PendingRestartState,
 } from "./components/RestartBanner.js";
+import { CommandPalette, PaletteButton } from "./components/CommandPalette.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
@@ -51,6 +52,10 @@ const SCREENS = {
   settings: { label: "Settings", element: () => <Settings /> },
   account: { label: "Twitch account", element: () => <TwitchLogin /> },
 } as const;
+
+/** Every screen by key and label, for the palette's "Go to" group. */
+const SCREEN_LIST = (Object.keys(SCREENS) as ScreenKey[])
+  .map((key) => ({ key, label: SCREENS[key].label }));
 
 interface ScreenProps {
   loginRequired: boolean;
@@ -241,9 +246,10 @@ function Shell() {
               aria-label="Toggle sidebar"
               size="sm"
             />
-            <Text fw={600}>{SCREENS[screen].label}</Text>
+            <Text fw={600} data-testid="screen-title">{SCREENS[screen].label}</Text>
           </Group>
           <Group gap="sm" wrap="nowrap">
+            <PaletteButton />
             <Tooltip label={connected ? "Live updates connected" : "Live updates disconnected"}>
               <span
                 data-testid="stream-connected"
@@ -291,6 +297,15 @@ function Shell() {
           openStreamer: setOpenLogin,
         })}
         <StreamerDetailHost login={openLogin} onClose={() => setOpenLogin(null)} />
+        {/* The shown state, as the sidebar's dock uses: the palette offers
+            exactly the miner actions the dock does. */}
+        <CommandPalette
+          screens={SCREEN_LIST}
+          minerState={shown.state}
+          onMinerChange={setMiner}
+          onNavigate={navigate}
+          onOpenStreamer={setOpenLogin}
+        />
       </AppShell.Main>
     </AppShell>
   );
