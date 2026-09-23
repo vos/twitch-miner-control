@@ -109,3 +109,13 @@ test("a month starts on the first", () => {
   expect(period.from).toBe(at(9, 1, 0));
   expect(totals.earned).toBe(560);
 });
+
+test("channels mined at the same time count once: mined is time spent mining", () => {
+  seed();
+  // Beta overlaps both alpha (06-08) and gamma (08-11); added up it would
+  // read 7h, but the miner only spent 06-11 on anything.
+  stream("beta", "b1", at(9, 14, 7), at(9, 14, 9), 2);
+  const { totals } = buildRecap(deps(), NOW, "week", 0);
+  expect(totals.minedMs).toBe(5 * HOUR);
+  expect(totals.streams).toBe(3);
+});

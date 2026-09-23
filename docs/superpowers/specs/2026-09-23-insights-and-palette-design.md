@@ -100,7 +100,16 @@ the current period's recap are always current.
 Mined time reuses the existing three-clock intersection
 (`apps/backend/src/state/service.ts:686`): channel live spans ∩ miner
 spans, floored at the channel's `first_seen_ts`, clipped to the day or
-period. The recap's figures therefore agree with the cards'.
+period. Per channel (the recap's "most watched") that figure is used as
+is, so it agrees with the cards.
+
+Totals across channels (the recap's "mined" and the calendar's per-day
+figure) are *time spent mining*: the union of every channel's mined
+spans, so channels mined at the same moment count once and the total
+never exceeds the miner's uptime. Adding the per-channel figures instead
+counted every tracked channel that was live while the miner was up; on a
+roster of ~50 channels that reported 387h mined in a week with 8h of
+uptime, although Twitch only credits two channels at a time.
 
 ### Module
 

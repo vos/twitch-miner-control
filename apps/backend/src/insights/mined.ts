@@ -8,6 +8,28 @@ export interface InsightsDeps extends RollupDeps {
 }
 
 /**
+ * The time covered by any of the spans, with overlaps counted once.
+ *
+ * What "mined" means once channels are combined: the time the miner spent
+ * mining. Adding each channel's mined time instead counts every tracked
+ * channel that happened to be live while the miner was up -- with a large
+ * roster, many times the miner's own uptime, though Twitch only credits
+ * two channels at a time.
+ */
+export function mergeSpans(spans: ReadonlyArray<Span>): Array<{ start: number; end: number }> {
+  const sorted = spans
+    .map((s) => ({ start: s.start, end: s.end ?? s.start }))
+    .sort((a, b) => a.start - b.start);
+  const out: Array<{ start: number; end: number }> = [];
+  for (const span of sorted) {
+    const last = out[out.length - 1];
+    if (last !== undefined && span.start <= last.end) last.end = Math.max(last.end, span.end);
+    else out.push({ ...span });
+  }
+  return out;
+}
+
+/**
  * Each channel's mined spans within `[fromTs, toTs]`, and how many of its
  * streams had any.
  *

@@ -80,3 +80,17 @@ test("mined time is live and miner-up at once, per day", () => {
   expect(byDate.get("2026-09-16")?.minedMs).toBe(2 * HOUR);
   expect(byDate.get("2026-09-17")?.minedMs).toBe(1 * HOUR);
 });
+
+test("channels mined at the same time count once per day", () => {
+  history.openMinerSession(at(16, 20));
+  history.closeMinerSession(at(17, 2));
+  history.openStreamerSession("alpha", "s1", at(16, 22), null);
+  history.openStreamerSession("beta", "b1", at(16, 23), null);
+  history.recordPoints("alpha", 5, at(17, 1));
+  history.recordPoints("beta", 5, at(17, 1));
+  history.closeStreamerSessionsExcept("alpha", null, at(17, 1));
+  history.closeStreamerSessionsExcept("beta", null, at(17, 1));
+  const byDate = new Map(buildCalendar(deps(), NOW, 2).days.map((d) => [d.date, d]));
+  expect(byDate.get("2026-09-16")?.minedMs).toBe(2 * HOUR); // not 3h
+  expect(byDate.get("2026-09-17")?.minedMs).toBe(1 * HOUR); // not 2h
+});

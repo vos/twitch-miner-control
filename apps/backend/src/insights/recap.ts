@@ -1,13 +1,16 @@
-import { clip, total } from "../state/spans.js";
+import { clip, total, type Span } from "../state/spans.js";
 import { earnedRows } from "./calendar.js";
 import { addDays, dayKey, monthStart, weekStart } from "./days.js";
-import { minedByStreamer, type InsightsDeps } from "./mined.js";
+import { mergeSpans, minedByStreamer, type InsightsDeps } from "./mined.js";
 
 export type PeriodKind = "week" | "month";
 
 export interface Totals {
   earned: number;
-  /** Summed across channels, as adding up the cards would. */
+  /**
+   * Time spent mining: miner up with at least one tracked channel live,
+   * channels mined at once counted once. Never more than the uptime.
+   */
   minedMs: number;
   /** Streams with any mined time in the period. */
   streams: number;
@@ -69,16 +72,17 @@ function summarise(deps: InsightsDeps, from: number, to: number, now: number): S
     perDay.set(row.day, (perDay.get(row.day) ?? 0) + row.earned);
   }
 
-  let minedMs = 0;
   let streams = 0;
+  const minedSpans: Span[] = [];
   for (const [login, mined] of minedByStreamer(deps, from, to)) {
-    const ms = total(mined.spans);
+    // Per channel, its own mined time: what "most watched" ranks by.
     const entry = channels.get(login) ?? { earned: 0, minedMs: 0 };
-    entry.minedMs += ms;
+    entry.minedMs += total(mined.spans);
     channels.set(login, entry);
-    minedMs += ms;
+    minedSpans.push(...mined.spans);
     streams += mined.streams;
   }
+  const minedMs = total(mergeSpans(minedSpans));
 
   const up = total(clip(deps.history.minerSpans(from), from, to));
   return {

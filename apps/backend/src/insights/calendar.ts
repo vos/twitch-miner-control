@@ -1,6 +1,6 @@
 import type { DailyRow } from "../db/dailyPoints.js";
 import { addDays, dayKey, dayStart, msByDay } from "./days.js";
-import { minedByStreamer, type InsightsDeps } from "./mined.js";
+import { mergeSpans, minedByStreamer, type InsightsDeps } from "./mined.js";
 import { earnedByStreamer, rollupDays } from "./rollup.js";
 
 export interface CalendarDay {
@@ -51,11 +51,10 @@ export function buildCalendar(deps: InsightsDeps, now: number, days: number): Ca
     perDay.set(row.day, entry);
   }
 
-  const mined = msByDay(
-    [...minedByStreamer(deps, dayStart(from), now).values()]
-      .flatMap((m) => m.spans)
-      .map((s) => ({ start: s.start, end: s.end ?? s.start })),
-  );
+  // Time spent mining each day: channels mined at once count once.
+  const mined = msByDay(mergeSpans(
+    [...minedByStreamer(deps, dayStart(from), now).values()].flatMap((m) => m.spans),
+  ));
 
   const logins = [...perDay.values()].flatMap((e) => (e.top === null ? [] : [e.top.login]));
   const names = deps.streamers?.get([...new Set(logins)]) ?? new Map();
