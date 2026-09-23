@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
@@ -1910,4 +1910,59 @@ test("the app log route needs a session", async () => {
   const res = await app.inject({ method: "GET", url: "/api/app-log" });
   expect(res.statusCode).toBe(401);
   await app.close();
+});
+
+describe("GET /api/streamers/:login/schedule", () => {
+  const HOUR = 3_600_000;
+  const WEEK = 7 * 24 * HOUR;
+  const NOW = 100 * WEEK;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const get = (login: string) => ctx.app.inject({
+    method: "GET", url: `/api/streamers/${login}/schedule`, cookies: auth(),
+  });
+
+  /** A finished stream. Sessions close at the last point snapshot, so one
+   *  is written at `end`; call these in chronological order. */
+  const stream = (id: string, start: number, end: number) => {
+    ctx.history.openStreamerSession("alpha", id, start, null);
+    ctx.history.recordPoints("alpha", end, end);
+    ctx.history.closeStreamerSessionsExcept("alpha", null, end);
+  };
+
+  test("refuses a login that is not a Twitch username", async () => {
+    expect((await get("not%20valid")).statusCode).toBe(400);
+  });
+
+  test("a channel never seen has an empty window, not twelve weeks of zeros", async () => {
+    expect((await get("alpha")).json()).toEqual({ since: NOW, now: NOW, spans: [] });
+  });
+
+  test("starts at the first sighting and clips streams to the window", async () => {
+    ctx.streamers.see("alpha", NOW - 3 * WEEK);
+    stream("before", NOW - 4 * WEEK, NOW - 4 * WEEK + HOUR);
+    stream("straddles", NOW - 3 * WEEK - HOUR, NOW - 3 * WEEK + 2 * HOUR);
+    stream("inside", NOW - 2 * WEEK, NOW - 2 * WEEK + 3 * HOUR);
+    ctx.history.openStreamerSession("alpha", "live", NOW - HOUR, null);
+
+    const body = (await get("alpha")).json();
+    expect(body.since).toBe(NOW - 3 * WEEK);
+    expect(body.now).toBe(NOW);
+    expect(body.spans).toEqual([
+      { start: NOW - 3 * WEEK, end: NOW - 3 * WEEK + 2 * HOUR },
+      { start: NOW - 2 * WEEK, end: NOW - 2 * WEEK + 3 * HOUR },
+      // Still live: read as running until now.
+      { start: NOW - HOUR, end: NOW },
+    ]);
+  });
+
+  test("looks back no further than twelve weeks", async () => {
+    ctx.streamers.see("alpha", NOW - 20 * WEEK);
+    expect((await get("alpha")).json().since).toBe(NOW - 12 * WEEK);
+  });
 });

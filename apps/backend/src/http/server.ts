@@ -32,6 +32,10 @@ import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
 import { SseHub } from "./sse.js";
 
+/** How far back the live-schedule grid looks. */
+const SCHEDULE_WEEKS = 12;
+const WEEK_MS = 7 * 86_400_000;
+
 /**
  * Resolved once at module load rather than per request: it cannot change
  * while the process runs, and the manifest fallback touches the disk.
@@ -945,6 +949,29 @@ export function buildServer(deps: ServerDeps): AppServer {
         // what the window really covers instead of inferring the channel
         // began at the retention cutoff.
         retentionFloor: deps.history.earliestSample(login)?.ts ?? null,
+      };
+    });
+
+    // The live-schedule grid's data: when this channel was live over the
+    // weeks we have been watching it. Raw spans, not buckets -- the grid
+    // is laid out in the viewer's timezone, which only the browser knows.
+    instance.get("/api/streamers/:login/schedule", async (request, reply) => {
+      const login = usernameSchema.safeParse((request.params as { login?: unknown }).login);
+      if (!login.success) {
+        return reply.code(400).send({ error: "login must be a valid Twitch username" });
+      }
+      const now = Date.now();
+      // Never before our first sighting: before it, "not live" would only
+      // mean "not watched". A channel never seen has no window at all,
+      // rather than twelve weeks that read as never live.
+      const firstSeen = deps.streamers?.firstSeen(login.data) ?? null;
+      const since = firstSeen === null
+        ? now
+        : Math.max(now - SCHEDULE_WEEKS * WEEK_MS, firstSeen);
+      return {
+        since,
+        now,
+        spans: clip(deps.history.streamerSpans(login.data, since), since, now),
       };
     });
 
