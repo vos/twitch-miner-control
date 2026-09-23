@@ -382,12 +382,17 @@ const engine = new SubscriptionEngine({
   log: appLog.log,
 });
 
+// Set while the boot pass holds back a miner that is about to start;
+// the status frame reports it so the UI does not read that as STOPPED.
+let minerStartHeld = false;
+
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
   engine, pendingRestart,
+  minerStartHeld: () => minerStartHeld,
   log: appLog.log,
   appLog: appLogFeed,
 });
@@ -402,10 +407,32 @@ server = app;
 // next poll on, a refresh with nobody watching writes history and skips
 // the display half.
 void stateService.start().finally(() => { booting = false; });
-// Started after the miner, so the first pass does not race the boot
-// restart. A pass with no subscriptions returns immediately.
-engine.start();
-if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
+// The boot pass runs before the miner, so the miner starts on channels
+// that are already current and no restart is needed to apply them; the
+// timer starts after both. Not awaited: the pass can take seconds, and
+// neither the UI nor the signal handlers below should wait on it.
+// supervisor.start() records its own failures (CRASHED, spawn events)
+// and is a no-op if the miner is already running, so a Start pressed in
+// the meantime is safe.
+void (async () => {
+  // Only when the miner will start: without a session it would not, and
+  // "starting" would be a promise nothing keeps.
+  minerStartHeld = loggedIn.loggedIn && loadConfig(configPath).username !== "";
+  try {
+    await engine.boot();
+  } finally {
+    minerStartHeld = false;
+  }
+  if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
+  engine.start();
+})().catch((cause: unknown) => {
+  const err = cause instanceof Error ? cause.message : String(cause);
+  bootLog.error({
+    type: EVENT.MINER_SPAWN_FAILED,
+    msg: `the miner could not be started at boot: ${err}`,
+    err,
+  });
+});
 
 // Children are not killed when this process exits, so a SIGTERM from a
 // service manager would otherwise orphan the miner and both helpers --

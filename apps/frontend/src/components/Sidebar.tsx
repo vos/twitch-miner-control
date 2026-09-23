@@ -29,7 +29,8 @@ const REPO_URL = "https://github.com/vos/twitch-miner-control";
 const RELEASES_URL = `${REPO_URL}/releases`;
 
 export function Sidebar({
-  screen, onNavigate, liveCount, loginRequired, miner, onMinerChange, version,
+  screen, onNavigate, liveCount, loginRequired, miner, minerNote = null,
+  onMinerChange, version,
   latestVersion,
 }: {
   screen: ScreenKey;
@@ -37,6 +38,8 @@ export function Sidebar({
   liveCount: number;
   loginRequired: boolean;
   miner: MinerStatus;
+  /** Why the miner is in the state it is, when that needs saying. */
+  minerNote?: string | null;
   onMinerChange: (status: MinerStatus) => void;
   /**
    * Reported by the backend, so it names what is actually running rather
@@ -138,7 +141,7 @@ export function Sidebar({
       </Box>
       <Box p="md" style={{ borderTop: "1px solid var(--tw-border)" }}>
         <Stack gap="xs">
-          <MinerDock state={miner.state} onChange={onMinerChange} />
+          <MinerDock state={miner.state} note={minerNote} onChange={onMinerChange} />
           {/* Set apart from the miner actions: this one ends the browser
               session and touches nothing the miner is doing. */}
           <Divider my={4} color="var(--tw-border)" />

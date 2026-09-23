@@ -1,4 +1,6 @@
-import { Badge, Group, Popover, Skeleton, Stack, Text, UnstyledButton } from "@mantine/core";
+import {
+  Badge, Group, Popover, Skeleton, Stack, Text, Tooltip, UnstyledButton,
+} from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useEffect, useState } from "react";
 import { averageLabel } from "../lib/averageLabel.js";
@@ -119,7 +121,11 @@ function Figure(
  * which opens on tap as well as hover.
  */
 export function MinerStatusBadge(
-  { state, startedAt, history = [] }: MinerStatus & { history?: readonly ProcSample[] },
+  { state, startedAt, history = [], note = null }: MinerStatus & {
+    history?: readonly ProcSample[];
+    /** Why the state is what it is, when that needs saying; a tooltip. */
+    note?: string | null;
+  },
 ) {
   // Re-render on a ticking clock so the uptime below is recomputed from
   // the current time. Without this it would only move when a new status
@@ -150,6 +156,7 @@ export function MinerStatusBadge(
   return (
     <Group gap="xs" wrap="nowrap">
       {known ? (
+        <Tooltip label={note} disabled={note === null} multiline w={240}>
         <Badge
           variant="light"
           color={up ? "teal" : transitional ? "twitch" : "orange"}
@@ -163,6 +170,7 @@ export function MinerStatusBadge(
         >
           {state}
         </Badge>
+        </Tooltip>
       ) : (
         // Sized to a badge rather than to its text: an orange badge
         // reading "…" claims the miner is down before anything has said

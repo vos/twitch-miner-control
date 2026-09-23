@@ -18,6 +18,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
+import { formatDateHour } from "../lib/formatClock.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import classes from "./Drops.module.css";
 
@@ -246,6 +247,27 @@ function subscriptionGame(
 }
 
 /**
+ * When a campaign subscription's campaign opens, or null once it has.
+ *
+ * The engine gives such a subscription no channels until then, so the
+ * row says when they will come rather than "nobody is streaming".
+ */
+function subscriptionOpensAt(
+  sub: SubscriptionRow,
+  campaigns: ResolvedCampaign[],
+  now: number,
+): number | null {
+  if (sub.kind !== "campaign") return null;
+  const startsAt = campaigns.find((c) => c.id === sub.targetId)?.startsAt ?? null;
+  return startsAt !== null && startsAt > now ? startsAt : null;
+}
+
+/** "Sep 25, 18:00 (in 2d)": the exact time, and how far off it is. */
+function opening(at: number, now: number): string {
+  return `${formatDateHour(at)} (in ${formatSpan(at - now)})`;
+}
+
+/**
  * One subscription in the panel, draggable by its grip.
  *
  * Rank decides which subscriptions fill the miner's watch slots first, so
@@ -258,10 +280,12 @@ function subscriptionGame(
  * panel does not keep.
  */
 function SubscriptionRow({
-  sub, index, draggable, restartPending, busy, link, game, onOpen, onRemove,
-  onPoolSize,
+  sub, index, draggable, restartPending, busy, link, game, opensAt, onOpen,
+  onRemove, onPoolSize,
 }: {
   sub: SubscriptionRow;
+  /** When its campaign opens, or null once open (and for a game). */
+  opensAt: number | null;
   index: number;
   draggable: boolean;
   restartPending: boolean;
@@ -375,6 +399,18 @@ function SubscriptionRow({
               )}
             </Anchor>
           )}
+          {/* The queue badge already says "not open yet" when queued. */}
+          {sub.queue == null && opensAt !== null && (
+            <Badge
+              size="xs"
+              variant="light"
+              color="violet"
+              style={{ flexShrink: 0 }}
+              data-testid="subscription-scheduled"
+            >
+              scheduled
+            </Badge>
+          )}
           {sub.queue != null && (
             <Badge
               size="xs"
@@ -416,10 +452,15 @@ function SubscriptionRow({
                 An empty pool is an answer, not a wait -- the
                 engine resolves on subscribe, so "finding
                 channels…" here would never resolve. */}
-            {sub.queue != null && sub.queue.state !== "active"
+            {sub.queue?.state === "scheduled" && opensAt !== null
+              ? `waits for its campaign to open ${opening(opensAt, Date.now())}, `
+                + "then takes its turn by rank"
+              : sub.queue != null && sub.queue.state !== "active"
               ? sub.queue.state === "scheduled"
                 ? "waits for its campaign to open, then takes its turn by rank"
                 : "starts when the campaigns above it end or complete"
+              : opensAt !== null
+              ? `opens ${opening(opensAt, Date.now())}; channels are added then`
               : sub.channels.length === 0
               ? "nobody is streaming this right now"
               : (
@@ -993,6 +1034,7 @@ export function Drops() {
                     busy={busy !== null}
                     link={subscriptionLink(sub, data.campaigns)}
                     game={subscriptionGame(sub, data.campaigns)}
+                    opensAt={subscriptionOpensAt(sub, data.campaigns, Date.now())}
                     onOpen={() => setJumpedTo(sub.targetId)}
                     // Keyed to the campaign, not "panel": the card for
                     // this same subscription must go inert too, or it

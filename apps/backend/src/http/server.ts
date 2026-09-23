@@ -195,6 +195,11 @@ export interface ServerDeps {
   /** Resolves subscriptions into channels; driven on its own timer. */
   engine: Pick<SubscriptionEngine, "pass">;
   /**
+   * Whether the miner's start is waiting on the boot subscription check.
+   * Absent means never: tests and a server built without a boot sequence.
+   */
+  minerStartHeld?: () => boolean;
+  /**
    * The engine's cancellable restart, surfaced for the dashboard banner.
    *
    * The server attaches its own SSE hub to this, since the hub lives in
@@ -372,6 +377,10 @@ export function buildServer(deps: ServerDeps): AppServer {
       // connecting mid-countdown still sees the banner -- the event
       // alone only reaches clients already attached when it fired.
       pendingRestart: deps.pendingRestart.state(),
+      // True while the miner is not yet started because the boot pass is
+      // still bringing the streamer list up to date. Without it the UI
+      // reads STOPPED for those seconds, which looks like a broken miner.
+      minerStartHeld: deps.minerStartHeld?.() ?? false,
       version: APP_VERSION,
       // Null unless a strictly newer release exists, so the frontend
       // renders the notice iff this is set.

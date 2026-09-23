@@ -11,6 +11,7 @@ import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
+import { START_HELD_NOTE, shownState } from "./lib/minerState.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { Drops } from "./routes/Drops.js";
@@ -56,6 +57,8 @@ interface Status {
   latestVersion?: string | null;
   /** Optional: a backend predating the drops engine sends no such field. */
   pendingRestart?: PendingRestartState;
+  /** True while the boot subscription check holds the miner's start. */
+  minerStartHeld?: boolean;
 }
 
 export function App() {
@@ -85,6 +88,7 @@ function Shell() {
   // placeholder string would read as a real state to every control that
   // checks one.
   const [miner, setMiner] = useState<MinerStatus>({ state: null, startedAt: null });
+  const [startHeld, setStartHeld] = useState(false);
   // true until the first status arrives, matching the server's own
   // default-to-required stance.
   const [loginRequired, setLoginRequired] = useState(true);
@@ -136,8 +140,16 @@ function Shell() {
     if (authExpired) onLoggedOut();
   }, [authExpired, onLoggedOut]);
 
+  // The boot check holds a miner about to start; shown as STARTING with
+  // the reason, not as STOPPED. Only while the stored state is STOPPED.
+  const shown: MinerStatus = {
+    ...miner, state: shownState(miner.state, startHeld),
+  };
+  const minerNote = shown.state !== miner.state ? START_HELD_NOTE : null;
+
   const applyStatus = (s: Status) => {
     setMiner({ state: s.miner, startedAt: s.startedAt });
+    setStartHeld(s.minerStartHeld === true);
     setLoginRequired(s.loginRequired);
     setLoginKnown(true);
     // Optional, so a backend that predates the field renders no
@@ -218,7 +230,8 @@ function Shell() {
               />
             </Tooltip>
             <MinerStatusBadge
-              state={miner.state}
+              state={shown.state}
+              note={minerNote}
               startedAt={miner.startedAt}
               history={statsHistory}
             />
@@ -231,7 +244,8 @@ function Shell() {
           onNavigate={navigate}
           liveCount={liveCount}
           loginRequired={loginRequired}
-          miner={miner}
+          miner={shown}
+          minerNote={minerNote}
           onMinerChange={setMiner}
           version={version}
           latestVersion={latestVersion}

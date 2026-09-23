@@ -29,7 +29,9 @@ function make(over: {
   ) => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
   log?: ReturnType<typeof memoryLog>;
   inventory?: Partial<InventorySnapshot>;
-  now?: number;
+  now?: number | (() => number);
+  /** The catalogue read throws, failing the whole pass. */
+  catalogueFails?: boolean;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -45,7 +47,7 @@ function make(over: {
     saveConfig,
     configPath: "/tmp/config.json",
     catalogue: {
-      get: async (): Promise<Catalogue> => ({
+      get: async (): Promise<Catalogue> => over.catalogueFails ? Promise.reject(new Error("down")) : ({
         campaigns: [campaign()], fetchedAt: 1, stale: false,
         available: true, error: null, ...over.catalogue,
       }),
@@ -61,7 +63,9 @@ function make(over: {
         ...over.inventory,
       }),
     },
-    now: over.now === undefined ? undefined : () => over.now as number,
+    now: typeof over.now === "function"
+      ? over.now
+      : over.now === undefined ? undefined : () => over.now as number,
     log: over.log,
   });
   return { engine, saveConfig, propose, config };
@@ -303,6 +307,46 @@ test("one subscription failing does not sink the others", async () => {
   });
   await engine.pass();
   expect(written(saveConfig).streamers.map((s) => s.ownedBy)).toEqual(["s2"]);
+});
+
+test("the boot pass writes the config but proposes no restart", async () => {
+  // It runs before the miner starts, and the miner reads what it wrote.
+  const log = memoryLog();
+  const { engine, saveConfig, propose } = make({ log });
+  await engine.boot();
+  expect(saveConfig).toHaveBeenCalledTimes(1);
+  expect(propose).not.toHaveBeenCalled();
+  expect(log.ofType("subscription.pass.start")[0]).toMatchObject({ trigger: "boot" });
+});
+
+test("a boot pass past its budget stops holding the miner and proposes a restart", async () => {
+  // The miner started on the old channels, so this change needs one.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const { engine, saveConfig, propose } = make({
+    directory: async () => {
+      await gate;
+      return [{ login: "beta", channelId: "id-beta", viewers: 5 }];
+    },
+  });
+  await engine.boot(10);
+  expect(saveConfig).not.toHaveBeenCalled();
+  release();
+  await vi.waitFor(() => expect(propose).toHaveBeenCalledTimes(1));
+});
+
+test("a failing boot pass still lets the miner start, and says why", async () => {
+  const log = memoryLog();
+  const { engine } = make({ log, catalogueFails: true });
+  await expect(engine.boot()).resolves.toBeUndefined();
+  expect(log.ofType("subscription.pass.failed")[0]).toMatchObject({ err: "down" });
+});
+
+test("a later timer pass proposes as usual", async () => {
+  // Only the boot pass is spared the restart.
+  const { engine, propose } = make();
+  await engine.pass("timer");
+  expect(propose).toHaveBeenCalledTimes(1);
 });
 
 test("the timer stops cleanly", () => {
@@ -549,6 +593,65 @@ test("a game subscription is never ended by one campaign", async () => {
   });
   await engine.pass();
   expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
+});
+
+// --- campaigns not open yet ---
+
+const HOUR = 3_600_000;
+
+test("subscribing to a campaign not open yet adds no channels and proposes no restart", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig, propose } = make({
+    log,
+    now: 1_000,
+    catalogue: { campaigns: [campaign({ startsAt: 1_000 + HOUR })] },
+    config: { streamers: [manual("alpha")] as never },
+  });
+  await engine.pass("subscribe");
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+  expect(log.ofType("subscription.scheduled")[0]).toMatchObject({
+    subscriptionId: "s1", opensAt: 1_000 + HOUR, level: "info",
+  });
+});
+
+test("a scheduled campaign is logged once, not on every pass", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    now: 1_000,
+    catalogue: { campaigns: [campaign({ startsAt: 1_000 + HOUR })] },
+  });
+  await engine.pass();
+  await engine.pass();
+  expect(log.ofType("subscription.scheduled")).toHaveLength(1);
+});
+
+test("channels a scheduled campaign already held are released", async () => {
+  const { engine, saveConfig } = make({
+    now: 1_000,
+    catalogue: { campaigns: [campaign({ startsAt: 1_000 + HOUR })] },
+    config: { streamers: [manual("alpha"), owned("beta", "s1")] as never },
+  });
+  await engine.pass();
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["alpha"]);
+});
+
+test("a scheduled campaign resolves its channels once it opens", async () => {
+  const log = memoryLog();
+  let now = 1_000;
+  const { engine, saveConfig, propose } = make({
+    log,
+    now: () => now,
+    catalogue: { campaigns: [campaign({ startsAt: 1_000 + HOUR })] },
+  });
+  await engine.pass();
+  expect(saveConfig).not.toHaveBeenCalled();
+  now += HOUR + 1;
+  await engine.pass();
+  expect(written(saveConfig).streamers.map((s) => s.ownedBy)).toContain("s1");
+  expect(propose).toHaveBeenCalledTimes(1);
+  expect(log.ofType("subscription.opened")[0]).toMatchObject({ subscriptionId: "s1" });
 });
 
 // --- the one-at-a-time queue ---

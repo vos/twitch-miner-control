@@ -10,7 +10,7 @@ import { renderApp } from "./test-utils.js";
 // in the frontend read it -- an expired token showed up as a stale
 // dashboard with a bare GQL error string and no call to action.
 
-function stub(loginRequired: boolean) {
+function stub(loginRequired: boolean, status: object = {}) {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url === "/api/status") {
       return {
@@ -18,6 +18,7 @@ function stub(loginRequired: boolean) {
         json: async () => ({
           miner: "RUNNING", loginRequired, login: null,
           startedAt: Date.now() - 90_000,
+          ...status,
         }),
       };
     }
@@ -48,6 +49,40 @@ afterEach(() => {
 });
 
 const view = () => renderApp(<App />);
+
+// --- a miner start held by the boot subscription check ---
+
+test("a miner held by the boot check reads STARTING and says why", async () => {
+  // STOPPED for those seconds looks like a miner that failed to start.
+  stub(false, { miner: "STOPPED", startedAt: null, minerStartHeld: true });
+  view();
+  await waitFor(() =>
+    expect(screen.getByTestId("miner-state")).toHaveTextContent("STARTING"));
+  expect(screen.getByTestId("miner-note"))
+    .toHaveTextContent(/checking drop subscriptions/i);
+  // Transitional, like any start: nothing to press meanwhile.
+  expect(screen.getByTestId("miner-toggle")).toBeDisabled();
+  await userEvent.hover(screen.getByTestId("miner-state"));
+  expect(await screen.findByRole("tooltip"))
+    .toHaveTextContent(/up-to-date streamer list/i);
+});
+
+test("without the hold a stopped miner reads STOPPED, with no note", async () => {
+  stub(false, { miner: "STOPPED", startedAt: null, minerStartHeld: false });
+  view();
+  await waitFor(() =>
+    expect(screen.getByTestId("miner-state")).toHaveTextContent("STOPPED"));
+  expect(screen.queryByTestId("miner-note")).toBeNull();
+});
+
+test("a miner already running is reported as running despite the hold", async () => {
+  // Start pressed during the check: the hold no longer describes it.
+  stub(false, { minerStartHeld: true });
+  view();
+  await waitFor(() =>
+    expect(screen.getByTestId("miner-state")).toHaveTextContent("RUNNING"));
+  expect(screen.queryByTestId("miner-note")).toBeNull();
+});
 
 test("flags the account nav row when the Twitch session needs attention", async () => {
   // Replaces the old banner above every screen: the nav says it

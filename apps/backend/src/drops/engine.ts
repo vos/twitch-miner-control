@@ -25,6 +25,15 @@ import { COMPONENT, EVENT } from "../appLog/types.js";
  */
 export const RECONCILE_INTERVAL_MS = 900_000;
 
+/**
+ * How long the miner's start waits on the boot pass.
+ *
+ * Normally a few seconds. The budget only matters when the network is
+ * slow: the miner is not held back longer than this, and a pass that
+ * finishes after it has started proposes a restart like any other.
+ */
+export const BOOT_PASS_BUDGET_MS = 30_000;
+
 export interface EngineDeps {
   loadConfig: () => AppConfig;
   saveConfig: (path: string, config: AppConfig) => void;
@@ -55,6 +64,7 @@ export type PassTrigger =
   | "pool-size"
   | "remove"
   | "queue"
+  | "boot"
   | "manual";
 
 /**
@@ -72,6 +82,13 @@ export class SubscriptionEngine {
    * restart the current one is logged again, which is harmless.
    */
   private activeInQueue: string | null = null;
+  /**
+   * Subscriptions already logged as waiting for their campaign to open,
+   * so that is said once and the opening can be logged when it comes.
+   */
+  private readonly scheduled = new Set<string>();
+  /** Set once the miner has stopped waiting on the boot pass. */
+  private bootLate = false;
 
   private readonly log: AppLog;
 
@@ -81,23 +98,27 @@ export class SubscriptionEngine {
 
   start(): void {
     if (this.timer !== null) return;
-    this.timer = setInterval(() => {
-      void this.pass("timer").catch((cause: unknown) => {
-        // A failed pass is not fatal: the config still holds the
-        // previous, working pool and the next pass tries again. It is
-        // still recorded -- a pass that never completes is invisible in
-        // its effects, so silence here means a pool quietly stops being
-        // maintained with nothing to show for it.
-        this.log.error({
-          type: EVENT.PASS_FAILED,
-          msg: "a resolve pass failed; the previous pool still stands and "
-            + "the next pass will try again",
-          err: cause instanceof Error ? cause.message : String(cause),
-        });
-      });
-    }, RECONCILE_INTERVAL_MS);
+    this.timer = setInterval(() => void this.runPass("timer"), RECONCILE_INTERVAL_MS);
     // Never keep the process alive on its own account.
     this.timer.unref?.();
+  }
+
+  /**
+   * The first pass, run before the miner starts.
+   *
+   * Acts on whatever changed while the app was down -- a campaign that
+   * opened, ended or completed -- and writes it before the miner reads
+   * its config, so no restart is needed to apply it. Never rejects, and
+   * resolves after BOOT_PASS_BUDGET_MS at the latest; see there.
+   */
+  async boot(budgetMs = BOOT_PASS_BUDGET_MS): Promise<void> {
+    let timeout: NodeJS.Timeout | undefined;
+    const late = new Promise<void>((resolve) => {
+      timeout = setTimeout(() => { this.bootLate = true; resolve(); }, budgetMs);
+      timeout.unref?.();
+    });
+    await Promise.race([this.runPass("boot"), late]);
+    clearTimeout(timeout);
   }
 
   stop(): void {
@@ -105,10 +126,29 @@ export class SubscriptionEngine {
     this.timer = null;
   }
 
+  private runPass(trigger: PassTrigger): Promise<void> {
+    return this.pass(trigger).catch((cause: unknown) => {
+      // A failed pass is not fatal: the config still holds the
+      // previous, working pool and the next pass tries again. It is
+      // still recorded -- a pass that never completes is invisible in
+      // its effects, so silence here means a pool quietly stops being
+      // maintained with nothing to show for it.
+      this.log.error({
+        type: EVENT.PASS_FAILED,
+        msg: "a resolve pass failed; the previous pool still stands and "
+          + "the next pass will try again",
+        err: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
+  }
+
   /** One resolve-reconcile-propose cycle. Public so tests drive it. */
   async pass(trigger: PassTrigger = "manual"): Promise<void> {
     const config = this.deps.loadConfig();
-    if (config.subscriptions.length === 0) return;
+    if (config.subscriptions.length === 0) {
+      this.scheduled.clear();
+      return;
+    }
 
     this.log.debug({
       type: EVENT.PASS_START,
@@ -210,6 +250,36 @@ export class SubscriptionEngine {
       const incumbents = config.streamers
         .filter((s) => s.ownedBy === sub.id)
         .map((s) => s.username);
+
+      // Nothing can be earned before a campaign opens, so it owns no
+      // channels until then -- subscribing to one adds nothing to the
+      // streamer list and so proposes no restart. The first pass after
+      // it opens resolves them.
+      const opensAt = sub.kind === "campaign" ? campaign?.startsAt : null;
+      if (opensAt != null && opensAt > now) {
+        if (!this.scheduled.has(sub.id)) {
+          this.scheduled.add(sub.id);
+          this.log.info({
+            type: EVENT.SUBSCRIPTION_SCHEDULED,
+            msg: `campaign "${sub.label}" has not started yet, so it is scheduled: `
+              + `its channels are added when it opens at ${new Date(opensAt).toISOString()}`,
+            subscriptionId: sub.id,
+            label: sub.label,
+            targetId: sub.targetId,
+            opensAt,
+          });
+        }
+        continue;
+      }
+      if (this.scheduled.delete(sub.id)) {
+        this.log.info({
+          type: EVENT.SUBSCRIPTION_OPENED,
+          msg: `campaign "${sub.label}" has opened, so its channels are being resolved`,
+          subscriptionId: sub.id,
+          label: sub.label,
+          targetId: sub.targetId,
+        });
+      }
 
       // A waiting subscription owns no channels, so any it held (it was
       // active before a reorder, or before the queue was turned on) are
@@ -313,6 +383,8 @@ export class SubscriptionEngine {
     }
 
     this.activeInQueue = active;
+    const live = new Set(ordered.filter((s) => !ended.has(s.id)).map((s) => s.id));
+    for (const id of this.scheduled) if (!live.has(id)) this.scheduled.delete(id);
 
     const { streamers, changed, added, removed } = reconcile(config.streamers, desired);
     if (!changed && ended.size === 0) {
@@ -343,6 +415,10 @@ export class SubscriptionEngine {
       streamers,
       subscriptions: config.subscriptions.filter((s) => !ended.has(s.id)),
     });
+    // The boot pass runs before the miner starts, which then reads what
+    // was just written -- a restart would only repeat that start. Unless
+    // it ran past its budget and the miner started without it.
+    if (trigger === "boot" && !this.bootLate) return;
     this.deps.pending.propose(
       ended.size > 0
         ? "a drop campaign ended or completed"

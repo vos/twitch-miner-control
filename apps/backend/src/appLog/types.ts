@@ -36,6 +36,10 @@ export const EVENT = {
   SUBSCRIPTION_ENDED: "subscription.ended",
   /** Every obtainable drop was earned, so the subscription was removed. */
   SUBSCRIPTION_COMPLETED: "subscription.completed",
+  /** A campaign not yet open was subscribed; channels wait for its start. */
+  SUBSCRIPTION_SCHEDULED: "subscription.scheduled",
+  /** A scheduled campaign opened, so its channels are being resolved. */
+  SUBSCRIPTION_OPENED: "subscription.opened",
   /** The campaign queue moved on: a waiting subscription became active. */
   QUEUE_STARTED: "subscription.queue.started",
   /** The streamer list actually changed, and how. */

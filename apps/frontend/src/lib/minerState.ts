@@ -17,3 +17,23 @@ export const isUp = (state: string | null) => state === "RUNNING";
  * until this is true.
  */
 export const isKnown = (state: string | null): state is string => state !== null;
+
+/**
+ * Why a miner that is not up yet is about to be.
+ *
+ * At boot the backend checks the drop subscriptions before starting the
+ * miner, so it starts on an up-to-date streamer list. That takes seconds,
+ * and reading STOPPED meanwhile looks like a miner that failed to start.
+ */
+export const START_HELD_NOTE =
+  "Checking drop subscriptions first, so the miner starts on an "
+  + "up-to-date streamer list.";
+
+/**
+ * The state to show: STARTING while the boot check holds the start.
+ *
+ * Only over STOPPED -- a miner already up (Start pressed meanwhile) or
+ * crashed is reported as it is.
+ */
+export const shownState = (state: string | null, startHeld: boolean) =>
+  startHeld && state === "STOPPED" ? "STARTING" : state;

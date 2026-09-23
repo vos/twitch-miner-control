@@ -11,9 +11,11 @@ import type { MinerStatus } from "./MinerStatusBadge.js";
  * size="xs" with the message clamped to maw=180 behind a tooltip, which
  * is exactly the text an operator needs when a start fails.
  */
-export function MinerDock({ state, onChange }: {
+export function MinerDock({ state, onChange, note = null }: {
   /** Null until the first status poll answers -- see MinerStatus. */
   state: string | null;
+  /** Why the state is what it is, when that needs saying. */
+  note?: string | null;
   onChange: (status: MinerStatus) => void;
 }) {
   // Which action is in flight, so only the pressed button spins -- a
@@ -51,6 +53,9 @@ export function MinerDock({ state, onChange }: {
 
   return (
     <Stack gap="xs">
+      {note !== null && (
+        <Text size="xs" c="dimmed" data-testid="miner-note">{note}</Text>
+      )}
       {error && (
         <Text role="alert" size="xs" c="red" data-testid="miner-error">
           {error}

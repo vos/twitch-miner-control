@@ -595,6 +595,50 @@ test("the panel is hidden when nothing is subscribed", async () => {
   expect(screen.queryByTestId("subscriptions")).toBeNull();
 });
 
+// --- campaigns not open yet ---
+
+const withScheduled = () => {
+  body = {
+    ...payload,
+    campaigns: [...payload.campaigns, {
+      id: "c3", name: "Gamma Campaign",
+      game: { id: "g3", slug: "gamma-game", displayName: "Gamma Game" },
+      startsAt: Date.now() + 2 * 86_400_000, endsAt: Date.now() + 9 * 86_400_000,
+      drops: [aDrop], status: "untouched", complete: false,
+    }],
+  };
+};
+
+test("a subscription to a campaign not open yet says when its channels come", async () => {
+  withScheduled();
+  withSubs([asSub({ id: "s3", targetId: "c3", label: "Gamma Campaign" })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscription-scheduled")).toBeTruthy());
+  const row = screen.getByTestId("subscription-row");
+  expect(row.textContent).toMatch(/opens .*\(in \w+\); channels are added then/);
+  expect(row.textContent).not.toMatch(/nobody is streaming/);
+});
+
+test("a queued campaign not open yet names its opening time", async () => {
+  withScheduled();
+  withSubs([asSub({ id: "s3", targetId: "c3", label: "Gamma Campaign",
+                    queue: { state: "scheduled", position: 1 } })],
+           { pending: false }, true);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscription-queue")).toBeTruthy());
+  // The queue badge carries it; a second "scheduled" badge would repeat it.
+  expect(screen.queryByTestId("subscription-scheduled")).toBeNull();
+  expect(screen.getByTestId("subscription-row").textContent)
+    .toMatch(/waits for its campaign to open .*\(in \w+\), then takes its turn/);
+});
+
+test("an open campaign's subscription is not marked scheduled", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
+  expect(screen.queryByTestId("subscription-scheduled")).toBeNull();
+});
+
 // --- the one-at-a-time queue ---
 
 test("the queue switch posts the new setting", async () => {

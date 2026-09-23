@@ -96,6 +96,7 @@ async function make(options: {
   });
   const inventory = new InventoryCache({ client: client as never });
   const engine = { pass: vi.fn(async () => {}) };
+  const held = { value: false };
   const pending = {
     cancel: vi.fn(), fireNow: vi.fn(async () => {}),
     state: () => ({ pending: false, dueAt: null, reason: null }),
@@ -116,6 +117,7 @@ async function make(options: {
     inventory,
     engine: engine as never,
     pendingRestart: pending as never,
+    minerStartHeld: () => held.value,
     staticRoot: PUBLIC_ROOT,
     statusTickMs: options.statusTickMs,
     appLog: options.appLog as never,
@@ -126,7 +128,7 @@ async function make(options: {
   });
   return {
     app, supervisor, client, history, streamers, state, loginRunner, loginStatus, configPath,
-    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending,
+    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held,
     cookie: login.cookies[0].value,
   };
 }
@@ -243,6 +245,15 @@ test("POST /api/config/apply with nothing staged does not restart", async () => 
 test("GET /api/status reports supervisor state and staleness", async () => {
   const res = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
   expect(res.json()).toMatchObject({ miner: "RUNNING", stale: true });
+});
+
+test("GET /api/status says when the miner's start waits on the boot check", async () => {
+  // Otherwise those seconds read as STOPPED, which looks like a broken miner.
+  const before = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(before.json().minerStartHeld).toBe(false);
+  ctx.held.value = true;
+  const during = await ctx.app.inject({ method: "GET", url: "/api/status", cookies: auth() });
+  expect(during.json().minerStartHeld).toBe(true);
 });
 
 test("GET /api/status carries process stats for the live miner", async () => {
