@@ -8,14 +8,13 @@ import {
 import { CoverageTimeline } from "./CoverageTimeline.js";
 import { Gain } from "./Gain.js";
 import { PointsChart } from "./PointsChart.js";
+import { RollingNumber } from "./RollingNumber.js";
 import { StatusPill } from "./StatusPill.js";
 import { StreamerActivityLog } from "./StreamerActivityLog.js";
 import { StreamerAvatar } from "./StreamerAvatar.js";
 import { StreamHistoryTable } from "./StreamHistoryTable.js";
 import classes from "./StreamerDetailModal.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
-
-const nf = new Intl.NumberFormat("en-US");
 
 /** Rows in the coverage strip per range. Capped at two weeks: thirty rows
  *  of bands is taller than the dialog. */
@@ -29,10 +28,12 @@ const COVERAGE_DAYS: Record<RangeKey, number> = { "24h": 1, "7d": 7, "30d": 14, 
  * fetch, so it paints the instant the dialog opens and only the charts
  * below it wait on the network.
  */
-export function StreamerDetailModal({ streamer, opened, onClose }: {
+export function StreamerDetailModal({ streamer, opened, onClose, animateBalance = false }: {
   streamer: StreamerState | null;
   opened: boolean;
   onClose: () => void;
+  /** Whether a change to the balance may roll; see useBalanceMotion. */
+  animateBalance?: boolean;
 }) {
   // The last streamer shown outlives the selection. The dashboard clears
   // its selection on close, and unmounting in that same render would cut
@@ -126,7 +127,7 @@ export function StreamerDetailModal({ streamer, opened, onClose }: {
         <div className={classes.summary}>
           <Text className={classes.balance} data-testid="detail-balance">
             <IconCoins className={classes.coin} stroke={2} aria-hidden />
-            {s.points === null ? "—" : nf.format(s.points)}
+            <RollingNumber value={s.points} animate={animateBalance} />
           </Text>
           {/* Null until the fetch lands, which renders the em dash --
               honest: we do not yet know the gain over this window. The

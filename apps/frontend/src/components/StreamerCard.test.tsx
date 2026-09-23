@@ -1,7 +1,7 @@
 import { MantineProvider } from "@mantine/core";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { StreamerCard } from "./StreamerCard.js";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -751,3 +751,21 @@ test("a snapshot without the campaign field renders no badge", () => {
   view({ ownedByLabel: undefined });
   expect(screen.queryByTestId("campaign-badge")).toBeNull();
 });
+
+test("an animated balance rolls, and lands on the new figure", () => {
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  const card = (points: number) => (
+    <MantineProvider>
+      <StreamerCard streamer={{ ...base, points }} animate />
+    </MantineProvider>
+  );
+  const { rerender } = render(card(1000));
+  rerender(card(2000));
+  act(() => vi.advanceTimersByTime(200));
+  expect(screen.getByTestId("balance").querySelector("[aria-hidden]:not(svg)"))
+    .not.toBeNull();
+  act(() => vi.advanceTimersByTime(600));
+  expect(screen.getByTestId("balance")).toHaveTextContent("2,000");
+});
+
+afterEach(() => vi.useRealTimers());

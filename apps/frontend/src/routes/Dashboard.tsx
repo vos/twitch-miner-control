@@ -8,7 +8,9 @@ import { EventsFeed } from "../components/EventsFeed.js";
 import { StalenessBadge } from "../components/StalenessBadge.js";
 import { StatTile } from "../components/StatTile.js";
 import tileClasses from "../components/StatTile.module.css";
+import { RollingNumber } from "../components/RollingNumber.js";
 import { StreamerCard } from "../components/StreamerCard.js";
+import { useBalanceMotion } from "../lib/balanceMotion.js";
 import { SORT_KEYS, SORT_LABELS, sortStreamers, type SortKey } from "../lib/sortStreamers.js";
 import { useLocalChoice } from "../lib/useLocalChoice.js";
 import { useLocalToggle } from "../lib/useLocalToggle.js";
@@ -120,6 +122,8 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
   onOpenStreamer?: (login: string) => void;
 } = {}) {
   const { snapshot, loadError } = useLiveState();
+  // Decided once here and handed down, so the cards stay plain components.
+  const motion = useBalanceMotion();
   const openDetail = (login: string) => onOpenStreamer?.(login);
   const [feedOn, toggleFeed] = useLocalToggle("dashboard.feed", true);
   // Offline streamers are the bulk of a big roster and the least
@@ -224,7 +228,6 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
   // looked yet" must never render the same way -- the latter used to show
   // a confident "0" for a full refresh interval after every restart,
   // beside a badge nobody reads closely enough to notice contradicts it.
-  const totalText = snapshot.lastUpdated === null ? "—" : nf.format(total);
   const gainedText = gained === null
     ? "—"
     : `${gained > 0 ? "+" : ""}${nf.format(gained)}`;
@@ -238,6 +241,7 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
             key={s.username}
             streamer={s}
             onOpen={() => openDetail(s.username)}
+            animate={motion}
           />
         ))}
       </SimpleGrid>
@@ -256,6 +260,7 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
               key={s.username}
               streamer={s}
               onOpen={() => openDetail(s.username)}
+              animate={motion}
             />
           ))}
         </SimpleGrid>
@@ -326,7 +331,9 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
             headline figure rather than making two mismatched pairs. */}
         <StatTile
           label="Total points"
-          value={totalText}
+          value={snapshot.lastUpdated === null
+            ? "—"
+            : <RollingNumber value={total} animate={motion} />}
           icon={<IconCoins className={tileClasses.coin} stroke={2} aria-hidden />}
           testId="total-points"
         />

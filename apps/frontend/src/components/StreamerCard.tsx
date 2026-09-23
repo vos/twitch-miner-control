@@ -1,6 +1,7 @@
 import { Stack, Text } from "@mantine/core";
 import { IconCoins } from "@tabler/icons-react";
 import { Gain } from "./Gain.js";
+import { RollingNumber } from "./RollingNumber.js";
 import { Sparkline } from "./Sparkline.js";
 import { StreamContext } from "./StreamContext.js";
 import { ViewerCount } from "./ViewerCount.js";
@@ -12,11 +13,11 @@ import { StatusPill } from "./StatusPill.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
-const nf = new Intl.NumberFormat("en-US");
-
-export function StreamerCard({ streamer: s, onOpen }: {
+export function StreamerCard({ streamer: s, onOpen, animate = false }: {
   streamer: StreamerState;
   onOpen?: () => void;
+  /** Whether a change to this frame's balance may roll; see useBalanceMotion. */
+  animate?: boolean;
 }) {
   const live = s.isOnline === true;
   // Ticked here rather than below the sparkline: the badge already says
@@ -117,7 +118,7 @@ export function StreamerCard({ streamer: s, onOpen }: {
                 channel points, not money, so a currency symbol on the
                 glyph's face would be a wrong claim. */}
             <IconCoins className={classes.coin} stroke={2} aria-hidden />
-            {s.points === null ? "—" : nf.format(s.points)}
+            <RollingNumber value={s.points} animate={animate} />
           </Text>
           <div className={classes.gains}>
             {/* A zero stream gain is dropped, not printed. "0 stream"

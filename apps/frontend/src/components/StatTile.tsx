@@ -5,7 +5,7 @@ import classes from "./StatTile.module.css";
 export function StatTile(
   { label, value, hint, icon, accent = "purple", testId, loading = false }: {
   label: string;
-  value: string;
+  value: ReactNode;
   /**
    * A glyph marking what the figure counts, rendered before it.
    *

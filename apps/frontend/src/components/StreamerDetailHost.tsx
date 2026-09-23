@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import { useLiveState } from "../api/useLiveState.js";
+import { useBalanceMotion } from "../lib/balanceMotion.js";
 
 // Split out: the dialog brings recharts, which nearly doubles the bundle,
 // and no screen should wait on it to paint.
@@ -19,6 +20,7 @@ export function StreamerDetailHost({ login, onClose }: {
   onClose: () => void;
 }) {
   const { snapshot } = useLiveState();
+  const animateBalance = useBalanceMotion();
   // Mounted from the first open onward, never before: mounting it up front
   // would fetch the chunk the lazy import exists to defer.
   const [used, setUsed] = useState(false);
@@ -31,6 +33,7 @@ export function StreamerDetailHost({ login, onClose }: {
         streamer={snapshot?.streamers.find((s) => s.username === login) ?? null}
         opened={login !== null}
         onClose={onClose}
+        animateBalance={animateBalance}
       />
     </Suspense>
   );
