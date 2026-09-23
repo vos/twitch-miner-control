@@ -124,3 +124,16 @@ test("with no history yet it says so instead of an empty calendar", async () => 
   expect(await screen.findByTestId("insights-empty"))
     .toHaveTextContent("Not enough history yet");
 });
+
+test("with no streak running it says so rather than counting zero days", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+    ok: true, status: 200,
+    json: async () => (url.startsWith("/api/insights/calendar")
+      ? { ...calendar, streak: { current: 0, longest: 5 } }
+      : recap("week", 0)),
+  })));
+  renderApp(<Insights />);
+  const streak = await screen.findByTestId("insights-streak");
+  expect(streak).toHaveTextContent("No streak running · longest 5");
+  expect(streak).not.toHaveTextContent("0-day");
+});

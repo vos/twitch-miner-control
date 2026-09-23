@@ -72,7 +72,9 @@ export function Insights({ period = null }: {
       ) : (
         <Stack gap="sm">
           <Text size="sm" data-testid="insights-streak">
-            {`🔥 ${calendar.data.streak.current}-day streak · longest ${calendar.data.streak.longest}`}
+            {calendar.data.streak.current > 0
+              ? `🔥 ${calendar.data.streak.current}-day streak · longest ${calendar.data.streak.longest}`
+              : `No streak running · longest ${calendar.data.streak.longest}`}
             <Text span c="dimmed">{`   ${nf.format(year)} earned in the last year`}</Text>
           </Text>
           <InsightsCalendar
