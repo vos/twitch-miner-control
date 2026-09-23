@@ -19,10 +19,7 @@ const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use HH:MM");
 export const prefsSchema = z
   .object({
     /** Absent kind: the catalogue default. */
-    kinds: z.record(z.string(), z.boolean()).refine(
-      (kinds) => Object.keys(kinds).every((k) => ALL_KINDS.includes(k as NotifyKind)),
-      "unknown kind",
-    ),
+    kinds: z.partialRecord(z.enum(ALL_KINDS), z.boolean()),
     /** For the streamers group only. */
     streamers: z.union([z.literal("all"), z.array(usernameSchema).max(500)]),
     quietHours: z
