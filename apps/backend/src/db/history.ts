@@ -354,6 +354,70 @@ export class History {
   }
 
   /**
+   * Every streamer's snapshots in `[fromTs, toTs)`, grouped by streamer
+   * and oldest first within each: the input to a day's rollup.
+   */
+  samplesBetween(fromTs: number, toTs: number): { streamer: string; ts: number; balance: number }[] {
+    return this.db
+      .prepare(
+        `SELECT streamer, ts, balance FROM point_snapshots
+          WHERE ts >= ? AND ts < ? ORDER BY streamer, ts, id`,
+      )
+      .all(fromTs, toTs) as { streamer: string; ts: number; balance: number }[];
+  }
+
+  /**
+   * The balance in force just before `ts`: the latest snapshot strictly
+   * earlier. Strict, unlike balanceAt, because a snapshot landing exactly
+   * at midnight belongs to the day it opens, not to the one before.
+   */
+  balanceBefore(streamer: string, ts: number): number | null {
+    const row = this.db
+      .prepare(
+        "SELECT balance FROM point_snapshots WHERE streamer = ? AND ts < ? ORDER BY ts DESC, id DESC LIMIT 1",
+      )
+      .get(streamer, ts) as { balance: number } | undefined;
+    return row ? row.balance : null;
+  }
+
+  /** The oldest snapshot anyone still has, or null: where a rollup starts. */
+  earliestSampleTs(): number | null {
+    const row = this.db
+      .prepare("SELECT MIN(ts) AS ts FROM point_snapshots")
+      .get() as { ts: number | null };
+    return row.ts;
+  }
+
+  /** Every channel's online spans overlapping `fromTs` onward, oldest first. */
+  allStreamerSpans(fromTs: number): { streamer: string; start: number; end: number | null }[] {
+    return this.db
+      .prepare(
+        `SELECT streamer, start_ts AS start, end_ts AS end FROM streamer_sessions
+          WHERE end_ts IS NULL OR end_ts >= ?
+          ORDER BY start_ts ASC`,
+      )
+      .all(fromTs) as { streamer: string; start: number; end: number | null }[];
+  }
+
+  /**
+   * How many events of each asked-for type landed in `[fromTs, toTs)`.
+   * Every asked-for type is in the result, at zero when none landed.
+   */
+  countEvents(types: readonly string[], fromTs: number, toTs: number): Record<string, number> {
+    const out: Record<string, number> = Object.fromEntries(types.map((t) => [t, 0]));
+    if (types.length === 0) return out;
+    const holes = types.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT type, COUNT(*) AS n FROM events
+          WHERE ts >= ? AND ts < ? AND type IN (${holes}) GROUP BY type`,
+      )
+      .all(fromTs, toTs, ...types) as { type: string; n: number }[];
+    for (const row of rows) out[row.type] = row.n;
+    return out;
+  }
+
+  /**
    * Deletes point snapshots older than `olderThan`. Returns rows removed.
    *
    * Only this table is pruned: it is the one that grows per tick. The

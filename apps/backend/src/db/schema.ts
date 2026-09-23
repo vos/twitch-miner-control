@@ -83,6 +83,17 @@ export function openDb(path: string): Db {
       -- NULL until an avatar has been fetched; the row may exist first.
       fetched_at    INTEGER
     );
+
+    -- Points earned per streamer per local day ('YYYY-MM-DD'), written once
+    -- a day is over and never pruned: the Insights calendar and recap read
+    -- it long after point_snapshots has dropped the rows it came from. A
+    -- day with no row at all is a day with no data, not a day with zero.
+    CREATE TABLE IF NOT EXISTS daily_points (
+      day      TEXT    NOT NULL,
+      streamer TEXT    NOT NULL,
+      earned   INTEGER NOT NULL,
+      PRIMARY KEY (day, streamer)
+    );
   `);
   addEventColumns(db);
   return db;

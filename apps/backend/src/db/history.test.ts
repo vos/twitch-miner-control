@@ -430,3 +430,53 @@ test("sessionsFor ignores other streamers", () => {
   history.openStreamerSession("beta", "s1", 1000, 100);
   expect(history.sessionsFor("alpha", 0)).toEqual([]);
 });
+
+test("samplesBetween spans every streamer, half-open, grouped and in order", () => {
+  history.recordPoints("beta", 5, 1500);
+  history.recordPoints("alpha", 1, 1000);
+  history.recordPoints("alpha", 2, 2000);
+  history.recordPoints("alpha", 3, 3000);
+  expect(history.samplesBetween(1000, 3000)).toEqual([
+    { streamer: "alpha", ts: 1000, balance: 1 },
+    { streamer: "alpha", ts: 2000, balance: 2 },
+    { streamer: "beta", ts: 1500, balance: 5 },
+  ]);
+});
+
+test("balanceBefore is strictly before", () => {
+  history.recordPoints("alpha", 1, 1000);
+  history.recordPoints("alpha", 2, 2000);
+  expect(history.balanceBefore("alpha", 2000)).toBe(1);
+  expect(history.balanceBefore("alpha", 1000)).toBeNull();
+});
+
+test("earliestSampleTs is the oldest snapshot of anyone", () => {
+  expect(history.earliestSampleTs()).toBeNull();
+  history.recordPoints("beta", 1, 3000);
+  history.recordPoints("alpha", 1, 2000);
+  expect(history.earliestSampleTs()).toBe(2000);
+});
+
+test("allStreamerSpans lists every channel's sessions overlapping the window", () => {
+  history.openStreamerSession("alpha", "a1", 1000, null);
+  history.recordPoints("alpha", 1, 2000);
+  history.closeStreamerSessionsExcept("alpha", null, 2000);
+  history.openStreamerSession("beta", "b1", 5000, null);
+  expect(history.allStreamerSpans(1500)).toEqual([
+    { streamer: "alpha", start: 1000, end: 2000 },
+    { streamer: "beta", start: 5000, end: null },
+  ]);
+  expect(history.allStreamerSpans(3000)).toEqual([
+    { streamer: "beta", start: 5000, end: null },
+  ]);
+});
+
+test("countEvents counts each asked-for type in a half-open window", () => {
+  history.recordEvent("BONUS_CLAIM", 1000);
+  history.recordEvent("BONUS_CLAIM", 1500);
+  history.recordEvent("BONUS_CLAIM", 2000);
+  history.recordEvent("JOIN_RAID", 1200);
+  history.recordEvent("GAIN_FOR_WATCH", 1300);
+  expect(history.countEvents(["BONUS_CLAIM", "JOIN_RAID", "DROP_CLAIM"], 1000, 2000))
+    .toEqual({ BONUS_CLAIM: 2, JOIN_RAID: 1, DROP_CLAIM: 0 });
+});

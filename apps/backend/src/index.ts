@@ -13,7 +13,9 @@ import { resolveEnvFlag } from "./config/envFlag.js";
 import { resolveMinerLogLevel } from "./config/logLevel.js";
 import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig, saveConfig } from "./config/store.js";
+import { DailyPoints } from "./db/dailyPoints.js";
 import { History } from "./db/history.js";
+import { rollupDays } from "./insights/rollup.js";
 import { openDb } from "./db/schema.js";
 import { Streamers } from "./db/streamers.js";
 import { LoginRunner } from "./helpers/loginRunner.js";
@@ -143,6 +145,7 @@ const loginRunner = new LoginRunner({
 });
 const db = openDb(join(dataDir, "history.db"));
 const history = new History(db);
+const dailyPoints = new DailyPoints(db);
 // Close spans left open by a killed process before anything reads one.
 // An open miner session claims the miner is still running, so a crash
 // would otherwise keep accruing mining time for the whole downtime.
@@ -152,25 +155,29 @@ history.recoverOpenSessions();
 // tables are deliberately never pruned: they are tiny, and they are the
 // source of the all-time mining figure.
 const retentionDays = resolveRetentionDays(process.env.HISTORY_RETENTION_DAYS);
-if (retentionDays > 0) {
-  const prune = () => {
-    const removed = history.prunePoints(Date.now() - retentionDays * 86_400_000);
-    // VACUUM only when something was actually deleted: it rewrites the
-    // whole file, which is not worth doing daily to reclaim nothing.
-    if (removed > 0) {
-      bootLog.info({
-        type: EVENT.APP_PRUNED,
-        msg: `pruned ${removed} point snapshot(s) older than ${retentionDays}d`,
-        removed,
-        retentionDays,
-      });
-      db.exec("VACUUM");
-    }
-  };
-  prune();
-  // unref() so a pending prune never holds the process open at shutdown.
-  setInterval(prune, 86_400_000).unref();
-}
+// At boot and daily. The rollup goes first: a day's snapshots must be
+// summarised into daily_points before the prune can delete them, or the
+// Insights calendar loses that day for good. It runs even with pruning
+// off, so the calendar never waits on a request to fill in.
+const housekeeping = () => {
+  rollupDays({ history, daily: dailyPoints }, Date.now());
+  if (retentionDays === 0) return;
+  const removed = history.prunePoints(Date.now() - retentionDays * 86_400_000);
+  // VACUUM only when something was actually deleted: it rewrites the
+  // whole file, which is not worth doing daily to reclaim nothing.
+  if (removed > 0) {
+    bootLog.info({
+      type: EVENT.APP_PRUNED,
+      msg: `pruned ${removed} point snapshot(s) older than ${retentionDays}d`,
+      removed,
+      retentionDays,
+    });
+    db.exec("VACUUM");
+  }
+};
+housekeeping();
+// unref() so a pending pass never holds the process open at shutdown.
+setInterval(housekeeping, 86_400_000).unref();
 
 // Asked once at boot and daily after, so the sidebar can point at a newer
 // release. Failures are silent by design (see UpdateChecker): this drives
