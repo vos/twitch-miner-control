@@ -106,7 +106,7 @@ const nonEmpty = (groups: PaletteGroup[]) => groups.filter((g) => g.items.length
  *
  * With nothing typed it offers somewhere to go, who is live and what the
  * miner can do. Once something is typed, what was searched for comes
- * first and navigation, the least specific match, comes last.
+ * first, then navigation, then the offer to add the query as a streamer.
  */
 export function buildPalette(input: PaletteInput): PaletteGroup[] {
   const needle = input.query.trim().toLowerCase();
@@ -154,7 +154,11 @@ export function buildPalette(input: PaletteInput): PaletteGroup[] {
   return nonEmpty([
     { label: "Streamers", items: streamers },
     { label: "Campaigns", items: campaigns },
-    { label: "Actions", items: [...miner, ...add] },
+    { label: "Actions", items: miner },
     { label: "Go to", items: screens },
+    // Last of all: almost any word is a valid login, and Enter takes the
+    // first item, so anywhere higher it would beat a real match -- "logs"
+    // would add a streamer instead of opening Logs.
+    { label: "Add", items: add },
   ]);
 }

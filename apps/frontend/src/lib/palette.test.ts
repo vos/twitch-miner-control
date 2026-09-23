@@ -50,7 +50,7 @@ test("with a query: streamers, campaigns, actions, then screens", () => {
 test("groups with no match are left out", () => {
   // "winter" matches only the campaign, and is a valid login to add.
   const groups = buildPalette(input({ query: "winter", campaigns: [campaign("c1", "Winter")] }));
-  expect(labels(groups)).toEqual(["Campaigns", "Actions"]);
+  expect(labels(groups)).toEqual(["Campaigns", "Add"]);
 });
 
 test("a query finds offline streamers too, live ones first", () => {
@@ -108,18 +108,25 @@ test("the miner offers only what its state allows", () => {
 });
 
 test("miner actions are searchable by their label", () => {
-  const actions = ids(buildPalette(input({ query: "restart" })), "Actions");
-  // Miner actions come before the add offer: "restart" is also a valid login.
-  expect(actions).toEqual(["miner:restart", "add:restart"]);
+  expect(ids(buildPalette(input({ query: "restart" })), "Actions")).toEqual(["miner:restart"]);
 });
 
 test("an untracked username can be added", () => {
-  expect(ids(buildPalette(input({ query: "newbie" })), "Actions")).toEqual(["add:newbie"]);
-  expect(ids(buildPalette(input({ query: "https://twitch.tv/newbie" })), "Actions"))
+  expect(ids(buildPalette(input({ query: "newbie" })), "Add")).toEqual(["add:newbie"]);
+  expect(ids(buildPalette(input({ query: "https://twitch.tv/newbie" })), "Add"))
     .toEqual(["add:newbie"]);
 });
 
 test("no add for a tracked channel, whatever its case, or for a non-username", () => {
-  expect(ids(buildPalette(input({ query: "ALPHA" })), "Actions")).toEqual([]);
-  expect(ids(buildPalette(input({ query: "two words" })), "Actions")).toEqual([]);
+  expect(ids(buildPalette(input({ query: "ALPHA" })), "Add")).toEqual([]);
+  expect(ids(buildPalette(input({ query: "two words" })), "Add")).toEqual([]);
+});
+
+test("the add offer ranks below everything else, so Enter never picks it over a match", () => {
+  // "logs" is a valid login as well as a screen; Enter takes the first item.
+  const groups = buildPalette(input({ query: "logs" }));
+  expect(labels(groups)).toEqual(["Go to", "Add"]);
+  expect(groups[0].items[0].id).toBe("screen:logs");
+  // Likewise a miner action whose name is also a valid login.
+  expect(buildPalette(input({ query: "restart" }))[0].items[0].id).toBe("miner:restart");
 });
