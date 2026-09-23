@@ -345,3 +345,46 @@ test("the history view ends with when the channel is usually live", async () => 
   const calls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls;
   expect(calls.some(([url]) => url === "/api/streamers/alpha/schedule")).toBe(true);
 });
+
+test("while the first history loads, placeholders stand in for it", async () => {
+  // Never answers: the dialog stays in its first-load state.
+  vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  const placeholder = await screen.findByTestId("detail-loading");
+  expect(placeholder).toHaveAttribute("aria-busy", "true");
+  expect(placeholder).toHaveAccessibleName("Loading history");
+});
+
+test("a range change keeps the old history on screen, dimmed, until the new one lands", async () => {
+  let answer: (() => void) | null = null;
+  const body = {
+    series: [], events: [], sessions: [],
+    coverage: { live: [], mined: [] }, firstSeen: null, retentionFloor: null,
+    gained: null, gainedSince: null,
+  };
+  vi.stubGlobal("fetch", vi.fn((url: string) => {
+    const reply = { ok: true, status: 200, json: async () => (url.includes("/schedule") ? { since: 0, now: 0, spans: [] } : body) };
+    // The first history request answers at once; the next waits.
+    if (url.startsWith("/api/history") && answer === null) {
+      answer = () => {};
+      return Promise.resolve(reply);
+    }
+    if (url.startsWith("/api/history")) {
+      return new Promise((resolve) => { answer = () => resolve(reply); });
+    }
+    return Promise.resolve(reply);
+  }));
+  renderApp(<StreamerDetailModal streamer={streamer()} opened onClose={() => {}} />);
+  const history = await screen.findByTestId("detail-history");
+  expect(history).toHaveAttribute("aria-busy", "false");
+
+  await userEvent.click(screen.getByText("30 days"));
+  await waitFor(() => expect(screen.getByTestId("detail-history")).toHaveAttribute("aria-busy", "true"));
+  // Dimmed in place rather than swapped for placeholders: nothing jumps.
+  expect(screen.queryByTestId("detail-loading")).toBeNull();
+  expect(screen.getByTestId("detail-history").style.opacity).toBe("0.5");
+
+  answer!();
+  await waitFor(() => expect(screen.getByTestId("detail-history")).toHaveAttribute("aria-busy", "false"));
+});
+

@@ -1,4 +1,4 @@
-import { Alert, Button, Group, Modal, SegmentedControl, Stack, Text } from "@mantine/core";
+import { Alert, Button, Group, Modal, SegmentedControl, Skeleton, Stack, Text } from "@mantine/core";
 import { IconActivity, IconCoins } from "@tabler/icons-react";
 import { useState } from "react";
 import { useLiveSchedule } from "../api/useLiveSchedule.js";
@@ -159,7 +159,20 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
         )}
 
         {error !== null && <Alert role="alert" color="red">{error}</Alert>}
-        {loading && <Text size="sm" c="dimmed">Loading history…</Text>}
+        {/* The first load has nothing to show yet, so placeholders hold
+            the chart's and the table's places; the dialog then fills in
+            without jumping. */}
+        {loading && detail === null && (
+          <Stack
+            gap="lg" role="status" aria-busy="true" aria-label="Loading history"
+            data-testid="detail-loading"
+          >
+            <Skeleton height={240} radius="sm" />
+            <Stack gap="xs">
+              {[0, 1, 2].map((row) => <Skeleton key={row} height={28} radius="sm" />)}
+            </Stack>
+          </Stack>
+        )}
 
         {detail !== null && showActivity && (
           /* "100%", not a computed height: the body above is a flex
@@ -172,7 +185,15 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
         {detail !== null && !showActivity && (() => {
           const { from, to } = rangeWindow(range, Date.now());
           return (
-            <>
+            // A range change keeps the previous history on screen, dimmed,
+            // until the new one lands -- swapping it for placeholders
+            // would collapse the dialog and jump it back open.
+            <Stack
+              gap="lg"
+              aria-busy={loading}
+              data-testid="detail-history"
+              style={{ opacity: loading ? 0.5 : 1, transition: "opacity 150ms ease" }}
+            >
               <PointsChart
                 series={detail.series}
                 range={range}
@@ -186,7 +207,7 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
                 days={COVERAGE_DAYS[range]}
               />
               <LiveSchedule data={schedule.data} error={schedule.error} />
-            </>
+            </Stack>
           );
         })()}
       </Stack>

@@ -1,4 +1,4 @@
-import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
+import { AppShell, Burger, Center, Group, Loader, Text, Tooltip } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api } from "./api/client.js";
@@ -56,7 +56,13 @@ const SCREENS = {
   insights: {
     label: "Insights",
     element: (p: ScreenProps) => (
-      <Suspense fallback={null}>
+      <Suspense
+        fallback={
+          <Center py="xl" role="status" aria-label="Loading Insights">
+            <Loader size="sm" />
+          </Center>
+        }
+      >
         <Insights period={stamped(p.intent, "period")} />
       </Suspense>
     ),
