@@ -5,6 +5,7 @@ import { matchesCampaign } from "./campaignMatch.js";
 import { formatViewers } from "./formatViewers.js";
 import { TRANSITIONAL, isKnown, isUp } from "./minerState.js";
 import { parseStreamerInput } from "./parseStreamerInput.js";
+import type { ScreenParams } from "./screenIntent.js";
 
 export type MinerAction = "start" | "stop" | "restart";
 
@@ -16,7 +17,7 @@ export const MINER_LABEL: Record<MinerAction, string> = {
 
 /** What choosing an item does. Kept as data so the builder stays pure. */
 export type PaletteCommand =
-  | { kind: "screen"; screen: ScreenKey }
+  | { kind: "screen"; screen: ScreenKey; params?: ScreenParams }
   | { kind: "streamer"; login: string }
   | { kind: "campaign"; id: string }
   | { kind: "miner"; action: MinerAction }
@@ -41,7 +42,7 @@ type PaletteStreamer = Pick<StreamerState, "username" | "displayName" | "isOnlin
 
 export interface PaletteInput {
   query: string;
-  screens: ReadonlyArray<{ key: ScreenKey; label: string }>;
+  screens: ReadonlyArray<{ key: ScreenKey; label: string; params?: ScreenParams }>;
   streamers: ReadonlyArray<PaletteStreamer>;
   /** Null until the catalogue has been fetched. */
   campaigns: ReadonlyArray<ResolvedCampaign> | null;
@@ -115,7 +116,11 @@ export function buildPalette(input: PaletteInput): PaletteGroup[] {
   const screens = input.screens
     .filter((s) => needle === "" || matches(s.label))
     .map((s): PaletteItem => ({
-      id: `screen:${s.key}`, label: s.label, command: { kind: "screen", screen: s.key },
+      // Two entries can share a key (Insights and its recaps); the period
+      // keeps their ids apart.
+      id: s.params?.period === undefined ? `screen:${s.key}` : `screen:${s.key}:${s.params.period}`,
+      label: s.label,
+      command: { kind: "screen", screen: s.key, params: s.params },
     }));
 
   const streamers = input.streamers

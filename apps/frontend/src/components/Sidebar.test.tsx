@@ -90,7 +90,7 @@ test("every screen the app defines is reachable from the nav", () => {
   // entry here compiles, tests green, and is unreachable in the app.
   view("1.3.0");
   for (const label of [
-    "Dashboard", "Streamers", "Drops", "Logs", "Settings", "Twitch account",
+    "Dashboard", "Streamers", "Drops", "Insights", "Logs", "Settings", "Twitch account",
   ]) {
     expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeTruthy();
   }

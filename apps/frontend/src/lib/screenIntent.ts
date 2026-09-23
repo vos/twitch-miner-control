@@ -10,6 +10,8 @@ export interface ScreenParams {
   campaign?: string;
   /** Streamers: text to put in the add box. */
   prefill?: string;
+  /** Insights: which recap to open on, at the current period. */
+  period?: "week" | "month";
 }
 
 /**

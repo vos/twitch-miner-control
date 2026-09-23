@@ -1,6 +1,6 @@
 import { AppShell, Burger, Group, Text, Tooltip } from "@mantine/core";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api } from "./api/client.js";
 import { LiveStateProvider, useLiveState, useStreamEvent } from "./api/useLiveState.js";
 import {
@@ -22,6 +22,11 @@ import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
 import { Settings } from "./routes/Settings.js";
 import { Streamers } from "./routes/Streamers.js";
+
+// Split out: the calendar and the recap are the app's largest screen, and
+// only a visit to Insights should pay for them.
+const Insights = lazy(() =>
+  import("./routes/Insights.js").then((m) => ({ default: m.Insights })));
 
 /**
  * `element` is a function rather than a built element so a screen can be
@@ -48,14 +53,28 @@ const SCREENS = {
     label: "Drops",
     element: (p: ScreenProps) => <Drops jump={stamped(p.intent, "campaign")} />,
   },
+  insights: {
+    label: "Insights",
+    element: (p: ScreenProps) => (
+      <Suspense fallback={null}>
+        <Insights period={stamped(p.intent, "period")} />
+      </Suspense>
+    ),
+  },
   logs: { label: "Logs", element: () => <Logs /> },
   settings: { label: "Settings", element: () => <Settings /> },
   account: { label: "Twitch account", element: () => <TwitchLogin /> },
 } as const;
 
-/** Every screen by key and label, for the palette's "Go to" group. */
-const SCREEN_LIST = (Object.keys(SCREENS) as ScreenKey[])
-  .map((key) => ({ key, label: SCREENS[key].label }));
+/**
+ * Every screen by key and label for the palette's "Go to" group, plus the
+ * two recaps, which are destinations of their own.
+ */
+const SCREEN_LIST: ReadonlyArray<{ key: ScreenKey; label: string; params?: ScreenParams }> = [
+  ...(Object.keys(SCREENS) as ScreenKey[]).map((key) => ({ key, label: SCREENS[key].label })),
+  { key: "insights", label: "Insights: this week", params: { period: "week" } },
+  { key: "insights", label: "Insights: this month", params: { period: "month" } },
+];
 
 interface ScreenProps {
   loginRequired: boolean;

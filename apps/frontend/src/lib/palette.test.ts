@@ -130,3 +130,16 @@ test("the add offer ranks below everything else, so Enter never picks it over a 
   // Likewise a miner action whose name is also a valid login.
   expect(buildPalette(input({ query: "restart" }))[0].items[0].id).toBe("miner:restart");
 });
+
+test("a screen entry can carry params, with its own id", () => {
+  const groups = buildPalette(input({
+    query: "insights",
+    screens: [
+      { key: "insights" as ScreenKey, label: "Insights" },
+      { key: "insights" as ScreenKey, label: "Insights: this month", params: { period: "month" } },
+    ],
+  }));
+  const items = groups.find((g) => g.label === "Go to")!.items;
+  expect(items.map((i) => i.id)).toEqual(["screen:insights", "screen:insights:month"]);
+  expect(items[1].command).toEqual({ kind: "screen", screen: "insights", params: { period: "month" } });
+});

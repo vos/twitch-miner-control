@@ -45,7 +45,7 @@ const LIVE_DOT = (
 export function CommandPalette({
   screens, minerState, onMinerChange, onNavigate, onOpenStreamer,
 }: {
-  screens: ReadonlyArray<{ key: ScreenKey; label: string }>;
+  screens: ReadonlyArray<{ key: ScreenKey; label: string; params?: ScreenParams }>;
   minerState: string | null;
   onMinerChange: (status: MinerStatus) => void;
   onNavigate: (key: ScreenKey, params?: ScreenParams) => void;
@@ -85,7 +85,12 @@ export function CommandPalette({
 
   const dispatch = (command: PaletteCommand) => {
     switch (command.kind) {
-      case "screen": return onNavigate(command.screen);
+      case "screen":
+        // Called without a second argument when there are no params, so
+        // a plain navigation looks the same as it did before params existed.
+        return command.params === undefined
+          ? onNavigate(command.screen)
+          : onNavigate(command.screen, command.params);
       case "streamer": return onOpenStreamer(command.login);
       case "campaign": return onNavigate("drops", { campaign: command.id });
       case "add": return onNavigate("streamers", { prefill: command.login });

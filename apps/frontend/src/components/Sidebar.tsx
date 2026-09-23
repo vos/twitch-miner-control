@@ -1,7 +1,6 @@
 import { Anchor, Badge, Box, Divider, Group, Skeleton, Stack, Text } from "@mantine/core";
 import {
-  IconChartBar, IconDeviceTv, IconGift, IconSettings, IconTerminal2,
-  IconUserCircle,
+  IconChartBar, IconDeviceTv, IconGift, IconSettings, IconSparkles, IconTerminal2, IconUserCircle,
 } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import type { ScreenKey } from "../app.js";
@@ -17,6 +16,7 @@ const ITEMS: Array<{ key: ScreenKey; label: string; icon: ReactNode }> = [
   { key: "dashboard", label: "Dashboard", icon: <IconChartBar {...ICON} /> },
   { key: "streamers", label: "Streamers", icon: <IconDeviceTv {...ICON} /> },
   { key: "drops", label: "Drops", icon: <IconGift {...ICON} /> },
+  { key: "insights", label: "Insights", icon: <IconSparkles {...ICON} /> },
   { key: "logs", label: "Logs", icon: <IconTerminal2 {...ICON} /> },
   { key: "settings", label: "Settings", icon: <IconSettings {...ICON} /> },
   { key: "account", label: "Twitch account", icon: <IconUserCircle {...ICON} /> },
