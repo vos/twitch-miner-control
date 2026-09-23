@@ -20,3 +20,13 @@ export function formatWorked(ms: number): string {
   if (ms < DAY) return `${Math.floor(ms / HOUR)}h`;
   return `${Math.floor(ms / DAY)}d`;
 }
+
+/** Like formatWorked, but to the minute past the hour: two streams of
+ *  "3h" can differ by most of one. */
+export function formatWorkedMinutes(ms: number): string {
+  if (ms < MINUTE) return "0m";
+  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+  const hours = Math.floor(ms / HOUR);
+  const minutes = Math.floor((ms % HOUR) / MINUTE);
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}

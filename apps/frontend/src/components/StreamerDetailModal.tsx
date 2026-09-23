@@ -207,6 +207,7 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
               <CoverageTimeline
                 coverage={detail.coverage}
                 days={COVERAGE_DAYS[range]}
+                series={detail.series}
               />
               <LiveSchedule data={schedule.data} error={schedule.error} />
             </Stack>

@@ -35,3 +35,11 @@ test("a tooltip is separated from the surface it opens over", () => {
   expect(styles?.tooltip?.border).toMatch(/var\(--tw-border\)/);
   expect(styles?.tooltip?.boxShadow).toBeTruthy();
 });
+
+test("floating tooltips match the regular ones", () => {
+  // Mantine themes Tooltip.Floating under its own name, so without its
+  // own entry it falls back to the stock near-white panel.
+  const props = theme.components?.TooltipFloating?.defaultProps as
+    { bg?: string } | undefined;
+  expect(props?.bg).toBe("var(--tw-overlay)");
+});

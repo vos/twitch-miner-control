@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
-import { collapseQuietDays, coverageRows } from "./coverageRows.js";
+import {
+  collapseQuietDays, coverageRows, dayStretches, pointsBetween, stateAt,
+} from "./coverageRows.js";
 
 const HOUR = 3_600_000;
 // 22:00 local, whatever the machine's zone: late enough that "a few hours
@@ -72,6 +74,7 @@ test("rows stay on consecutive local midnights across a DST change", () => {
 /** A row as collapseQuietDays sees it: only the fields it reads. */
 const day = (offset: number, liveMs = 0) => ({
   dayStart: new Date(1970, 0, 10 - offset).getTime(),
+  dayEnd: new Date(1970, 0, 11 - offset).getTime(),
   live: [], mined: [], liveMs, minedMs: 0,
 });
 
@@ -115,4 +118,49 @@ test("collapse counts a day as quiet on live time, not mined time", () => {
 test("collapse returns nothing when no day in the window has activity", () => {
   // The caller renders its own empty state rather than a lone gap line.
   expect(collapseQuietDays([day(2), day(1), day(0)])).toEqual([]);
+});
+
+test("a band keeps its own times, cut at midnight", () => {
+  // Yesterday 20:00 to today 02:00: today's band starts at its midnight.
+  const rows = coverageRows([{ start: NOW - 26 * HOUR, end: NOW - 20 * HOUR }], [], 2, NOW);
+  const today = rows[1];
+  expect(today.live[0].start).toBe(today.dayStart);
+  expect(today.live[0].end).toBe(NOW - 20 * HOUR);
+  expect(rows[0].live[0].end).toBe(rows[0].dayEnd);
+  expect(rows[0].dayEnd).toBe(today.dayStart);
+});
+
+test("each live stretch reports only the mining inside it", () => {
+  const [day] = coverageRows(
+    [{ start: NOW - 6 * HOUR, end: NOW - 4 * HOUR }, { start: NOW - 2 * HOUR, end: NOW }],
+    [{ start: NOW - 5 * HOUR, end: NOW - 4 * HOUR }, { start: NOW - 2 * HOUR, end: NOW }],
+    1, NOW,
+  );
+  expect(dayStretches(day).map((s) => s.minedMs)).toEqual([HOUR, 2 * HOUR]);
+});
+
+test("stateAt tells live-and-mined from live-and-missed from offline", () => {
+  const [day] = coverageRows(
+    [{ start: NOW - 4 * HOUR, end: NOW }],
+    [{ start: NOW - 2 * HOUR, end: NOW }],
+    1, NOW,
+  );
+  expect(stateAt(day, NOW - HOUR)).toEqual({ live: true, mined: true });
+  expect(stateAt(day, NOW - 3 * HOUR)).toEqual({ live: true, mined: false });
+  expect(stateAt(day, NOW - 6 * HOUR)).toEqual({ live: false, mined: false });
+});
+
+test("pointsBetween differences the balances in force at each end", () => {
+  const series = [
+    { ts: 100, balance: 1000 },
+    { ts: 250, balance: 1300 },
+    { ts: 400, balance: 1250 },
+  ];
+  expect(pointsBetween(series, 200, 300)).toBe(300);
+  expect(pointsBetween(series, 200, 500)).toBe(250);
+});
+
+test("pointsBetween is unknown without a balance before the start", () => {
+  // The first sample inside the window already carries its own gain.
+  expect(pointsBetween([{ ts: 250, balance: 1300 }], 200, 300)).toBeNull();
 });

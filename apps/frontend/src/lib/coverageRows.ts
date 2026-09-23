@@ -8,11 +8,16 @@ export interface Span {
 export interface Band {
   startFraction: number;
   endFraction: number;
+  /** The stretch's own times, already cut at the day's edges. */
+  start: number;
+  end: number;
 }
 
 export interface CoverageDay {
   /** Local midnight opening this day. */
   dayStart: number;
+  /** Local midnight closing it -- not dayStart + 24h, across DST. */
+  dayEnd: number;
   live: Band[];
   mined: Band[];
   liveMs: number;
@@ -50,6 +55,8 @@ function bandsFor(spans: Span[], dayStart: number, now: number): {
     bands.push({
       startFraction: (start - dayStart) / width,
       endFraction: (end - dayStart) / width,
+      start,
+      end,
     });
   }
   return { bands, ms };
@@ -77,6 +84,7 @@ export function coverageRows(
     const minedDay = bandsFor(mined, dayStart, now);
     rows.push({
       dayStart,
+      dayEnd: midnight(dayStart, 1),
       live: liveDay.bands,
       mined: minedDay.bands,
       liveMs: liveDay.ms,
@@ -84,6 +92,59 @@ export function coverageRows(
     });
   }
   return rows;
+}
+
+/** One live stretch of a day, with how much of it we were mining. */
+export interface Stretch {
+  start: number;
+  end: number;
+  minedMs: number;
+}
+
+/**
+ * The day's live stretches, each with its own mined time.
+ *
+ * Measured against the day's mined bands rather than read off the
+ * session table: a session there is a whole stream, which can cross
+ * midnight, while these are already cut to this row.
+ */
+export function dayStretches(day: CoverageDay): Stretch[] {
+  return day.live.map((band) => {
+    let minedMs = 0;
+    for (const m of day.mined) {
+      const overlap = Math.min(band.end, m.end) - Math.max(band.start, m.start);
+      if (overlap > 0) minedMs += overlap;
+    }
+    return { start: band.start, end: band.end, minedMs };
+  });
+}
+
+/** Whether the channel was live, and whether we were mining, at `ts`. */
+export function stateAt(day: CoverageDay, ts: number): { live: boolean; mined: boolean } {
+  const inside = (b: Band) => ts >= b.start && ts < b.end;
+  return { live: day.live.some(inside), mined: day.mined.some(inside) };
+}
+
+/**
+ * Points gained between two instants, from change-only balance samples.
+ *
+ * Null when no sample sits at or before `from`: the series is clipped to
+ * the fetched window, and without a balance in force at the start there
+ * is nothing honest to subtract from -- the first sample inside the day
+ * already carries its own gain.
+ */
+export function pointsBetween(
+  series: { ts: number; balance: number }[],
+  from: number,
+  to: number,
+): number | null {
+  let opening: number | null = null;
+  let closing: number | null = null;
+  for (const s of series) {
+    if (s.ts <= from) opening = s.balance;
+    if (s.ts <= to) closing = s.balance;
+  }
+  return opening === null || closing === null ? null : closing - opening;
 }
 
 /** A rendered row: either one day, or a stretch of days with no stream. */

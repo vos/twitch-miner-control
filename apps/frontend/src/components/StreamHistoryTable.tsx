@@ -1,5 +1,6 @@
 import { Badge, Stack, Table, Text } from "@mantine/core";
 import { sessionRows, type DetailSession } from "../lib/sessionRows.js";
+import { formatWorkedMinutes } from "../lib/formatWorked.js";
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -8,20 +9,7 @@ const nf = new Intl.NumberFormat("en-US");
 const LIMIT = 20;
 
 /** Coverage below this is worth pointing at: most of the stream was missed. */
-const LOW_COVERAGE = 0.5;
-
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-
-/** Truncated, never rounded up, like formatWorked -- but to the minute
- *  past the hour, since two streams of "3h" can differ by most of one. */
-function duration(ms: number): string {
-  if (ms < MINUTE) return "0m";
-  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
-  const hours = Math.floor(ms / HOUR);
-  const minutes = Math.floor((ms % HOUR) / MINUTE);
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
-}
+export const LOW_COVERAGE = 0.5;
 
 /**
  * One row per stream: how long it ran, how much of it we mined, what it
@@ -67,9 +55,9 @@ export function StreamHistoryTable({ sessions }: { sessions: DetailSession[] }) 
                     <Badge color="twitch" variant="light" size="xs" ml={6}>live</Badge>
                   )}
                 </Table.Td>
-                <Table.Td>{duration(row.length)}</Table.Td>
+                <Table.Td>{formatWorkedMinutes(row.length)}</Table.Td>
                 <Table.Td>
-                  {duration(row.mined)}
+                  {formatWorkedMinutes(row.mined)}
                   {row.coverage !== null && row.coverage < LOW_COVERAGE && (
                     // The one actionable signal in the dialog: the stream
                     // ran and we were not there for most of it.

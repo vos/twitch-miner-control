@@ -51,5 +51,18 @@ export const theme = createTheme({
         },
       },
     },
+    /** Tooltip.Floating is themed under its own name, not Tooltip's. */
+    TooltipFloating: {
+      defaultProps: {
+        bg: "var(--tw-overlay)",
+        c: "var(--tw-text)",
+      },
+      styles: {
+        tooltip: {
+          border: "1px solid var(--tw-border)",
+          boxShadow: "0 4px 16px rgba(0, 0, 0, 0.55)",
+        },
+      },
+    },
   },
 });

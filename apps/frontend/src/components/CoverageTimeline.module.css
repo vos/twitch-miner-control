@@ -12,3 +12,33 @@
      divider between them, so it sits back. */
   opacity: 0.6;
 }
+
+/* The hover target around a day's band. The hairline and the card
+   replace the pointer's own job, so the pointer steps aside. */
+.track {
+  flex: 1;
+  min-width: 0;
+  cursor: crosshair;
+}
+
+/* A colour key on the hover card, matching the band it stands for. */
+.swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* A stretch on the card. The one under the pointer lifts, tying the list
+   back to the spot on the band being hovered. */
+.stretch,
+.stretchActive {
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+}
+
+.stretchActive {
+  background: rgba(255, 255, 255, 0.06);
+}
