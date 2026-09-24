@@ -34,6 +34,15 @@ export const RECONCILE_INTERVAL_MS = 900_000;
  */
 export const BOOT_PASS_BUDGET_MS = 30_000;
 
+/** A subscription that has just started collecting, for notifications. */
+export interface CampaignStart {
+  subscriptionId: string;
+  label: string;
+  targetId: string;
+  /** A scheduled campaign opened, or the queue moved on to it. */
+  why: "opened" | "queue";
+}
+
 export interface EngineDeps {
   loadConfig: () => AppConfig;
   saveConfig: (path: string, config: AppConfig) => void;
@@ -47,6 +56,8 @@ export interface EngineDeps {
   now?: () => number;
   /** Where resolution decisions are recorded, for the app event log. */
   log?: AppLog;
+  /** Told when a subscription starts collecting. */
+  onCampaignStarted?: (event: CampaignStart) => void;
 }
 
 /**
@@ -279,6 +290,9 @@ export class SubscriptionEngine {
           label: sub.label,
           targetId: sub.targetId,
         });
+        this.deps.onCampaignStarted?.({
+          subscriptionId: sub.id, label: sub.label, targetId: sub.targetId, why: "opened",
+        });
       }
 
       // A waiting subscription owns no channels, so any it held (it was
@@ -296,6 +310,9 @@ export class SubscriptionEngine {
           label: sub.label,
           targetId: sub.targetId,
           waiting,
+        });
+        this.deps.onCampaignStarted?.({
+          subscriptionId: sub.id, label: sub.label, targetId: sub.targetId, why: "queue",
         });
       }
 

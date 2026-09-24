@@ -32,6 +32,7 @@ function make(over: {
   now?: number | (() => number);
   /** The catalogue read throws, failing the whole pass. */
   catalogueFails?: boolean;
+  onCampaignStarted?: (e: unknown) => void;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -67,6 +68,7 @@ function make(over: {
       ? over.now
       : over.now === undefined ? undefined : () => over.now as number,
     log: over.log,
+    onCampaignStarted: over.onCampaignStarted,
   });
   return { engine, saveConfig, propose, config };
 }
@@ -762,4 +764,31 @@ test("an engine with no logger behaves identically", async () => {
   const { engine, saveConfig } = make();
   await expect(engine.pass()).resolves.toBeUndefined();
   expect(saveConfig).toHaveBeenCalledTimes(1);
+});
+
+// --- campaign starts, for notifications ---
+
+test("a scheduled campaign opening is reported", async () => {
+  const started = vi.fn();
+  let now = 1_000;
+  const { engine } = make({
+    now: () => now,
+    onCampaignStarted: started,
+    catalogue: { campaigns: [campaign({ startsAt: 1_000 + HOUR })] },
+  });
+  await engine.pass();
+  expect(started).not.toHaveBeenCalled();
+  now += HOUR + 1;
+  await engine.pass();
+  expect(started).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: "s1", why: "opened" }));
+});
+
+test("the queue moving on is reported", async () => {
+  const started = vi.fn();
+  const { engine } = queued({
+    onCampaignStarted: started,
+    config: { streamers: [], subscriptions: twoSubs, campaignQueue: true },
+  });
+  await engine.pass();
+  expect(started).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: "s1", why: "queue" }));
 });
