@@ -40,6 +40,19 @@ import { COMPONENT, EVENT } from "./appLog/types.js";
 import {
   resolveAppLogLevel, resolveAppLogMaxBytes,
 } from "./config/appLogLevel.js";
+import { buildDaySummary } from "./insights/recap.js";
+import { ActionTokens } from "./notify/actions.js";
+import {
+  DEFAULT_VAPID_SUBJECT, WebPushChannel, loadOrCreateVapid,
+} from "./notify/channels/webPush.js";
+import { Notifier } from "./notify/notifier.js";
+import { CampaignWatcher, campaignStartedNotification } from "./notify/sources/campaigns.js";
+import { DigestScheduler } from "./notify/sources/digest.js";
+import { watchDoorbell } from "./notify/sources/doorbell.js";
+import { watchHealth } from "./notify/sources/health.js";
+import { RestartNotifications } from "./notify/sources/restart.js";
+import { watchStreams } from "./notify/sources/streams.js";
+import { NotifyStore } from "./notify/store.js";
 
 const dataDir = resolve(process.env.DATA_DIR ?? "./data");
 const pythonDir = resolve(process.env.PYTHON_DIR ?? "./python");
@@ -146,6 +159,24 @@ const loginRunner = new LoginRunner({
 const db = openDb(join(dataDir, "history.db"));
 const history = new History(db);
 const dailyPoints = new DailyPoints(db);
+
+// Notifications. The key pair lives beside the database: browsers
+// subscribe against its public half, so replacing it strands every
+// subscription until each browser next opens the app and re-subscribes.
+const notifyStore = new NotifyStore(db);
+const vapid = loadOrCreateVapid(join(dataDir, "vapid.json"));
+const notifier = new Notifier({
+  store: notifyStore,
+  channels: {
+    webpush: new WebPushChannel({
+      vapid,
+      subject: process.env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT,
+    }),
+  },
+  log: appLog.log,
+});
+const actionTokens = new ActionTokens();
+
 // Close spans left open by a killed process before anything reads one.
 // An open miner session claims the miner is still running, so a crash
 // would otherwise keep accruing mining time for the whole downtime.
@@ -160,6 +191,7 @@ const retentionDays = resolveRetentionDays(process.env.HISTORY_RETENTION_DAYS);
 // Insights calendar loses that day for good. It runs even with pruning
 // off, so the calendar never waits on a request to fill in.
 const housekeeping = () => {
+  notifyStore.prune(Date.now());
   rollupDays({ history, daily: dailyPoints }, Date.now());
   if (retentionDays === 0) return;
   const removed = history.prunePoints(Date.now() - retentionDays * 86_400_000);
@@ -373,7 +405,22 @@ const inventoryCache = new InventoryCache({ client: helper });
 // different channels, so the restart is deferred behind a cancellable
 // countdown rather than interrupting whoever is watching. buildServer
 // attaches its SSE hub to this, the hub being inside the server.
-const pendingRestart = new PendingRestart({ supervisor, log: appLog.log });
+// Built in two steps because each needs the other: the notifications
+// decide the deferral and hear every transition, and redeeming a
+// Cancel action has to reach the pending restart.
+let pendingRestartRef: PendingRestart | null = null;
+const restartNotes = new RestartNotifications({
+  notifier,
+  tokens: actionTokens,
+  pending: () => pendingRestartRef!,
+});
+const pendingRestart = new PendingRestart({
+  supervisor,
+  log: appLog.log,
+  deferralMs: () => restartNotes.deferralMs(),
+  onTransition: (t) => restartNotes.onTransition(t),
+});
+pendingRestartRef = pendingRestart;
 
 const engine = new SubscriptionEngine({
   loadConfig: () => loadConfig(configPath),
@@ -386,6 +433,7 @@ const engine = new SubscriptionEngine({
     }).then((r) => r.channels),
   pending: pendingRestart,
   inventory: inventoryCache,
+  onCampaignStarted: (event) => notifier.publish(campaignStartedNotification(event)),
   log: appLog.log,
 });
 
@@ -393,12 +441,36 @@ const engine = new SubscriptionEngine({
 // the status frame reports it so the UI does not read that as STOPPED.
 let minerStartHeld = false;
 
+watchHealth({ notifier, supervisor, loginStatus, updates: updateChecker });
+watchStreams({ notifier, stateService });
+watchDoorbell({ notifier, stateService });
+const campaignWatcher = new CampaignWatcher({
+  notifier,
+  catalogue,
+  inventory: inventoryCache,
+  subscribedGames: () => loadConfig(configPath).subscriptions
+    .filter((s) => s.kind === "game")
+    .map((s) => s.targetId),
+});
+const digest = new DigestScheduler({
+  notifier,
+  store: notifyStore,
+  summary: (day) => buildDaySummary({ history, daily: dailyPoints, streamers }, day, Date.now()),
+});
+digest.start();
+
 const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers, dailyPoints,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
   engine, pendingRestart,
+  notify: {
+    store: notifyStore,
+    notifier,
+    vapidPublicKey: vapid.publicKey,
+    redeemAction: (token) => restartNotes.redeem(token),
+  },
   minerStartHeld: () => minerStartHeld,
   log: appLog.log,
   appLog: appLogFeed,
@@ -432,6 +504,7 @@ void (async () => {
   }
   if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
   engine.start();
+  campaignWatcher.start();
 })().catch((cause: unknown) => {
   const err = cause instanceof Error ? cause.message : String(cause);
   bootLog.error({
@@ -452,6 +525,9 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     void (async () => {
       stateService.stop();
       engine.stop();
+      campaignWatcher.stop();
+      digest.stop();
+      notifier.stop();
       // cancel() itself is synchronous (it only sends signals and arms its
       // own SIGKILL escalation timer), so awaiting it directly awaited
       // nothing -- process.exit(0) below could run before the SIGKILL
