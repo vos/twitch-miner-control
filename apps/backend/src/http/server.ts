@@ -34,6 +34,7 @@ import type { StateService } from "../state/service.js";
 import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
 import { SseHub } from "./sse.js";
+import { registerNotifyRoutes, type NotifyRouteDeps } from "../notify/routes.js";
 
 /** How far back the live-schedule grid looks. */
 const SCHEDULE_WEEKS = 12;
@@ -218,6 +219,11 @@ export interface ServerDeps {
   pendingRestart: Pick<PendingRestart, "cancel" | "fireNow" | "state"> & {
     setBroadcast?: (fn: (event: string, data: unknown) => void) => void;
   };
+  /**
+   * The notification routes, inbox feed and action endpoint. Absent in
+   * tests that do not exercise them, which then get no /api/notify routes.
+   */
+  notify?: NotifyRouteDeps;
   /**
    * Absolute path to the built frontend (`apps/frontend/dist`). When set,
    * the static build is mounted at `/*` and unmatched non-API paths fall
@@ -428,6 +434,7 @@ export function buildServer(deps: ServerDeps): AppServer {
       secureCookie: deps.secureCookie,
     });
     hub.register(instance);
+    if (deps.notify !== undefined) registerNotifyRoutes(instance, { ...deps.notify, log: deps.log });
 
     instance.get("/api/config", async () => staged ?? loadConfig(deps.configPath));
 
@@ -1102,7 +1109,14 @@ export function buildServer(deps: ServerDeps): AppServer {
   });
 
   if (deps.staticRoot) {
-    void app.register(fastifyStatic, { root: deps.staticRoot });
+    void app.register(fastifyStatic, {
+      root: deps.staticRoot,
+      // The service worker must be revalidated on every check, or a
+      // browser can run a stale one for up to a day after an upgrade.
+      setHeaders: (res, path) => {
+        if (path.endsWith("/sw.js")) res.header("Cache-Control", "no-cache");
+      },
+    });
     // A 404 handler runs precisely because no route matched, so unlike the
     // auth hook (which reads the router's already-decoded routeOptions.url)
     // there is no matched pattern here -- request.url, raw off the wire, is
@@ -1149,6 +1163,9 @@ export function buildServer(deps: ServerDeps): AppServer {
   });
 
   deps.pendingRestart.setBroadcast?.((event, data) => hub.broadcast(event, data));
+
+  // New inbox rows reach an open app at once, in the /api/notify/inbox row shape.
+  deps.notify?.notifier.onInbox((row) => hub.broadcast("notification", row));
 
   deps.stateService.on("change", (snapshot) => hub.broadcast("state", snapshot));
   // The activity feed used to poll /api/events every 5s, which re-sent the

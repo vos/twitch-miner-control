@@ -14,6 +14,7 @@ import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { CampaignCatalogue, type Campaign } from "../state/campaignCatalogue.js";
 import { InventoryCache } from "../state/inventory.js";
 import { StateService } from "../state/service.js";
+import type { NotifyRouteDeps } from "../notify/routes.js";
 import { buildServer } from "./server.js";
 
 const PASSWORD = "hunter2";
@@ -38,6 +39,7 @@ async function make(options: {
     buffer: { entries: () => unknown[]; total: number };
     onEvent: (listener: (event: unknown) => void) => void;
   };
+  notify?: NotifyRouteDeps;
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "srv-"));
   const configPath = join(dir, "config.json");
@@ -124,6 +126,7 @@ async function make(options: {
     staticRoot: PUBLIC_ROOT,
     statusTickMs: options.statusTickMs,
     appLog: options.appLog as never,
+    notify: options.notify,
   });
   await app.ready();
   const login = await app.inject({
@@ -2011,4 +2014,36 @@ describe("GET /api/insights/recap", () => {
     expect((await get("?period=month&offset=3")).json().period.partial).toBe(true);
     expect((await get("?period=month&offset=-1")).json().period.partial).toBe(false);
   });
+});
+
+// --- notifications ---
+
+const notifyDeps = (redeem: (token: string) => boolean) => ({
+  store: { list: () => [], inbox: () => [] } as never,
+  notifier: { sendTo: vi.fn(), onInbox: vi.fn() } as never,
+  vapidPublicKey: "k",
+  redeemAction: redeem,
+});
+
+test("a notification action needs no session", async () => {
+  const redeem = vi.fn(() => true);
+  const local = await make({ notify: notifyDeps(redeem) });
+  const res = await local.app.inject({
+    method: "POST", url: "/api/notify/action", payload: { token: "b".repeat(64) },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(redeem).toHaveBeenCalledOnce();
+});
+
+test("every other notification route still needs a session", async () => {
+  const local = await make({ notify: notifyDeps(() => false) });
+  for (const url of ["/api/notify/config", "/api/notify/destinations", "/api/notify/inbox"]) {
+    expect((await local.app.inject({ url })).statusCode).toBe(401);
+  }
+});
+
+test("the service worker is served for revalidation", async () => {
+  const res = await ctx.app.inject({ url: "/sw.js" });
+  expect(res.statusCode).toBe(200);
+  expect(res.headers["cache-control"]).toBe("no-cache");
 });

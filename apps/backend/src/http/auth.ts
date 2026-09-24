@@ -28,9 +28,14 @@ export interface AuthOptions {
  * `/api/session` is the login exchange itself, and the doorbell carries its
  * own shared token which the route checks (Task 15) — a session cookie would
  * be useless there because the caller is the miner subprocess, not a browser.
- * Nothing else belongs here: this list is the whole of the public API.
+ * `/api/notify/action` is pressed from a notification, where no session can
+ * exist; its single-use token (notify/actions.ts) is the credential, and it
+ * can only cancel the one pending restart it was minted for. Nothing else
+ * belongs here: this list is the whole of the public API.
  */
-const PUBLIC_ENDPOINTS = new Set(["POST /api/session", "POST /internal/doorbell"]);
+const PUBLIC_ENDPOINTS = new Set([
+  "POST /api/session", "POST /internal/doorbell", "POST /api/notify/action",
+]);
 
 /**
  * Route patterns that serve the built frontend (Task 20 mounts `@fastify/static`
