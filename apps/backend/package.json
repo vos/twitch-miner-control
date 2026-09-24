@@ -16,11 +16,13 @@
     "fastify": "^5.12.3",
     "pino": "^10.3.1",
     "sonic-boom": "^4.2.1",
+    "web-push": "^3.6.7",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.5.0",
+    "@types/web-push": "^3.6.4",
     "vitest": "^5.0.0"
   }
 }
