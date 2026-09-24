@@ -21,10 +21,19 @@
  */
 export class LoginStatus {
   private loggedIn = false;
+  private readonly signedOut: Array<() => void> = [];
 
   /** True when the user must sign in to Twitch again. */
   get required(): boolean {
     return !this.loggedIn;
+  }
+
+  /**
+   * Called when a working session is lost. Not called for a session that
+   * was never working, so a boot without one announces nothing.
+   */
+  onSignedOut(listener: () => void): void {
+    this.signedOut.push(listener);
   }
 
   markLoggedIn(): void {
@@ -32,6 +41,8 @@ export class LoginStatus {
   }
 
   markLoggedOut(): void {
+    const was = this.loggedIn;
     this.loggedIn = false;
+    if (was) for (const listener of this.signedOut) listener();
   }
 }

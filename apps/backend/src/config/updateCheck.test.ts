@@ -127,4 +127,18 @@ describe("UpdateChecker", () => {
     const [url] = fetchImpl.mock.calls[0] as [string];
     expect(url).toBe("https://api.github.com/repos/vos/twitch-miner-control/releases/latest");
   });
+
+  test("announces each newer release once", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(releaseResponse("v1.2.0"))
+      .mockResolvedValueOnce(releaseResponse("v1.2.0"))
+      .mockResolvedValueOnce(releaseResponse("v1.3.0"));
+    const c = checker("1.1.0", fetchImpl);
+    const heard: string[] = [];
+    c.onAvailable((v) => heard.push(v));
+    await c.check();
+    await c.check();
+    await c.check();
+    expect(heard).toEqual(["1.2.0", "1.3.0"]);
+  });
 });

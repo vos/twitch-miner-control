@@ -7,6 +7,17 @@ import { COMPONENT, EVENT } from "../appLog/types.js";
 export type MinerState =
   | "STOPPED" | "STARTING" | "RUNNING" | "RESTARTING" | "CRASHED";
 
+/**
+ * Why a miner process ended without being asked to, emitted as "crash"
+ * just before the state change it causes. Notifications are built from
+ * it; the app log records the same moments with more evidence.
+ */
+export type CrashInfo =
+  | { kind: "backoff"; code: number | null; delayMs: number; crashCount: number; maxRestarts: number }
+  | { kind: "gaveUp"; crashCount: number; windowMs: number }
+  | { kind: "unstartable"; code: number | null; uptimeMs: number }
+  | { kind: "spawnFailed"; err: string };
+
 export interface SupervisorOptions {
   command: string;
   args: string[];
@@ -304,6 +315,7 @@ export class Supervisor extends EventEmitter {
       command: this.options.command,
       err: err.message,
     });
+    this.emit("crash", { kind: "spawnFailed", err: err.message } satisfies CrashInfo);
     this.setState("CRASHED");
   }
 
@@ -330,6 +342,7 @@ export class Supervisor extends EventEmitter {
         uptimeMs: uptime,
         fastExitMs: this.fastExit,
       });
+      this.emit("crash", { kind: "unstartable", code, uptimeMs: uptime } satisfies CrashInfo);
       this.setState("CRASHED");
       return;
     }
@@ -361,6 +374,9 @@ export class Supervisor extends EventEmitter {
         maxRestarts: this.options.maxRestarts ?? 5,
         windowMs: this.crashWindow,
       });
+      this.emit("crash", {
+        kind: "gaveUp", crashCount: this.restartCount, windowMs: this.crashWindow,
+      } satisfies CrashInfo);
       this.setState("CRASHED");
       return;
     }
@@ -396,6 +412,10 @@ export class Supervisor extends EventEmitter {
       crashCount: this.restartCount,
       windowMs: this.crashWindow,
     });
+    this.emit("crash", {
+      kind: "backoff", code, delayMs: delay, crashCount: this.restartCount,
+      maxRestarts: this.options.maxRestarts ?? 5,
+    } satisfies CrashInfo);
     await sleep(delay);
     // A stop()/restart() may have happened while we were sleeping;
     // bail out rather than resurrecting a miner the caller deliberately

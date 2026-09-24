@@ -56,6 +56,13 @@ export class UpdateChecker {
   /** The newer release's version, or null when there is nothing to offer. */
   available: string | null = null;
 
+  private readonly listeners: Array<(version: string) => void> = [];
+
+  /** Called when a release newer than any announced before is found. */
+  onAvailable(listener: (version: string) => void): void {
+    this.listeners.push(listener);
+  }
+
   private readonly current: string;
   private readonly fetchImpl: typeof fetch;
 
@@ -81,7 +88,10 @@ export class UpdateChecker {
 
       // Normalised, because the readout beside the badge writes its own
       // "v" and the API's tags carry one.
-      this.available = isNewer(this.current, tag) ? tag.trim().replace(/^v/, "") : null;
+      const next = isNewer(this.current, tag) ? tag.trim().replace(/^v/, "") : null;
+      const changed = next !== null && next !== this.available;
+      this.available = next;
+      if (changed) for (const listener of this.listeners) listener(next);
     } catch {
       // Unreachable, rate-limited, or not JSON: leave the last answer be.
     }

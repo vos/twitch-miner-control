@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, test } from "vitest";
-import { Supervisor } from "./supervisor.js";
+import { Supervisor, type CrashInfo } from "./supervisor.js";
 import { memoryLog } from "../appLog/memory.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -490,4 +490,37 @@ test("records a SIGKILL escalation", async () => {
 test("a supervisor with no logger behaves identically", () => {
   // Logging is diagnostic: nothing may depend on anyone listening.
   expect(() => make("normal")).not.toThrow();
+});
+
+// --- crash announcements, for notifications ---
+
+test("an unstartable exit is announced as a crash", async () => {
+  const s = make("instant", { fastExitMs: 10_000 });
+  const crashes: CrashInfo[] = [];
+  s.on("crash", (c: CrashInfo) => crashes.push(c));
+  await s.start();
+  await until(() => s.state === "CRASHED");
+  expect(crashes).toEqual([{ kind: "unstartable", code: 1, uptimeMs: expect.any(Number) }]);
+});
+
+test("each backed-off crash is announced, then giving up", async () => {
+  const s = make("delayed_crash", {
+    fastExitMs: 20, backoffBaseMs: 10, maxRestarts: 2, crashWindowMs: 5000,
+    env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "40" },
+  });
+  const crashes: CrashInfo[] = [];
+  s.on("crash", (c: CrashInfo) => crashes.push(c));
+  await s.start();
+  await until(() => crashes.some((c) => c.kind === "gaveUp"), { timeout: 5000 });
+  expect(crashes[0]).toMatchObject({ kind: "backoff", code: 1, crashCount: 1, maxRestarts: 2, delayMs: 10 });
+  expect(crashes.at(-1)).toMatchObject({ kind: "gaveUp", windowMs: 5000 });
+});
+
+test("a missing interpreter is announced as a failed spawn", async () => {
+  const s = make("normal", { command: "/nonexistent/interpreter" });
+  const crashes: CrashInfo[] = [];
+  s.on("crash", (c: CrashInfo) => crashes.push(c));
+  await s.start().catch(() => {});
+  await until(() => s.state === "CRASHED");
+  expect(crashes[0]).toMatchObject({ kind: "spawnFailed", err: expect.any(String) });
 });
