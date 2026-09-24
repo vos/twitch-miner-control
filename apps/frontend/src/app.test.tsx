@@ -388,3 +388,35 @@ test("a screen chosen in the palette is navigated to", async () => {
   await userEvent.click(await screen.findByTestId("palette-screen:logs"));
   expect(await screen.findByTestId("screen-title")).toHaveTextContent("Logs");
 });
+
+// --- notification links ---
+
+test("a notification link opens its screen and leaves the address bar clean", async () => {
+  window.history.replaceState(null, "", "/?open=logs");
+  stub(false);
+  view();
+  await waitFor(() => expect(screen.getByTestId("screen-title")).toHaveTextContent("Logs"));
+  expect(window.location.search).toBe("");
+});
+
+test("the service worker can send an open app to a screen", async () => {
+  // A holder rather than a `let`: TypeScript would narrow a `let` to its
+  // initial null, not seeing the assignment inside the callback.
+  const heard: { listener?: (event: MessageEvent) => void } = {};
+  Object.defineProperty(navigator, "serviceWorker", {
+    configurable: true,
+    value: {
+      addEventListener: (_: string, fn: (event: MessageEvent) => void) => { heard.listener = fn; },
+      removeEventListener: () => {},
+    },
+  });
+  try {
+    stub(false);
+    view();
+    await screen.findByTestId("screen-title");
+    act(() => heard.listener!({ data: { type: "navigate", link: "/?open=logs" } } as MessageEvent));
+    expect(screen.getByTestId("screen-title")).toHaveTextContent("Logs");
+  } finally {
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  }
+});

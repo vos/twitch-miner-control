@@ -12,9 +12,11 @@ import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { StreamerDetailHost } from "./components/StreamerDetailHost.js";
+import { clearBootLink, isExternal, parseLink, type LinkTarget } from "./lib/deepLink.js";
+import { START_HELD_NOTE, shownState } from "./lib/minerState.js";
+import { healOnStart } from "./lib/push.js";
 import { type ProcSample, useRollingHistory } from "./lib/rollingHistory.js";
 import { type ScreenIntent, type ScreenParams, stamped } from "./lib/screenIntent.js";
-import { START_HELD_NOTE, shownState } from "./lib/minerState.js";
 import { useLocalToggle } from "./lib/useLocalToggle.js";
 import { Dashboard } from "./routes/Dashboard.js";
 import { Drops } from "./routes/Drops.js";
@@ -108,10 +110,13 @@ interface Status {
 }
 
 export function App() {
+  // Read once, before the gate: a notification can open the app while
+  // the session has expired, and the link still applies after unlocking.
+  const [bootLink] = useState(() => parseLink(window.location.search));
   return (
     <PasswordGate>
       <LiveStateProvider>
-        <Shell />
+        <Shell bootLink={bootLink} />
       </LiveStateProvider>
     </PasswordGate>
   );
@@ -124,7 +129,7 @@ export function App() {
  * unmounts it again, which closes the stream; the next unlock starts a
  * fresh one.
  */
-function Shell() {
+function Shell({ bootLink }: { bootLink: LinkTarget | null }) {
   const { onLoggedOut } = useSession();
   const [screen, setScreen] = useState<ScreenKey>("dashboard");
   // Which streamer's detail dialog is open. Here rather than on the
@@ -251,6 +256,47 @@ function Shell() {
     // wide-screen sidebar covers nothing, so it stays as the user set it.
     close();
   };
+
+  const follow = (target: LinkTarget) => {
+    if (!(target.screen in SCREENS)) return;
+    navigate(target.screen as ScreenKey, target.params);
+    if (target.streamer !== undefined) setOpenLogin(target.streamer);
+  };
+
+  /** Follows a notification's link: an app screen, or an outside page in a new tab. */
+  const openLink = (link: string) => {
+    if (isExternal(link)) {
+      window.open(link, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const target = parseLink(link);
+    if (target !== null) follow(target);
+  };
+  // The effects below attach once, so they read the latest of both
+  // through a ref.
+  const links = useRef({ follow, openLink });
+  links.current = { follow, openLink };
+
+  useEffect(() => {
+    if (bootLink === null) return;
+    clearBootLink();
+    links.current.follow(bootLink);
+  }, [bootLink]);
+
+  useEffect(() => {
+    // Absent outside a secure context, whatever the DOM types say.
+    if (!("serviceWorker" in navigator)) return;
+    const worker = navigator.serviceWorker;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; link?: unknown } | null;
+      if (data?.type === "navigate" && typeof data.link === "string") links.current.openLink(data.link);
+    };
+    worker.addEventListener("message", onMessage);
+    return () => worker.removeEventListener("message", onMessage);
+  }, []);
+
+  // Keeps this browser's push subscription matched to the server's key.
+  useEffect(() => { void healOnStart(); }, []);
 
   return (
     <AppShell
