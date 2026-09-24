@@ -1390,6 +1390,40 @@ test("deriveLocal takes the newest verdict when a channel has flipped", async ()
   expect(service.deriveLocal(["alpha"])[0].isOnline).toBe(false);
 });
 
+// --- stream transitions, for notifications ---
+
+test("a new stream and its end are each announced once", async () => {
+  const { service } = make([
+    alpha(100, true, "S1", 5_000), alpha(110, true, "S1", 5_000), alpha(120, false),
+  ]);
+  const frames: unknown[] = [];
+  service.on("streams", (f) => frames.push(f));
+  await service.refresh();
+  await service.refresh();
+  await service.refresh();
+  expect(frames).toEqual([
+    { at: 10_000, started: [{ login: "alpha", name: "Alpha", startedAt: 5_000 }], ended: [] },
+    { at: 10_000, started: [], ended: [{ login: "alpha", name: "Alpha" }] },
+  ]);
+});
+
+test("the first pass never announces an end", async () => {
+  const { service } = make([alpha(100, false)]);
+  const frames: unknown[] = [];
+  service.on("streams", (f) => frames.push(f));
+  await service.refresh();
+  expect(frames).toEqual([]);
+});
+
+test("a stream recorded before a restart is not announced again", async () => {
+  history.openStreamerSession("alpha", "S1", 5_000, 90);
+  const { service } = make([alpha(100, true, "S1", 5_000)]);
+  const frames: unknown[] = [];
+  service.on("streams", (f) => frames.push(f));
+  await service.refresh();
+  expect(frames).toEqual([]);
+});
+
 test("reports the campaign a subscription-owned channel came from", async () => {
   const { service } = make([alpha(100)]);
   // Not wired by `make`, so the default is the one every existing test

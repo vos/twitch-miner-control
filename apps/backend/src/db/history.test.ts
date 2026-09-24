@@ -471,6 +471,12 @@ test("allStreamerSpans lists every channel's sessions overlapping the window", (
   ]);
 });
 
+test("opening a session says whether it was a new stream", () => {
+  expect(history.openStreamerSession("alpha", "S1", 1000, 500)).toBe(true);
+  expect(history.openStreamerSession("alpha", "S1", 1000, 900)).toBe(false);
+  expect(history.openStreamerSession("alpha", "S2", 5000, 900)).toBe(true);
+});
+
 test("countEvents counts each asked-for type in a half-open window", () => {
   history.recordEvent("BONUS_CLAIM", 1000);
   history.recordEvent("BONUS_CLAIM", 1500);

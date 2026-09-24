@@ -176,6 +176,13 @@ export type RawStreamerState = Omit<
   streamStartedAt: number | null;
 };
 
+/** New streams and ended ones from one pass, for notifications. */
+export interface StreamsFrame {
+  at: number;
+  started: Array<{ login: string; name: string; startedAt: number }>;
+  ended: Array<{ login: string; name: string }>;
+}
+
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
@@ -385,6 +392,11 @@ export class StateService extends EventEmitter {
    * page for the whole of a cold start.
    */
   private undrawn = true;
+  /**
+   * Who was live on the previous pass. Null until the first pass, so a
+   * backend that boots never announces a stream that ended while it was down.
+   */
+  private liveLogins: Set<string> | null = null;
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
@@ -540,6 +552,7 @@ export class StateService extends EventEmitter {
       // snapshot recorded alongside it, so the two must stay in the same
       // loop on the same clock -- splitting them would let an idle pass
       // close a session against a balance it had not written yet.
+      const started: StreamsFrame["started"] = [];
       for (const s of data.streamers) {
         if (typeof s.points === "number") {
           this.deps.history.recordPoints(s.username, s.points, at);
@@ -556,17 +569,33 @@ export class StateService extends EventEmitter {
         // observed transition: this runs on every live tick, so a restart
         // mid-stream finds the existing row and keeps its anchor intact.
         if (s.isOnline && s.streamId !== null && s.streamStartedAt !== null) {
-          this.deps.history.openStreamerSession(
+          const isNew = this.deps.history.openStreamerSession(
             s.username,
             s.streamId,
             s.streamStartedAt,
             typeof s.points === "number" ? s.points : null,
           );
+          if (isNew) {
+            started.push({
+              login: s.username, name: s.displayName ?? s.username, startedAt: s.streamStartedAt,
+            });
+          }
         }
         // Any other open session for this streamer has ended. Clamped
         // inside History to our last snapshot, so an outage is not billed
         // as online time.
         this.deps.history.closeStreamerSessionsExcept(s.username, s.streamId, at);
+      }
+
+      // After the writes and before the idle bail: stream transitions are
+      // needed whether or not anyone has the dashboard open.
+      const previouslyLive = this.liveLogins;
+      const ended = previouslyLive === null ? [] : data.streamers
+        .filter((s) => !s.isOnline && previouslyLive.has(s.username))
+        .map((s) => ({ login: s.username, name: s.displayName ?? s.username }));
+      this.liveLogins = new Set(data.streamers.filter((s) => s.isOnline).map((s) => s.username));
+      if (started.length > 0 || ended.length > 0) {
+        this.emit("streams", { at, started, ended } satisfies StreamsFrame);
       }
 
       // Nobody is watching: the stored record above is complete and

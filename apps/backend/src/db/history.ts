@@ -224,20 +224,23 @@ export class History {
    * called on every tick a streamer is live, not on an observed
    * transition, so the second and thousandth sighting of the same stream
    * must leave the row -- and crucially its anchor balance -- untouched.
+   *
+   * Returns whether this sighting inserted the row: true exactly once per
+   * stream, which is what makes it a restart-proof "went live" signal.
    */
   openStreamerSession(
     streamer: string,
     streamId: string,
     startTs: number,
     anchorPoints: number | null,
-  ): void {
-    this.db
+  ): boolean {
+    return this.db
       .prepare(
         `INSERT INTO streamer_sessions (streamer, stream_id, start_ts, anchor_points)
          VALUES (?, ?, ?, ?)
          ON CONFLICT (streamer, stream_id) DO NOTHING`,
       )
-      .run(streamer, streamId, startTs, anchorPoints);
+      .run(streamer, streamId, startTs, anchorPoints).changes === 1;
   }
 
   /**
