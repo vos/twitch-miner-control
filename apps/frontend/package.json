@@ -4,8 +4,9 @@
   "private": true,
   "license": "GPL-3.0-only",
   "scripts": {
+    "predev": "vite build -c vite.sw.config.ts",
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build -c vite.sw.config.ts && vite build",
     "prepreview": "pnpm run build",
     "preview": "vite preview",
     "test": "vitest run"
