@@ -19,7 +19,7 @@ const campaign = (id: string, over: Partial<Campaign> = {}): Campaign => ({
 const claimed = { minutes: 60, claimed: true, instanceId: null };
 const halfway = { minutes: 30, claimed: false, instanceId: null };
 
-function harness(opts: { wants?: boolean; games?: string[] } = {}) {
+function harness(opts: { wantsNew?: boolean; games?: string[] } = {}) {
   const seen = new Set<string>();
   const markSeen = (key: string) => (seen.has(key) ? false : (seen.add(key), true));
   const published: PublishInput[] = [];
@@ -33,7 +33,7 @@ function harness(opts: { wants?: boolean; games?: string[] } = {}) {
     campaigns, fetchedAt: 1, stale: false, available: true, error: null,
   }));
   const watcher = new CampaignWatcher({
-    notifier: { publish, wantsAny: () => opts.wants ?? true, markSeen },
+    notifier: { publish, wantsAny: () => opts.wantsNew ?? true, markSeen },
     catalogue: { get: catalogueGet },
     inventory: { get: async () => ({ progress, earned: {}, fetchedAt: 1, available: true }) },
     subscribedGames: () => opts.games ?? [],
@@ -45,10 +45,19 @@ function harness(opts: { wants?: boolean; games?: string[] } = {}) {
   };
 }
 
-test("nothing is fetched while nobody wants campaign notifications", async () => {
-  const h = harness({ wants: false });
+test("with nobody wanting new-campaign notices, completions still publish and no baseline is kept", async () => {
+  const h = harness({ wantsNew: false });
+  h.set([campaign("c1")], { c1: { "c1-d1": claimed, "c1-d2": claimed } });
+  await h.watcher.pass(); // primes: the first run ever stays quiet
+  h.set([campaign("c1"), campaign("c2")], {
+    c1: { "c1-d1": claimed, "c1-d2": claimed },
+    c2: { "c2-d1": claimed, "c2-d2": claimed },
+  });
   await h.watcher.pass();
-  expect(h.catalogueGet).not.toHaveBeenCalled();
+  expect(h.catalogueGet).toHaveBeenCalled();
+  expect(h.published.map((n) => [n.kind, n.link])).toEqual([
+    ["campaign.completed", "/?open=drops&campaign=c2"],
+  ]);
 });
 
 test("the first run ever stays quiet about completions it finds, later ones are published once", async () => {

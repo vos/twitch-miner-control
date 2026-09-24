@@ -42,6 +42,13 @@ export interface CampaignWatcherDeps {
  * Covers every campaign with progress, subscribed or not, which is why
  * it watches the inventory itself rather than hooking the engine. Each
  * notification fires once per campaign, via a persisted dedupe key.
+ *
+ * The completed and ending-soon passes always run, even with no destination
+ * wanting them: they reach the inbox regardless of push subscriptions, and
+ * the Notifier -- not this source -- decides who gets pushed. `campaign.new`
+ * is the exception: it has no persisted dedupe key, only an in-memory
+ * baseline, so it stays gated on `wantsAny` and drops the baseline while
+ * nobody wants it (see `run()`).
  */
 export class CampaignWatcher {
   private timer: NodeJS.Timeout | null = null;
@@ -77,29 +84,31 @@ export class CampaignWatcher {
 
   private async run(): Promise<void> {
     const { notifier } = this.deps;
-    const wantsDone = notifier.wantsAny(NOTIFY_KIND.CAMPAIGN_COMPLETED);
-    const wantsEnding = notifier.wantsAny(NOTIFY_KIND.CAMPAIGN_ENDING_SOON);
     const wantsNew = notifier.wantsAny(NOTIFY_KIND.CAMPAIGN_NEW);
     // Without a baseline kept current, turning the kind back on would
     // announce everything that appeared meanwhile.
     if (!wantsNew) this.known = null;
-    if (!wantsDone && !wantsEnding && !wantsNew) return;
 
     const catalogue = await this.deps.catalogue.get();
     if (!catalogue.available) return;
     const now = this.now();
     if (wantsNew) this.announceNew(catalogue.campaigns);
-    if (!wantsDone && !wantsEnding) return;
 
+    // Completed and ending-soon always run, regardless of whether any
+    // destination currently wants them: the catalogue and inventory are
+    // already cached on the engine, the Notifier filters push delivery per
+    // destination, and these two kinds also reach the inbox -- which must
+    // stay current for a browser that isn't subscribed to push at all, and
+    // must not dump weeks of backlog the moment push is turned back on.
     const inventory = await this.deps.inventory.get();
     if (!inventory.available) return;
     // The first run ever marks completions already there as seen, so
     // turning the kind on does not announce a backlog.
-    const priming = wantsDone && notifier.markSeen(PRIMED_KEY);
+    const priming = notifier.markSeen(PRIMED_KEY);
 
     for (const campaign of catalogue.campaigns) {
       const resolved = resolveCampaign(campaign, inventory);
-      if (wantsDone && resolved.complete) {
+      if (resolved.complete) {
         const key = `campaign.completed:${campaign.id}`;
         if (priming) {
           notifier.markSeen(key);
@@ -112,7 +121,7 @@ export class CampaignWatcher {
         }
       }
       const endsAt = campaign.endsAt;
-      if (wantsEnding && resolved.status === "partial" && endsAt !== null
+      if (resolved.status === "partial" && endsAt !== null
           && endsAt > now && endsAt - now <= ENDING_SOON_MS) {
         const hours = Math.max(1, Math.round((endsAt - now) / 3_600_000));
         notifier.publish({
