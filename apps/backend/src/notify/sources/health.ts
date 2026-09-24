@@ -39,8 +39,11 @@ export function crashNotification(info: CrashInfo): PublishInput {
       return {
         ...base,
         title: "Miner can't start",
-        body: `It exited${exitCode(info.code)} ${duration(info.uptimeMs)} after starting, so the `
-          + "config or environment is broken. Check the Logs page.",
+        body: info.uptimeMs < 1000
+          ? `It exited${exitCode(info.code)} within a second of starting, so the config or `
+            + "environment is broken. Check the Logs page."
+          : `It exited${exitCode(info.code)} after only ${duration(info.uptimeMs)}, so the config `
+            + "or environment is broken. Check the Logs page.",
       };
     case "spawnFailed":
       return { ...base, title: "Miner can't start", body: `It could not be launched: ${info.err}` };

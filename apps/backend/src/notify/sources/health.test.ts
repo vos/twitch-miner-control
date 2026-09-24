@@ -32,6 +32,20 @@ test("each crash kind reads differently", () => {
   expect(crashNotification({ kind: "spawnFailed", err: "ENOENT" }).body).toContain("ENOENT");
 });
 
+test("an unstartable crash within a second of starting reads as too fast to be a fluke", () => {
+  expect(crashNotification({ kind: "unstartable", code: 1, uptimeMs: 300 }).body).toBe(
+    "It exited with code 1 within a second of starting, so the config or environment "
+    + "is broken. Check the Logs page.",
+  );
+});
+
+test("an unstartable crash after longer than a second reads with its duration", () => {
+  expect(crashNotification({ kind: "unstartable", code: 1, uptimeMs: 4_000 }).body).toBe(
+    "It exited with code 1 after only 4 s, so the config or environment is broken. "
+    + "Check the Logs page.",
+  );
+});
+
 test("recovery is announced only after a crash", () => {
   const { publish, supervisor } = harness();
   supervisor.emit("state", "RUNNING");
@@ -47,10 +61,12 @@ test("recovery is announced only after a crash", () => {
   expect(publish).toHaveBeenCalledTimes(2);
 });
 
-test("losing a working Twitch session is published", () => {
+test("a rejected Twitch session is published", () => {
+  // markRejected(), not markLoggedOut() -- this is the AUTH-error path;
+  // a plain sign-out is silent (see loginStatus.test.ts).
   const { publish, loginStatus } = harness();
   loginStatus.markLoggedIn();
-  loginStatus.markLoggedOut();
+  loginStatus.markRejected();
   expect(publish).toHaveBeenCalledWith(expect.objectContaining({
     kind: "twitch.signedOut", link: "/?open=account",
   }));
