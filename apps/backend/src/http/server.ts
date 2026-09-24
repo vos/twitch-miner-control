@@ -1233,12 +1233,12 @@ export function buildServer(deps: ServerDeps): AppServer {
   // can take are covered -- one attributed to a caller (StateService's
   // refresh) and one that could not be attributed to any single request.
   deps.stateService.on("auth-error", () => {
-    deps.loginStatus.markLoggedOut();
+    deps.loginStatus.markRejected();
     pushStatus();
   });
   deps.helper.on("unattributed-error", (error: unknown) => {
     if (error instanceof NdjsonError && error.code === "AUTH") {
-      deps.loginStatus.markLoggedOut();
+      deps.loginStatus.markRejected();
       // Not a user action: Twitch rejected the stored session, so the app
       // marked itself signed out on its own. Recorded at warn because the
       // operator did not ask for this and will want to know why the

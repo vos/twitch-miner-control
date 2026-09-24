@@ -1183,6 +1183,23 @@ test("logging out of Twitch requires a session", async () => {
   expect(response.statusCode).toBe(401);
 });
 
+test("the user signing out does not fire the signed-out listener, but a rejected session does", async () => {
+  // The listener drives the `twitch.signedOut` notification, which the spec
+  // reserves for a session lost through an AUTH error -- not a user's own
+  // sign-out.
+  seedCookie();
+  ctx.loginStatus.markLoggedIn();
+  const heard = vi.fn();
+  ctx.loginStatus.onSignedOut(heard);
+
+  await ctx.app.inject({ method: "POST", url: "/api/twitch/logout", cookies: auth() });
+  expect(heard).not.toHaveBeenCalled();
+
+  ctx.loginStatus.markLoggedIn();
+  ctx.state.emit("auth-error", new NdjsonError("session dead", "AUTH"));
+  expect(heard).toHaveBeenCalledTimes(1);
+});
+
 test("a successful login clears a stale error from the signed-out session", async () => {
   // A refresh already in flight when the user signs in is answered by the
   // old, signed-out helper, so its 401 lands after the login succeeded and

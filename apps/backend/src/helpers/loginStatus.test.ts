@@ -24,14 +24,26 @@ test("markLoggedOut is a safe no-op when nothing was ever logged in", () => {
   expect(status.required).toBe(true);
 });
 
-test("signing out is announced only after being signed in", () => {
+test("a rejected session is announced only after being signed in", () => {
   const status = new LoginStatus();
   const heard = vi.fn();
   status.onSignedOut(heard);
-  status.markLoggedOut(); // never signed in: a dead session at boot, not news
+  status.markRejected(); // never signed in: a dead session at boot, not news
   expect(heard).not.toHaveBeenCalled();
   status.markLoggedIn();
-  status.markLoggedOut();
-  status.markLoggedOut(); // already out
+  status.markRejected();
+  status.markRejected(); // already out
   expect(heard).toHaveBeenCalledTimes(1);
+});
+
+test("markLoggedOut never announces, even after being signed in", () => {
+  // The user asking to sign out is expected, not a `twitch.signedOut`-worthy
+  // event -- only a rejected session (markRejected) should notify listeners.
+  const status = new LoginStatus();
+  const heard = vi.fn();
+  status.onSignedOut(heard);
+  status.markLoggedIn();
+  status.markLoggedOut();
+  expect(heard).not.toHaveBeenCalled();
+  expect(status.required).toBe(true);
 });

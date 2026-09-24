@@ -29,8 +29,9 @@ export class LoginStatus {
   }
 
   /**
-   * Called when a working session is lost. Not called for a session that
-   * was never working, so a boot without one announces nothing.
+   * Called when a session is rejected by Twitch, not when the user chooses
+   * to sign out. Not called for a session that was never working, so a boot
+   * without one announces nothing.
    */
   onSignedOut(listener: () => void): void {
     this.signedOut.push(listener);
@@ -40,7 +41,20 @@ export class LoginStatus {
     this.loggedIn = true;
   }
 
+  /**
+   * The user asked to sign out. Silent: this is expected, not a
+   * `twitch.signedOut` notification-worthy event.
+   */
   markLoggedOut(): void {
+    this.loggedIn = false;
+  }
+
+  /**
+   * Twitch rejected the stored session (an AUTH error on a helper
+   * response). Marks logged out and announces it, but only if the session
+   * had been working -- a boot without one is not news.
+   */
+  markRejected(): void {
     const was = this.loggedIn;
     this.loggedIn = false;
     if (was) for (const listener of this.signedOut) listener();
