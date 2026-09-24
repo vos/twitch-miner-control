@@ -69,6 +69,7 @@ export function ThisBrowserCard({
         {destination !== null && (
           <>
             <TextInput
+              key={destination.label}
               label="Name"
               description="How this browser is listed on your other devices."
               defaultValue={destination.label}
