@@ -48,6 +48,13 @@ test("a first visit starts with nothing unread", async () => {
   expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
 });
 
+test("a non-finite stored value is treated as a first visit, not a badge stuck forever", async () => {
+  localStorage.setItem("tw.notify.lastSeenId", "not-a-number");
+  view();
+  await waitFor(() => expect(localStorage.getItem("tw.notify.lastSeenId")).toBe("3"));
+  expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
+});
+
 test("rows newer than the last seen count as unread, and pushed ones add to it", async () => {
   localStorage.setItem("tw.notify.lastSeenId", "1");
   view();

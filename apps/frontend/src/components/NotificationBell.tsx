@@ -15,7 +15,11 @@ const PAGE = 50;
 function readSeen(): number | null {
   try {
     const stored = localStorage.getItem(SEEN_KEY);
-    return stored === null ? null : Number(stored);
+    if (stored === null) return null;
+    const parsed = Number(stored);
+    // A corrupt or hand-edited value (e.g. "" or garbage) must not poison
+    // the unread count forever -- treat it as a first visit instead.
+    return Number.isFinite(parsed) ? parsed : null;
   } catch {
     return null;
   }
