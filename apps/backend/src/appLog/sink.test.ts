@@ -82,6 +82,18 @@ test("an existing file is appended to, not truncated", async () => {
     .toEqual(["before.restart", "after.restart"]);
 });
 
+test("a write after close is dropped rather than thrown", async () => {
+  // Shutdown closes the log while boot work may still be running; that
+  // work's failure handler logs, and a throw there crashed the process.
+  const sink = new LogSink({ dir, maxBytes: 1_000_000 });
+  sink.write(line("before.close"));
+  await sink.close();
+
+  expect(() => sink.write(line("after.close"))).not.toThrow();
+  const written = readFileSync(join(dir, LOG_NAME), "utf8").trim().split("\n");
+  expect(written.map((l) => JSON.parse(l).type)).toEqual(["before.close"]);
+});
+
 test("the tail read returns events oldest first", async () => {
   const sink = new LogSink({ dir, maxBytes: 1_000_000 });
   sink.write(line("a.thing", 1));

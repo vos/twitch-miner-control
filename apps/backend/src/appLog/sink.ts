@@ -47,6 +47,7 @@ export interface SinkOptions {
 export class LogSink {
   private boom: Destination;
   private bytes: number;
+  private closed = false;
 
   constructor(private readonly options: SinkOptions) {
     mkdirSync(options.dir, { recursive: true });
@@ -84,6 +85,11 @@ export class LogSink {
    * predict how long a line will be.
    */
   write(line: string): void {
+    // Shutdown closes the file while boot work can still be settling, and
+    // its failure handler logs. sonic-boom throws on a write after end(),
+    // and that throw would crash the process on its way out -- so a late
+    // line is dropped instead.
+    if (this.closed) return;
     this.boom.write(line);
     this.bytes += Buffer.byteLength(line);
     if (this.bytes >= this.options.maxBytes) this.rotate();
@@ -120,6 +126,7 @@ export class LogSink {
    * shutdown must never hang waiting on a log file.
    */
   close(): Promise<void> {
+    this.closed = true;
     return new Promise((resolve) => {
       this.boom.once("close", () => resolve());
       this.boom.once("error", () => resolve());
