@@ -182,10 +182,43 @@ re-reads both on demand.
 
 ### Notifications
 
-The miner can push events to Telegram, Discord, Matrix, Pushover, Gotify or a
-plain webhook. Those are deliberately **not** configurable from the web UI:
-they carry bot tokens and webhook URLs, and this app serves a single shared
-password over plain HTTP on your LAN. Set them by hand instead.
+The **bell** in the header is an inbox of what happened while you were
+away: miner crashes, an expired Twitch session, restarts, drops claimed,
+campaigns completed or about to end, and new releases. It needs no setup.
+
+**Browser notifications** reach you with the app closed. Open
+**Notifications** in the sidebar and press **Turn on notifications** in
+each browser you want them in. Nothing is sent until you do. Every
+browser has its own settings: which events, which streamers count for
+"went live", quiet hours (with miner problems optionally let through),
+and an optional daily digest.
+
+Browsers only allow this on a secure page:
+
+- over **HTTPS**, so put the app behind a reverse proxy (see
+  [Putting it behind a reverse proxy](#putting-it-behind-a-reverse-proxy)), or
+- on **localhost**, opened on the machine the app runs on.
+- On **iPhone and iPad** (iOS 16.4 or later), add the app to the Home
+  Screen first (Share → Add to Home Screen), then turn notifications on
+  from there.
+
+Chrome and Edge put a **Cancel restart** button on the restart notice. In
+Firefox and Safari, click the notice to open the dashboard, which has the
+same button. While any browser is set to receive restart notices, the
+drops engine waits three minutes before restarting instead of one.
+
+Notifications are delivered through your browser maker's push service
+(Google, Mozilla or Apple), so the app needs outbound internet access.
+They are end-to-end encrypted, and the push service cannot read them. The
+app's key pair is `data/vapid.json`. If it is deleted, each browser
+re-subscribes the next time it opens the app.
+
+#### Other services: Telegram, Discord, Matrix, Pushover, Gotify, webhooks
+
+The miner itself can also push its own events to these. They are
+deliberately **not** configurable from the web UI: they carry bot tokens
+and webhook URLs, and this app serves a single shared password, over
+plain HTTP unless you add a proxy. Set them by hand instead.
 
 Edit the `LoggerSettings(...)` block in `python/run.py`:
 
