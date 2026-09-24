@@ -3,7 +3,7 @@ import { DailyPoints } from "../db/dailyPoints.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
 import { Streamers } from "../db/streamers.js";
-import { buildRecap } from "./recap.js";
+import { buildDaySummary, buildRecap } from "./recap.js";
 
 const at = (month: number, day: number, hour: number, minute = 0) =>
   new Date(2026, month - 1, day, hour, minute).getTime();
@@ -118,4 +118,24 @@ test("channels mined at the same time count once: mined is time spent mining", (
   const { totals } = buildRecap(deps(), NOW, "week", 0);
   expect(totals.minedMs).toBe(5 * HOUR);
   expect(totals.streams).toBe(3);
+});
+
+// --- one day, for the digest ---
+
+test("a day's summary adds up that day alone", () => {
+  seed();
+  history.recordEvent("DROP_CLAIM", at(9, 14, 9), "Claim X", "alpha");
+  expect(buildDaySummary(deps(), "2026-09-14", NOW)).toEqual({
+    day: "2026-09-14",
+    earned: 400,
+    minedMs: 5 * HOUR,
+    dropsClaimed: 1,
+    top: { login: "beta", displayName: "Beta", earned: 300 },
+    hasData: true,
+  });
+});
+
+test("a day with nothing recorded says so", () => {
+  seed();
+  expect(buildDaySummary(deps(), "2026-09-12", NOW)).toMatchObject({ hasData: false, earned: 0, top: null });
 });

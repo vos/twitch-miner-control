@@ -1,6 +1,6 @@
 import { clip, total, type Span } from "../state/spans.js";
 import { earnedRows } from "./calendar.js";
-import { addDays, dayKey, monthStart, weekStart } from "./days.js";
+import { addDays, dayKey, dayStart, monthStart, weekStart } from "./days.js";
 import { mergeSpans, minedByStreamer, type InsightsDeps } from "./mined.js";
 
 export type PeriodKind = "week" | "month";
@@ -161,5 +161,38 @@ export function buildRecap(deps: InsightsDeps, now: number, kind: PeriodKind, of
       dropsClaimed: events.DROP_CLAIM,
       watchStreakBonuses: events.GAIN_FOR_WATCH_STREAK,
     },
+  };
+}
+
+/** One day in figures, for the daily digest. */
+export interface DaySummary {
+  day: string;
+  earned: number;
+  minedMs: number;
+  dropsClaimed: number;
+  top: { login: string; displayName: string | null; earned: number } | null;
+  hasData: boolean;
+}
+
+export function buildDaySummary(deps: InsightsDeps, day: string, now: number): DaySummary {
+  const from = dayStart(day);
+  const to = dayStart(addDays(day, 1));
+  const summary = summarise(deps, from, to, now);
+  let top: { login: string; earned: number } | null = null;
+  for (const [login, figures] of summary.channels) {
+    if (figures.earned > 0 && (top === null || figures.earned > top.earned)) {
+      top = { login, earned: figures.earned };
+    }
+  }
+  const displayName = top === null
+    ? null
+    : deps.streamers?.get([top.login]).get(top.login)?.displayName ?? null;
+  return {
+    day,
+    earned: summary.totals.earned,
+    minedMs: summary.totals.minedMs,
+    dropsClaimed: deps.history.countEvents(["DROP_CLAIM"], from, to).DROP_CLAIM,
+    top: top === null ? null : { ...top, displayName },
+    hasData: summary.hasData,
   };
 }
