@@ -8,6 +8,7 @@ import {
 } from "./components/RestartBanner.js";
 import { CommandPalette, PaletteButton } from "./components/CommandPalette.js";
 import { MinerStatusBadge, type MinerStatus } from "./components/MinerStatusBadge.js";
+import { NotificationBell } from "./components/NotificationBell.js";
 import { PasswordGate } from "./components/PasswordGate.js";
 import { useSession } from "./components/session.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -322,6 +323,10 @@ function Shell({ bootLink }: { bootLink: LinkTarget | null }) {
             <Text fw={600} data-testid="screen-title">{SCREENS[screen].label}</Text>
           </Group>
           <Group gap="sm" wrap="nowrap">
+            <NotificationBell
+              onOpenLink={openLink}
+              onOpenSettings={() => navigate("notifications")}
+            />
             <PaletteButton />
             <Tooltip label={connected ? "Live updates connected" : "Live updates disconnected"}>
               <span
