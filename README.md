@@ -211,7 +211,8 @@ Notifications are delivered through your browser maker's push service
 (Google, Mozilla or Apple), so the app needs outbound internet access.
 They are end-to-end encrypted, and the push service cannot read them. The
 app's key pair is `data/vapid.json`. If it is deleted, each browser
-re-subscribes the next time it opens the app.
+re-subscribes the next time it opens the app. If a browser stops receiving
+notifications, open **Notifications** there and turn them on again.
 
 #### Other services: Telegram, Discord, Matrix, Pushover, Gotify, webhooks
 
