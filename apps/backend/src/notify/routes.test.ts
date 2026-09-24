@@ -108,6 +108,9 @@ test("test sends a test notification straight to that destination", async () => 
   const res = await a.inject({ method: "POST", url: `/api/notify/destinations/${id}/test` });
   expect(res.json()).toEqual({ ok: true });
   expect(sendTo.mock.calls[0][1]).toMatchObject({ kind: NOTIFY_KIND.TEST, title: "Test notification" });
+  // A user pressing "Send test" waits on the response; retrying through a
+  // flaky push service would make them sit through the retry delay too.
+  expect(sendTo.mock.calls[0][2]).toEqual({ retry: false });
 });
 
 test("a failed test reports the error", async () => {

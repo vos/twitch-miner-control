@@ -95,6 +95,9 @@ export type SendFn = (
   options: RequestOptions,
 ) => Promise<unknown>;
 
+/** How long a single send waits for the push service before giving up. */
+export const SEND_TIMEOUT_MS = 10_000;
+
 export interface WebPushChannelDeps {
   vapid: VapidKeys;
   subject: string;
@@ -126,11 +129,15 @@ export class WebPushChannel implements Channel {
     this.retryDelayMs = deps.retryDelayMs ?? 30_000;
   }
 
-  async send(destination: Destination, n: Notification): Promise<SendResult> {
+  async send(
+    destination: Destination,
+    n: Notification,
+    options?: { retry?: boolean },
+  ): Promise<SendResult> {
     const subscription = destination.subscription;
     if (subscription === null) return { ok: false, gone: true, error: "no push subscription" };
     const info = kindInfo(n.kind);
-    const options: RequestOptions = {
+    const requestOptions: RequestOptions = {
       vapidDetails: {
         subject: this.deps.subject,
         publicKey: this.deps.vapid.publicKey,
@@ -138,13 +145,15 @@ export class WebPushChannel implements Channel {
       },
       TTL: info.ttlSeconds,
       urgency: info.urgency,
+      timeout: SEND_TIMEOUT_MS,
       ...(n.tag === undefined ? {} : { topic: topicFor(n.tag) }),
     };
     const payload = JSON.stringify(payloadFor(n));
-    const first = await this.attempt(subscription, payload, options);
+    const first = await this.attempt(subscription, payload, requestOptions);
     if (first.kind === "done") return first.result;
+    if (options?.retry === false) return { ok: false, gone: false, error: first.error };
     await this.sleep(first.delayMs);
-    const second = await this.attempt(subscription, payload, options);
+    const second = await this.attempt(subscription, payload, requestOptions);
     return second.kind === "done" ? second.result : { ok: false, gone: false, error: second.error };
   }
 

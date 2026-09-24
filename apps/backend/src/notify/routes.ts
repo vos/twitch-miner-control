@@ -116,7 +116,7 @@ export function registerNotifyRoutes(
       body: `Notifications work on "${destination.label}".`,
       ts: now(),
       link: "/?open=notifications",
-    });
+    }, { retry: false });
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   });
 

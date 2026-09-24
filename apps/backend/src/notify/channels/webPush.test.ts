@@ -5,7 +5,7 @@ import { expect, test, vi } from "vitest";
 import { NOTIFY_KIND, type Notification } from "../catalogue.js";
 import { defaultPrefs } from "../prefs.js";
 import type { Destination } from "../store.js";
-import { WebPushChannel, loadOrCreateVapid, payloadFor, topicFor } from "./webPush.js";
+import { SEND_TIMEOUT_MS, WebPushChannel, loadOrCreateVapid, payloadFor, topicFor } from "./webPush.js";
 
 const dest = (over: Partial<Destination> = {}): Destination => ({
   id: "d1", channel: "webpush", label: "Chrome", endpoint: "https://push.example/a",
@@ -71,7 +71,7 @@ test("a send passes VAPID, TTL, urgency and topic", async () => {
   expect(JSON.parse(payload).kind).toBe("restart.pending");
   expect(options).toMatchObject({
     vapidDetails: { subject: "https://example.org", publicKey: "pub", privateKey: "priv" },
-    TTL: 180, urgency: "high", topic: "restart",
+    TTL: 180, urgency: "high", topic: "restart", timeout: SEND_TIMEOUT_MS,
   });
 });
 
@@ -93,6 +93,17 @@ test("a 5xx is retried once after the delay, then reported", async () => {
   });
   expect(send).toHaveBeenCalledTimes(2);
   expect(sleep).toHaveBeenCalledWith(30_000);
+});
+
+test("retry: false reports a 503 without waiting or trying a second time", async () => {
+  const sleep = vi.fn(async () => {});
+  const send = vi.fn(async () => { throw statusError(503); });
+  const channel = new WebPushChannel({ vapid, subject: "s", send, sleep, retryDelayMs: 30_000 });
+  await expect(channel.send(dest(), pending, { retry: false })).resolves.toEqual({
+    ok: false, gone: false, error: "push service answered 503",
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(sleep).not.toHaveBeenCalled();
 });
 
 test("a 429 honours Retry-After, capped at a minute", async () => {

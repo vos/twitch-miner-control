@@ -11,7 +11,11 @@ export type SendResult = { ok: true } | { ok: false; gone: boolean; error: strin
 
 /** Delivers to one kind of destination. Resolves with the outcome; may reject. */
 export interface Channel {
-  send(destination: Destination, notification: Notification): Promise<SendResult>;
+  send(
+    destination: Destination,
+    notification: Notification,
+    options?: { retry?: boolean },
+  ): Promise<SendResult>;
 }
 
 export const BATCH_WINDOW_MS = 10_000;
@@ -115,14 +119,18 @@ export class Notifier {
   }
 
   /** Delivers straight to one destination, bypassing its preferences, and records the outcome. */
-  async sendTo(destination: Destination, n: Notification): Promise<SendResult> {
+  async sendTo(
+    destination: Destination,
+    n: Notification,
+    options?: { retry?: boolean },
+  ): Promise<SendResult> {
     const channel = this.deps.channels[destination.channel];
     let result: SendResult;
     if (channel === undefined) {
       result = { ok: false, gone: false, error: `no ${destination.channel} channel` };
     } else {
       try {
-        result = await channel.send(destination, n);
+        result = await channel.send(destination, n, options);
       } catch (cause) {
         result = { ok: false, gone: false, error: messageOf(cause) };
       }
