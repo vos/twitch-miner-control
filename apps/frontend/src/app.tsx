@@ -22,6 +22,7 @@ import { Dashboard } from "./routes/Dashboard.js";
 import { Drops } from "./routes/Drops.js";
 import { TwitchLogin } from "./routes/Login.js";
 import { Logs } from "./routes/Logs.js";
+import { Notifications } from "./routes/Notifications.js";
 import { Settings } from "./routes/Settings.js";
 import { Streamers } from "./routes/Streamers.js";
 
@@ -71,6 +72,7 @@ const SCREENS = {
   },
   logs: { label: "Logs", element: () => <Logs /> },
   settings: { label: "Settings", element: () => <Settings /> },
+  notifications: { label: "Notifications", element: () => <Notifications /> },
   account: { label: "Twitch account", element: () => <TwitchLogin /> },
 } as const;
 
