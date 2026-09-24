@@ -88,6 +88,16 @@ export const EVENT = {
    * test in the drops engine, so it explains ended-campaign decisions. */
   CATALOGUE_STALE: "catalogue.stale",
 
+  // --- notifications -------------------------------------------------
+  /** A browser turned notifications on. */
+  NOTIFY_DESTINATION_ADDED: "notify.destination.added",
+  /** A browser was removed from the Notifications screen. */
+  NOTIFY_DESTINATION_REMOVED: "notify.destination.removed",
+  /** The push service said the subscription is gone, so the row was deleted. */
+  NOTIFY_DEVICE_EXPIRED: "notify.device.expired",
+  /** A delivery failed, or a publish threw. */
+  NOTIFY_FAILED: "notify.failed",
+
   // --- app lifecycle ----------------------------------------------------
   APP_STARTED: "app.started",
   APP_SHUTDOWN: "app.shutdown",
@@ -105,6 +115,7 @@ export const COMPONENT = {
   HTTP: "http",
   AUTH: "auth",
   CATALOGUE: "catalogue",
+  NOTIFY: "notify",
   APP: "app",
 } as const;
 
