@@ -30,5 +30,5 @@ test("the test kind is not offered as a preference", () => {
 });
 
 test("a restart pending is short-lived and urgent", () => {
-  expect(kindInfo(NOTIFY_KIND.RESTART_PENDING)).toMatchObject({ urgency: "high", ttlSeconds: 90 });
+  expect(kindInfo(NOTIFY_KIND.RESTART_PENDING)).toMatchObject({ urgency: "high", ttlSeconds: 180 });
 });

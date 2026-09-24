@@ -71,7 +71,7 @@ test("a send passes VAPID, TTL, urgency and topic", async () => {
   expect(JSON.parse(payload).kind).toBe("restart.pending");
   expect(options).toMatchObject({
     vapidDetails: { subject: "https://example.org", publicKey: "pub", privateKey: "priv" },
-    TTL: 90, urgency: "high", topic: "restart",
+    TTL: 180, urgency: "high", topic: "restart",
   });
 });
 

@@ -14,6 +14,9 @@ export interface PendingState {
   reason: string | null;
 }
 
+import { NULL_LOG, type AppLog } from "../appLog/port.js";
+import { COMPONENT, EVENT } from "../appLog/types.js";
+
 export type CancelVia = "dashboard" | "notification";
 
 /** What happened to a restart, for notifications. A renewal is not a transition. */
@@ -21,9 +24,6 @@ export type RestartTransition =
   | { phase: "proposed"; reason: string; dueAt: number }
   | { phase: "cancelled"; reason: string | null; via: CancelVia }
   | { phase: "fired"; reason: string | null; ok: boolean };
-
-import { NULL_LOG, type AppLog } from "../appLog/port.js";
-import { COMPONENT, EVENT } from "../appLog/types.js";
 
 export interface PendingRestartDeps {
   supervisor: { restart(): Promise<void> };

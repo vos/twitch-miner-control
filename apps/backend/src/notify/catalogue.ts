@@ -78,7 +78,7 @@ export const CATALOGUE: readonly KindInfo[] = [
     defaultOn: true, inbox: true, urgency: "high", ttlSeconds: HOUR_S, batch: false },
   { kind: NOTIFY_KIND.RESTART_PENDING, group: "health", label: "Restart pending",
     description: "The drops engine wants to restart the miner. Chrome and Edge show a Cancel button.",
-    defaultOn: true, inbox: true, urgency: "high", ttlSeconds: 90, batch: false },
+    defaultOn: true, inbox: true, urgency: "high", ttlSeconds: 180, batch: false },
   { kind: NOTIFY_KIND.APP_UPDATE, group: "health", label: "Update available",
     description: "A newer release of this app is published.",
     defaultOn: true, inbox: true, urgency: "normal", ttlSeconds: DAY_S, batch: false },
