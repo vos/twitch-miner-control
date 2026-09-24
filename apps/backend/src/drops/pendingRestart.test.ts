@@ -185,3 +185,62 @@ test("records a restart that failed", async () => {
   await p.fireNow();
   expect(log.ofType("restart.failed")[0]?.err).toBe("spawn failed");
 });
+
+// --- deferral and transitions, for notifications ---
+
+test("the deferral comes from deferralMs when one is given", async () => {
+  const restart = vi.fn(async () => {});
+  const p = new PendingRestart({ supervisor: { restart }, deferralMs: () => 180_000 });
+  const t0 = Date.now();
+  p.propose("pool changed");
+  expect(p.state().dueAt).toBe(t0 + 180_000);
+  await vi.advanceTimersByTimeAsync(RESTART_DEFERRAL_MS);
+  expect(restart).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(180_000 - RESTART_DEFERRAL_MS);
+  expect(restart).toHaveBeenCalledTimes(1);
+});
+
+test("a proposal and its firing are reported; a renewal is not", async () => {
+  const transitions: unknown[] = [];
+  const p = new PendingRestart({
+    supervisor: { restart: async () => {} }, onTransition: (t) => transitions.push(t),
+  });
+  const t0 = Date.now();
+  p.propose("pool changed");
+  p.propose("pool changed again");
+  await vi.advanceTimersByTimeAsync(RESTART_DEFERRAL_MS);
+  expect(transitions).toEqual([
+    { phase: "proposed", reason: "pool changed", dueAt: t0 + RESTART_DEFERRAL_MS },
+    { phase: "fired", reason: "pool changed again", ok: true },
+  ]);
+});
+
+test("a cancel reports where it came from; cancelling nothing reports nothing", () => {
+  const transitions: unknown[] = [];
+  const p = new PendingRestart({
+    supervisor: { restart: async () => {} }, onTransition: (t) => transitions.push(t),
+  });
+  p.propose("pool changed");
+  p.cancel("notification");
+  p.cancel();
+  expect(transitions).toHaveLength(2);
+  expect(transitions[1]).toEqual({ phase: "cancelled", reason: "pool changed", via: "notification" });
+});
+
+test("a failed restart is reported as fired but not ok", async () => {
+  const transitions: unknown[] = [];
+  const p = new PendingRestart({
+    supervisor: { restart: async () => { throw new Error("spawn failed"); } },
+    onTransition: (t) => transitions.push(t),
+  });
+  p.propose("pool changed");
+  await p.fireNow();
+  expect(transitions.at(-1)).toEqual({ phase: "fired", reason: "pool changed", ok: false });
+});
+
+test("fireNow with nothing pending reports nothing", async () => {
+  const onTransition = vi.fn();
+  const p = new PendingRestart({ supervisor: { restart: async () => {} }, onTransition });
+  await p.fireNow();
+  expect(onTransition).not.toHaveBeenCalled();
+});

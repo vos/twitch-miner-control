@@ -14,6 +14,14 @@ export interface PendingState {
   reason: string | null;
 }
 
+export type CancelVia = "dashboard" | "notification";
+
+/** What happened to a restart, for notifications. A renewal is not a transition. */
+export type RestartTransition =
+  | { phase: "proposed"; reason: string; dueAt: number }
+  | { phase: "cancelled"; reason: string | null; via: CancelVia }
+  | { phase: "fired"; reason: string | null; ok: boolean };
+
 import { NULL_LOG, type AppLog } from "../appLog/port.js";
 import { COMPONENT, EVENT } from "../appLog/types.js";
 
@@ -29,6 +37,13 @@ export interface PendingRestartDeps {
   now?: () => number;
   /** Where restart decisions -- including the user's vetoes -- are recorded. */
   log?: AppLog;
+  /**
+   * The deferral for a new proposal. Longer when someone will be
+   * notified (see notify/sources/restart.ts); RESTART_DEFERRAL_MS when absent.
+   */
+  deferralMs?: () => number;
+  /** Told of each proposal, cancellation and firing. */
+  onTransition?: (transition: RestartTransition) => void;
 }
 
 /**
@@ -97,36 +112,40 @@ export class PendingRestart {
       this.announce();
       return;
     }
-    this.dueAt = this.clock() + RESTART_DEFERRAL_MS;
+    const deferral = this.deps.deferralMs?.() ?? RESTART_DEFERRAL_MS;
+    this.dueAt = this.clock() + deferral;
     this.log.info({
       type: EVENT.RESTART_PROPOSED,
-      msg: `restart proposed (${reason}); firing in `
-        + `${RESTART_DEFERRAL_MS}ms unless cancelled`,
+      msg: `restart proposed (${reason}); firing in ${deferral}ms unless cancelled`,
       reason,
       dueAt: this.dueAt,
       renewed: false,
     });
     this.timer = setTimeout(() => {
       void this.fire();
-    }, RESTART_DEFERRAL_MS);
+    }, deferral);
     this.announce();
+    this.deps.onTransition?.({ phase: "proposed", reason, dueAt: this.dueAt });
   }
 
   /** Drop the pending restart. The next pass may propose a fresh one. */
-  cancel(): void {
+  cancel(via: CancelVia = "dashboard"): void {
     // Read before clear(), which discards both.
     const reason = this.reason;
     const remainingMs = this.dueAt === null ? null : this.dueAt - this.clock();
-    if (this.timer !== null) {
+    const wasPending = this.timer !== null;
+    if (wasPending) {
       this.log.info({
         type: EVENT.USER_RESTART_CANCELLED,
-        msg: `pending restart cancelled (${reason ?? "no reason recorded"})`,
+        msg: `pending restart cancelled from the ${via} (${reason ?? "no reason recorded"})`,
         reason,
         remainingMs,
+        via,
       });
     }
     this.clear();
     this.announce();
+    if (wasPending) this.deps.onTransition?.({ phase: "cancelled", reason, via });
   }
 
   /** Fire it now rather than waiting out the deferral. */
@@ -136,6 +155,7 @@ export class PendingRestart {
 
   private async fire(): Promise<void> {
     const reason = this.reason;
+    const wasPending = this.timer !== null;
     // Cleared first, so a fireNow() cannot leave the timer armed to
     // restart a second time a minute later.
     this.clear();
@@ -145,9 +165,11 @@ export class PendingRestart {
       msg: `restarting the miner (${reason ?? "no reason recorded"})`,
       reason,
     });
+    let ok = true;
     try {
       await this.deps.supervisor.restart();
     } catch (cause) {
+      ok = false;
       this.log.error({
         type: EVENT.RESTART_FAILED,
         msg: "the restart failed; the miner is still on the previous config "
@@ -159,6 +181,7 @@ export class PendingRestart {
       // is still collecting -- the next reconciliation pass sees the
       // same difference and proposes again.
     }
+    if (wasPending) this.deps.onTransition?.({ phase: "fired", reason, ok });
   }
 
   private clear(): void {
