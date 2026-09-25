@@ -47,6 +47,20 @@ test("does not mark a well-covered stream", () => {
   expect(screen.queryByTestId("low-coverage")).toBeNull();
 });
 
+test("shows when a stream started and ended", () => {
+  // Built in local time: the table formats in the browser's zone.
+  const start = new Date(2026, 8, 20, 9, 5).getTime();
+  const end = new Date(2026, 8, 20, 11, 40).getTime();
+  renderApp(<StreamHistoryTable sessions={[session({ start, end })]} />);
+  expect(screen.getByTestId("stream-time")).toHaveTextContent("09:05–11:40");
+});
+
+test("leaves the time range open while a stream is live", () => {
+  const start = new Date(2026, 8, 20, 21, 0).getTime();
+  renderApp(<StreamHistoryTable sessions={[session({ start, end: null })]} />);
+  expect(screen.getByTestId("stream-time")).toHaveTextContent(/^21:00–$/);
+});
+
 test("marks a still-running stream as live", () => {
   renderApp(
     <StreamHistoryTable sessions={[session({ end: null, start: NOW - HOUR })]} />,

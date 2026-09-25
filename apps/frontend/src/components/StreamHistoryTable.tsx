@@ -1,6 +1,7 @@
 import { Badge, Stack, Table, Text } from "@mantine/core";
 import { sessionRows, type DetailSession } from "../lib/sessionRows.js";
 import { formatWorkedMinutes } from "../lib/formatWorked.js";
+import { formatClock, formatDay } from "../lib/formatClock.js";
 
 const nf = new Intl.NumberFormat("en-US");
 
@@ -49,8 +50,18 @@ export function StreamHistoryTable({ sessions }: { sessions: DetailSession[] }) 
             {rows.map((row) => (
               <Table.Tr key={row.streamId} data-testid="stream-row">
                 <Table.Td>
-                  {new Date(row.start).toLocaleDateString(undefined,
-                    { month: "short", day: "numeric" })}
+                  {formatDay(row.start)}{" "}
+                  {/* Channels that go live more than once a day need the
+                      time to tell their rows apart. A live stream has no
+                      end yet, so its range stays open. The range wraps
+                      below the date as a unit when the cell is narrow. */}
+                  <Text
+                    span size="xs" c="dimmed" ml={4}
+                    style={{ whiteSpace: "nowrap" }}
+                    data-testid="stream-time"
+                  >
+                    {formatClock(row.start)}–{row.end === null ? "" : formatClock(row.end)}
+                  </Text>
                   {row.live && (
                     <Badge color="twitch" variant="light" size="xs" ml={6}>live</Badge>
                   )}
