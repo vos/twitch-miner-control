@@ -10,6 +10,7 @@ let store: NotifyStore;
 let sendTo: ReturnType<typeof vi.fn>;
 let redeem: ReturnType<typeof vi.fn<(token: string) => boolean>>;
 let log: ReturnType<typeof memoryLog>;
+let broadcast: ReturnType<typeof vi.fn<(event: string, data: unknown) => void>>;
 
 async function app() {
   const instance = Fastify();
@@ -20,6 +21,7 @@ async function app() {
     redeemAction: redeem,
     now: () => 42,
     log,
+    broadcast,
   });
   await instance.ready();
   return instance;
@@ -30,6 +32,7 @@ beforeEach(() => {
   sendTo = vi.fn(async () => ({ ok: true }));
   redeem = vi.fn<(token: string) => boolean>(() => false);
   log = memoryLog();
+  broadcast = vi.fn<(event: string, data: unknown) => void>();
 });
 
 const subscription = {
@@ -130,6 +133,30 @@ test("the inbox pages and clamps its limit", async () => {
   expect(first.map((r: { title: string }) => r.title)).toEqual(["t2", "t1"]);
   const rest = (await a.inject({ url: `/api/notify/inbox?before=${first[1].id}&limit=500` })).json().items;
   expect(rest.map((r: { title: string }) => r.title)).toEqual(["t0"]);
+});
+
+test("removing an inbox row tells open apps, and an unknown id is a 404", async () => {
+  const row = store.addInbox({ ts: 1, kind: NOTIFY_KIND.DROP_CLAIMED, title: "t", body: "", streamer: null, link: "/" });
+  const a = await app();
+  const res = await a.inject({ method: "POST", url: `/api/notify/inbox/${row.id}/remove` });
+  expect(res.json()).toEqual({ ok: true });
+  expect(store.inbox(null, 10)).toEqual([]);
+  expect(broadcast).toHaveBeenCalledWith("notification-removed", { id: row.id });
+  broadcast.mockClear();
+  expect((await a.inject({ method: "POST", url: `/api/notify/inbox/${row.id}/remove` })).statusCode).toBe(404);
+  expect((await a.inject({ method: "POST", url: "/api/notify/inbox/abc/remove" })).statusCode).toBe(404);
+  expect(broadcast).not.toHaveBeenCalled();
+});
+
+test("clearing the inbox empties it and tells open apps", async () => {
+  for (let i = 0; i < 3; i++) {
+    store.addInbox({ ts: i, kind: NOTIFY_KIND.DROP_CLAIMED, title: `t${i}`, body: "", streamer: null, link: "/" });
+  }
+  const a = await app();
+  const res = await a.inject({ method: "POST", url: "/api/notify/inbox/clear" });
+  expect(res.json()).toEqual({ ok: true, removed: 3 });
+  expect(store.inbox(null, 10)).toEqual([]);
+  expect(broadcast).toHaveBeenCalledWith("notifications-cleared", {});
 });
 
 test("an action is carried out once, and a bad token is a 404", async () => {

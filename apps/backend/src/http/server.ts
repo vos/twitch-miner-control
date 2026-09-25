@@ -434,7 +434,13 @@ export function buildServer(deps: ServerDeps): AppServer {
       secureCookie: deps.secureCookie,
     });
     hub.register(instance);
-    if (deps.notify !== undefined) registerNotifyRoutes(instance, { ...deps.notify, log: deps.log });
+    if (deps.notify !== undefined) {
+      registerNotifyRoutes(instance, {
+        ...deps.notify,
+        log: deps.log,
+        broadcast: (event, data) => hub.broadcast(event, data),
+      });
+    }
 
     instance.get("/api/config", async () => staged ?? loadConfig(deps.configPath));
 

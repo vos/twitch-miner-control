@@ -50,7 +50,11 @@ function firstIssue(error: z.ZodError): string {
 
 export function registerNotifyRoutes(
   app: FastifyInstance,
-  deps: NotifyRouteDeps & { log?: AppLog },
+  deps: NotifyRouteDeps & {
+    log?: AppLog;
+    /** Tells open apps about inbox removals, so every tab drops the same rows. */
+    broadcast?: (event: string, data: unknown) => void;
+  },
 ): void {
   const log = (deps.log ?? NULL_LOG).child({ component: COMPONENT.NOTIFY });
   const now = deps.now ?? Date.now;
@@ -130,6 +134,21 @@ export function registerNotifyRoutes(
         Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 50,
       ),
     };
+  });
+
+  app.post("/api/notify/inbox/:id/remove", async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    if (!Number.isInteger(id) || !deps.store.removeInbox(id)) {
+      return reply.code(404).send({ error: "no such notification" });
+    }
+    deps.broadcast?.("notification-removed", { id });
+    return { ok: true };
+  });
+
+  app.post("/api/notify/inbox/clear", async () => {
+    const removed = deps.store.clearInbox();
+    deps.broadcast?.("notifications-cleared", {});
+    return { ok: true, removed };
   });
 
   // Public: see PUBLIC_ENDPOINTS in http/auth.ts. The token is the credential.

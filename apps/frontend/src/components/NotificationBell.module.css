@@ -5,3 +5,22 @@
 .body {
   padding-top: calc(var(--mantine-spacing-md) / 2);
 }
+
+.row {
+  position: relative;
+}
+
+.card {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--tw-border);
+  border-radius: 8px;
+  /* Keeps a long title clear of the dismiss button. */
+  padding-right: calc(var(--mantine-spacing-xs) + 28px);
+}
+
+.dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}

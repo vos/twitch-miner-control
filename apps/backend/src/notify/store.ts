@@ -185,6 +185,16 @@ export class NotifyStore {
       .all(before, before, limit) as InboxRow[];
   }
 
+  /** Says whether the row existed. */
+  removeInbox(id: number): boolean {
+    return this.db.prepare("DELETE FROM notifications WHERE id = ?").run(id).changes > 0;
+  }
+
+  /** Returns how many rows went. */
+  clearInbox(): number {
+    return this.db.prepare("DELETE FROM notifications").run().changes;
+  }
+
   /** True the first time a key is seen, false every time after. */
   markSeen(key: string, ts: number): boolean {
     return this.db

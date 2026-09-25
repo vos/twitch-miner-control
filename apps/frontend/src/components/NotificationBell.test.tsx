@@ -27,7 +27,11 @@ beforeEach(() => {
   inbox = [item(3), item(2), item(1)];
   calls = [];
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      calls.push(`POST ${url}`);
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    }
     calls.push(url);
     const body = url.startsWith("/api/notify/inbox")
       ? { items: url.includes("before=") ? [item(0, "Older")] : inbox }
@@ -96,4 +100,48 @@ test("an empty inbox says what will appear, and links to the settings", async ()
   expect(await screen.findByText(/Nothing yet/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Notification settings" }));
   expect(onOpenSettings).toHaveBeenCalled();
+});
+
+test("a row's dismiss button deletes it without opening its link", async () => {
+  const { onOpenLink } = view();
+  await userEvent.click(await screen.findByRole("button", { name: "Notifications" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Dismiss Item 2" }));
+  await waitFor(() => expect(screen.queryByText("Item 2")).not.toBeInTheDocument());
+  expect(screen.getByText("Item 3")).toBeInTheDocument();
+  expect(calls).toContain("POST /api/notify/inbox/2/remove");
+  expect(onOpenLink).not.toHaveBeenCalled();
+});
+
+test("clear all asks first, and cancelling keeps everything", async () => {
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: "Notifications" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Clear all" }));
+  expect(screen.getByText(/every notification/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.getByText("Item 3")).toBeInTheDocument();
+  expect(calls).not.toContain("POST /api/notify/inbox/clear");
+});
+
+test("confirming clear all empties the inbox", async () => {
+  inbox = Array.from({ length: 50 }, (_, i) => item(100 - i));
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: "Notifications" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Clear all" }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete all" }));
+  expect(await screen.findByText(/Nothing yet/)).toBeInTheDocument();
+  expect(calls).toContain("POST /api/notify/inbox/clear");
+  // Nothing is left on the server to page into.
+  expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Clear all" })).not.toBeInTheDocument();
+});
+
+test("removals made in another tab drop the same rows here", async () => {
+  view();
+  await userEvent.click(await screen.findByRole("button", { name: "Notifications" }));
+  await screen.findByText("Item 3");
+  FakeEventSource.last!.push("notification-removed", { id: 3 });
+  await waitFor(() => expect(screen.queryByText("Item 3")).not.toBeInTheDocument());
+  expect(screen.getByText("Item 2")).toBeInTheDocument();
+  FakeEventSource.last!.push("notifications-cleared", {});
+  expect(await screen.findByText(/Nothing yet/)).toBeInTheDocument();
 });

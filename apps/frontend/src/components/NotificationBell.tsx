@@ -1,7 +1,8 @@
 import {
-  ActionIcon, Button, Drawer, Indicator, Stack, Text, Tooltip, UnstyledButton,
+  ActionIcon, Box, Button, CloseButton, Drawer, Group, Indicator, Stack, Text, Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
-import { IconBell } from "@tabler/icons-react";
+import { IconBell, IconSettings, IconTrash } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { notifyApi, type InboxItem } from "../api/notify.js";
 import { useStreamEvent } from "../api/useLiveState.js";
@@ -46,6 +47,8 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
   const [more, setMore] = useState(false);
   const [seen, setSeen] = useState<number | null>(readSeen);
   const [opened, setOpened] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const markSeen = (list: InboxItem[]) => {
     const top = list[0]?.id;
@@ -73,6 +76,15 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
     setItems((prev) => [row, ...prev.filter((i) => i.id !== row.id)]);
   });
 
+  useStreamEvent<{ id: number }>("notification-removed", ({ id }) => {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+  });
+
+  useStreamEvent("notifications-cleared", () => {
+    setItems([]);
+    setMore(false);
+  });
+
   const unread = seen === null ? 0 : items.filter((i) => i.id > seen).length;
 
   const open = () => {
@@ -81,6 +93,8 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
   };
   const close = () => {
     setOpened(false);
+    setConfirmClear(false);
+    setError(null);
     // Anything that arrived while it was open has been seen too.
     markSeen(items);
   };
@@ -91,6 +105,30 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
     const { items: page = [] } = await notifyApi.inbox(last.id);
     setItems((prev) => [...prev, ...page]);
     setMore(page.length === PAGE);
+  };
+
+  // Not optimistic: a row that failed to go would otherwise vanish here
+  // and come back on the next visit.
+  const remove = async (id: number) => {
+    setError(null);
+    try {
+      await notifyApi.removeInbox(id);
+      setItems((prev) => prev.filter((i) => i.id !== id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const clearAll = async () => {
+    setError(null);
+    try {
+      await notifyApi.clearInbox();
+      setItems([]);
+      setMore(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+    setConfirmClear(false);
   };
 
   const now = Date.now();
@@ -108,47 +146,91 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
           </ActionIcon>
         </Indicator>
       </Tooltip>
-      <Drawer
-        opened={opened}
-        onClose={close}
-        position="right"
-        size="sm"
-        title="Notifications"
-        classNames={{ body: classes.body }}
-      >
-        <Stack gap="xs">
-          {items.length === 0 && (
-            <Text size="sm" c="dimmed">
-              Nothing yet. Miner problems, restarts, drops and updates show up here.
-            </Text>
-          )}
-          {items.map((item) => (
-            <UnstyledButton
-              key={item.id}
-              onClick={() => {
-                close();
-                onOpenLink(item.link);
-              }}
-              p="xs"
-              style={{ borderRadius: 8, border: "1px solid var(--tw-border)" }}
-            >
-              <Text fw={600} size="sm">{item.title}</Text>
-              <Text size="sm" c="dimmed">{item.body}</Text>
-              <Text size="xs" c="dimmed">{formatSpan(now - item.ts)} ago</Text>
-            </UnstyledButton>
-          ))}
-          {more && <Button variant="subtle" onClick={() => void loadMore()}>Load more</Button>}
-          <Button
-            variant="light"
-            onClick={() => {
-              close();
-              onOpenSettings();
-            }}
-          >
-            Notification settings
-          </Button>
-        </Stack>
-      </Drawer>
+      {/* Composed rather than <Drawer title>, to seat the actions beside the
+          close button. */}
+      <Drawer.Root opened={opened} onClose={close} position="right" size="sm">
+        <Drawer.Overlay />
+        <Drawer.Content>
+          <Drawer.Header>
+            <Drawer.Title>Notifications</Drawer.Title>
+            <Group gap={4} wrap="nowrap">
+              {items.length > 0 && (
+                <Tooltip label="Clear all">
+                  <ActionIcon
+                    variant="subtle"
+                    color="gray"
+                    aria-label="Clear all"
+                    onClick={() => setConfirmClear(true)}
+                  >
+                    <IconTrash size={18} stroke={1.7} />
+                  </ActionIcon>
+                </Tooltip>
+              )}
+              <Tooltip label="Notification settings">
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  aria-label="Notification settings"
+                  onClick={() => {
+                    close();
+                    onOpenSettings();
+                  }}
+                >
+                  <IconSettings size={18} stroke={1.7} />
+                </ActionIcon>
+              </Tooltip>
+              <Drawer.CloseButton />
+            </Group>
+          </Drawer.Header>
+          <Drawer.Body className={classes.body}>
+            <Stack gap="xs">
+              {confirmClear && items.length > 0 && (
+                <>
+                  <Text size="sm" c="dimmed">
+                    This deletes every notification, including ones not loaded yet.
+                  </Text>
+                  <Group gap="xs">
+                    <Button size="xs" color="red" onClick={() => void clearAll()}>Delete all</Button>
+                    <Button size="xs" variant="default" onClick={() => setConfirmClear(false)}>
+                      Cancel
+                    </Button>
+                  </Group>
+                </>
+              )}
+              {error !== null && <Text size="sm" c="red">{error}</Text>}
+              {items.length === 0 && (
+                <Text size="sm" c="dimmed">
+                  Nothing yet. Miner problems, restarts, drops and updates show up here.
+                </Text>
+              )}
+              {items.map((item) => (
+                <Box key={item.id} className={classes.row}>
+                  <UnstyledButton
+                    onClick={() => {
+                      close();
+                      onOpenLink(item.link);
+                    }}
+                    p="xs"
+                    className={classes.card}
+                  >
+                    <Text fw={600} size="sm">{item.title}</Text>
+                    <Text size="sm" c="dimmed">{item.body}</Text>
+                    <Text size="xs" c="dimmed">{formatSpan(now - item.ts)} ago</Text>
+                  </UnstyledButton>
+                  {/* A sibling of the card, not inside it: a button can't hold a button. */}
+                  <CloseButton
+                    size="sm"
+                    className={classes.dismiss}
+                    aria-label={`Dismiss ${item.title}`}
+                    onClick={() => void remove(item.id)}
+                  />
+                </Box>
+              ))}
+              {more && <Button variant="subtle" onClick={() => void loadMore()}>Load more</Button>}
+            </Stack>
+          </Drawer.Body>
+        </Drawer.Content>
+      </Drawer.Root>
     </>
   );
 }

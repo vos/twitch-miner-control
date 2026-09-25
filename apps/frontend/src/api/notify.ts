@@ -65,4 +65,6 @@ export const notifyApi = {
     api.post<{ ok: boolean; error?: string }>(`/api/notify/destinations/${encodeURIComponent(id)}/test`),
   inbox: (before?: number) =>
     api.get<{ items?: InboxItem[] }>(`/api/notify/inbox${before === undefined ? "" : `?before=${before}`}`),
+  removeInbox: (id: number) => api.post<{ ok: true }>(`/api/notify/inbox/${id}/remove`),
+  clearInbox: () => api.post<{ ok: true; removed: number }>("/api/notify/inbox/clear"),
 };

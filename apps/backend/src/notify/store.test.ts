@@ -75,6 +75,23 @@ test("the inbox pages newest first", () => {
   expect(store.inbox(first[1].id, 10).map((r) => r.title)).toEqual(["t3", "t2", "t1"]);
 });
 
+test("removeInbox deletes one row and says whether it existed", () => {
+  const keep = store.addInbox({ ts: 1, kind: NOTIFY_KIND.DROP_CLAIMED, title: "keep", body: "", streamer: null, link: "/" });
+  const drop = store.addInbox({ ts: 2, kind: NOTIFY_KIND.DROP_CLAIMED, title: "drop", body: "", streamer: null, link: "/" });
+  expect(store.removeInbox(drop.id)).toBe(true);
+  expect(store.removeInbox(drop.id)).toBe(false);
+  expect(store.inbox(null, 10).map((r) => r.id)).toEqual([keep.id]);
+});
+
+test("clearInbox empties the inbox but keeps dedupe keys", () => {
+  store.addInbox({ ts: 1, kind: NOTIFY_KIND.DROP_CLAIMED, title: "a", body: "", streamer: null, link: "/" });
+  store.addInbox({ ts: 2, kind: NOTIFY_KIND.DROP_CLAIMED, title: "b", body: "", streamer: null, link: "/" });
+  store.markSeen("app.update:1.6.0", 1);
+  expect(store.clearInbox()).toBe(2);
+  expect(store.inbox(null, 10)).toEqual([]);
+  expect(store.markSeen("app.update:1.6.0", 3)).toBe(false);
+});
+
 test("a dedupe key is seen once", () => {
   expect(store.markSeen("app.update:1.6.0", 1)).toBe(true);
   expect(store.markSeen("app.update:1.6.0", 2)).toBe(false);
