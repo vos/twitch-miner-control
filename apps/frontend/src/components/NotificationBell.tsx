@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { notifyApi, type InboxItem } from "../api/notify.js";
 import { useStreamEvent } from "../api/useLiveState.js";
 import { formatSpan } from "../lib/formatSpan.js";
+import classes from "./NotificationBell.module.css";
 
 const SEEN_KEY = "tw.notify.lastSeenId";
 /** Matches the server's default page size. */
@@ -107,7 +108,14 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
           </ActionIcon>
         </Indicator>
       </Tooltip>
-      <Drawer opened={opened} onClose={close} position="right" size="sm" title="Notifications">
+      <Drawer
+        opened={opened}
+        onClose={close}
+        position="right"
+        size="sm"
+        title="Notifications"
+        classNames={{ body: classes.body }}
+      >
         <Stack gap="xs">
           {items.length === 0 && (
             <Text size="sm" c="dimmed">
