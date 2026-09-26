@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   miner: {},
   streamers: [],
   subscriptions: [],
+  followedGames: [],
   campaignQueue: false,
 };
 
@@ -28,6 +29,16 @@ export function loadConfig(path: string): AppConfig {
   const rawStreamers = Array.isArray(r.streamers) ? r.streamers : [];
   const camel = {
     ...r,
+    // Subscriptions were once tagged with a kind, and every campaign one
+    // on disk still is. The tag is dropped here; any other kind is left
+    // for the schema to reject.
+    ...(Array.isArray(r.subscriptions) && {
+      subscriptions: r.subscriptions.map((s: Record<string, unknown>) => {
+        if (s?.kind !== "campaign") return s;
+        const { kind: _kind, ...rest } = s;
+        return rest;
+      }),
+    }),
     defaults: settingsFromPython((r.defaults as Record<string, unknown>) ?? {}),
     miner: minerFromPython((r.miner as Record<string, unknown>) ?? {}),
     streamers: rawStreamers.map((s: Record<string, unknown>) => ({

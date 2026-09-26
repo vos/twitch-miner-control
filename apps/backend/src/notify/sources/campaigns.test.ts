@@ -2,7 +2,9 @@ import { expect, test, vi } from "vitest";
 import type { Campaign, Catalogue } from "../../state/campaignCatalogue.js";
 import type { InventorySnapshot } from "../../state/inventory.js";
 import type { PublishInput } from "../catalogue.js";
-import { CampaignWatcher, ENDING_SOON_MS, campaignStartedNotification } from "./campaigns.js";
+import {
+  CampaignWatcher, ENDING_SOON_MS, campaignFollowedNotification, campaignStartedNotification,
+} from "./campaigns.js";
 
 const NOW = 1_000_000_000;
 const HOUR = 3_600_000;
@@ -19,7 +21,7 @@ const campaign = (id: string, over: Partial<Campaign> = {}): Campaign => ({
 const claimed = { minutes: 60, claimed: true, instanceId: null };
 const halfway = { minutes: 30, claimed: false, instanceId: null };
 
-function harness(opts: { wantsNew?: boolean; games?: string[] } = {}) {
+function harness() {
   const seen = new Set<string>();
   const markSeen = (key: string) => (seen.has(key) ? false : (seen.add(key), true));
   const published: PublishInput[] = [];
@@ -33,10 +35,9 @@ function harness(opts: { wantsNew?: boolean; games?: string[] } = {}) {
     campaigns, fetchedAt: 1, stale: false, available: true, error: null,
   }));
   const watcher = new CampaignWatcher({
-    notifier: { publish, wantsAny: () => opts.wantsNew ?? true, markSeen },
+    notifier: { publish, markSeen },
     catalogue: { get: catalogueGet },
     inventory: { get: async () => ({ progress, earned: {}, fetchedAt: 1, available: true }) },
-    subscribedGames: () => opts.games ?? [],
     now: () => NOW,
   });
   return {
@@ -45,8 +46,8 @@ function harness(opts: { wantsNew?: boolean; games?: string[] } = {}) {
   };
 }
 
-test("with nobody wanting new-campaign notices, completions still publish and no baseline is kept", async () => {
-  const h = harness({ wantsNew: false });
+test("completions publish once the watcher is primed", async () => {
+  const h = harness();
   h.set([campaign("c1")], { c1: { "c1-d1": claimed, "c1-d2": claimed } });
   await h.watcher.pass(); // primes: the first run ever stays quiet
   h.set([campaign("c1"), campaign("c2")], {
@@ -93,19 +94,6 @@ test("a campaign ending soon with progress is published once", async () => {
   ]);
 });
 
-test("a new campaign is published only for a subscribed game, never on the first pass", async () => {
-  const h = harness({ games: ["g1"] });
-  h.set([campaign("c1")], {});
-  await h.watcher.pass();
-  h.set([
-    campaign("c1"),
-    campaign("c2"),
-    campaign("c3", { game: { id: "g9", slug: "other", displayName: "Other" } }),
-  ], {});
-  await h.watcher.pass();
-  expect(h.published.map((n) => [n.kind, n.title])).toEqual([["campaign.new", "New campaign"]]);
-  expect(h.published[0].body).toBe("\"Campaign c2\" for Rust was announced.");
-});
 
 test("a campaign start reads as what happened", () => {
   expect(campaignStartedNotification({ subscriptionId: "s1", label: "Rust Drops", targetId: "c1", why: "queue" }))
@@ -114,4 +102,14 @@ test("a campaign start reads as what happened", () => {
       body: "\"Rust Drops\" is next in the queue and is now being collected.",
       link: "/?open=drops&campaign=c1",
     });
+});
+
+test("a campaign a followed game subscribed to reads as what happened", () => {
+  expect(campaignFollowedNotification({
+    subscriptionId: "s1", label: "Nightreign Drops", targetId: "c9", game: "ELDEN RING",
+  })).toEqual({
+    kind: "campaign.new", title: "New campaign",
+    body: "\"Nightreign Drops\" for ELDEN RING was subscribed automatically.",
+    link: "/?open=drops&campaign=c9", dedupeKey: "campaign.new:c9",
+  });
 });

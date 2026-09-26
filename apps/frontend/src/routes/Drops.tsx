@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Loader, NumberInput,
+  ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Loader,
   Stack, Switch, Text, TextInput, Tooltip,
 } from "@mantine/core";
 import {
@@ -18,8 +18,16 @@ import {
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { CampaignCard, type ResolvedCampaign } from "../components/CampaignCard.js";
+import { FollowedGamesCard } from "../components/FollowedGamesCard.js";
+import { FollowGamesDialog } from "../components/FollowGamesDialog.js";
+import { PoolSizeInput } from "../components/PoolSizeInput.js";
+import { SkippedCampaignRow } from "../components/SkippedCampaignRow.js";
 import { matchesCampaign, matchesDrop, matchesHeader } from "../lib/campaignMatch.js";
 import { formatDateHour } from "../lib/formatClock.js";
+import {
+  type FollowResponse, type FollowedGame, followSummary, runningCampaigns,
+  skippedCampaigns, viaGameName,
+} from "../lib/followedGames.js";
 import { formatSpan } from "../lib/formatSpan.js";
 import type { Stamped } from "../lib/screenIntent.js";
 import classes from "./Drops.module.css";
@@ -27,17 +35,17 @@ import classes from "./Drops.module.css";
 /** A subscription as the API reports it, with its resolved channels. */
 export interface SubscriptionRow {
   id: string;
-  kind: "campaign" | "game";
   targetId: string;
   label: string;
   poolSize: number;
   rank: number;
+  /** The followed game that added this one, when one did. */
+  viaGame?: string;
   /** Logins the engine currently has in the config for this one. */
   channels: string[];
   /**
-   * Its place in the one-at-a-time queue: null with the queue off and
-   * for a game subscription, which is never queued. Optional because a
-   * backend predating the queue omits it.
+   * Its place in the one-at-a-time queue: null with the queue off.
+   * Optional because a backend predating the queue omits it.
    */
   queue?: {
     state: "active" | "waiting" | "scheduled";
@@ -177,39 +185,18 @@ function matchedByDropOnly(c: ResolvedCampaign, filter: string): boolean {
 }
 
 /**
- * Where a subscription's label points, or null when nowhere real does.
- *
- * A campaign still in the catalogue links down to its own card on this
- * same page, which is the only place showing this viewer's progress
- * against its drops -- the panel itself lists none of that, and neither
- * does any page elsewhere. (The tracker does publish a page per
- * campaign, at /campaigns/<id>; it just cannot know what you have
- * claimed.)
- *
- * Otherwise the game's Twitch directory, which is where the channels in
- * the row came from. That covers a `game` subscription, which is tied to
- * no campaign at all, and a campaign that has since left the catalogue.
- * A campaign whose game is unknown gets no link rather than a guessed
- * one: a slug invented from a display name lands on a 404.
+ * Where a subscription's label points: its campaign's card on this page,
+ * the only place showing this viewer's progress against its drops. Null
+ * once the campaign has left the catalogue.
  */
 function subscriptionLink(
   sub: SubscriptionRow,
   campaigns: ResolvedCampaign[],
 ): { href: string; external: boolean } | null {
-  if (sub.kind === "campaign") {
-    const campaign = campaigns.find((c) => c.id === sub.targetId);
-    if (campaign !== undefined) {
-      return { href: `#campaign-${campaign.id}`, external: false };
-    }
-  }
-  const slug = campaigns.find(
-    (c) => c.game?.id === sub.targetId,
-  )?.game?.slug;
-  if (slug === undefined || slug === "") return null;
-  return {
-    href: `https://twitch.tv/directory/category/${slug}`,
-    external: true,
-  };
+  const campaign = campaigns.find((c) => c.id === sub.targetId);
+  return campaign === undefined
+    ? null
+    : { href: `#campaign-${campaign.id}`, external: false };
 }
 
 /**
@@ -219,20 +206,17 @@ function subscriptionLink(
  * the subscriptions payload: the engine stores a label and a target id,
  * and the game is a property of the campaign, not of the subscription.
  *
- * Returns null when the name would only repeat the label -- a game
- * subscription is labelled with its game, and rendering it twice on one
- * row reads as a rendering fault rather than as detail. Also null for a
- * campaign that has left the catalogue, where there is nothing to look
- * up and a guess would be worse than silence.
+ * Returns null when the name would only repeat the label -- a campaign
+ * named after its game -- since rendering it twice on one row reads as a
+ * rendering fault rather than as detail. Also null for a campaign that
+ * has left the catalogue, where there is nothing to look up and a guess
+ * would be worse than silence.
  */
 function subscriptionGame(
   sub: SubscriptionRow,
   campaigns: ResolvedCampaign[],
 ): string | null {
-  const game = sub.kind === "campaign"
-    ? campaigns.find((c) => c.id === sub.targetId)?.game
-    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
-  const name = game?.displayName;
+  const name = campaigns.find((c) => c.id === sub.targetId)?.game?.displayName;
   if (name === undefined || name === "") return null;
   return name.toLowerCase() === sub.label.toLowerCase() ? null : name;
 }
@@ -248,7 +232,6 @@ function subscriptionOpensAt(
   campaigns: ResolvedCampaign[],
   now: number,
 ): number | null {
-  if (sub.kind !== "campaign") return null;
   const startsAt = campaigns.find((c) => c.id === sub.targetId)?.startsAt ?? null;
   return startsAt !== null && startsAt > now ? startsAt : null;
 }
@@ -271,11 +254,11 @@ function opening(at: number, now: number): string {
  * panel does not keep.
  */
 function SubscriptionRow({
-  sub, index, draggable, restartPending, busy, link, game, opensAt, onOpen,
-  onRemove, onPoolSize,
+  sub, index, draggable, restartPending, busy, link, game, auto, skippable, opensAt,
+  onOpen, onRemove, onPoolSize,
 }: {
   sub: SubscriptionRow;
-  /** When its campaign opens, or null once open (and for a game). */
+  /** When its campaign opens, or null once open. */
   opensAt: number | null;
   index: number;
   draggable: boolean;
@@ -283,10 +266,17 @@ function SubscriptionRow({
   busy: boolean;
   /** The game this is for, or null when naming it would add nothing. */
   game: string | null;
+  /** Set when a followed game added this one; the game's name when known. */
+  auto: { game: string | null } | null;
   /** Where the label points, or null when nothing real to point at. */
   link: { href: string; external: boolean } | null;
   /** Called when an in-page link is followed, to open the card landed on. */
   onOpen: () => void;
+  /**
+   * Whether removing it skips its campaign: it belongs to a followed game,
+   * which would otherwise just subscribe to it again.
+   */
+  skippable: boolean;
   onRemove: () => void;
   onPoolSize: (size: number) => void;
 }) {
@@ -294,30 +284,6 @@ function SubscriptionRow({
     attributes, listeners, setNodeRef, setActivatorNodeRef, transform,
     transition, isDragging,
   } = useSortable({ id: sub.id, disabled: !draggable });
-  /**
-   * What is in the box, which is not yet what is in force.
-   *
-   * Held locally so the digits can be edited freely -- half a number is
-   * a legal thing to have typed and an illegal thing to save. It is
-   * committed on blur or Enter rather than per keystroke: each commit
-   * costs a directory resolve and may propose a restart, so typing "6"
-   * over "3" must not first ask the engine for a pool of one.
-   */
-  const [draft, setDraft] = useState<string | number>(sub.poolSize);
-  useEffect(() => { setDraft(sub.poolSize); }, [sub.poolSize]);
-
-  function commit() {
-    const size = Number(draft);
-    // An emptied box is not a request for zero channels; it falls back
-    // to the size actually in force rather than posting something the
-    // server would reject.
-    if (!Number.isInteger(size) || size < 1 || size > 10) {
-      setDraft(sub.poolSize);
-      return;
-    }
-    if (size === sub.poolSize) return;
-    onPoolSize(size);
-  }
 
   return (
     <Group
@@ -389,6 +355,26 @@ function SubscriptionRow({
                 />
               )}
             </Anchor>
+          )}
+          {auto !== null && (
+            <Tooltip
+              label={
+                `Added because you follow ${auto.game ?? "this game"}. Skipping it `
+                + "stops this campaign only; future campaigns for the game are still added."
+              }
+              multiline
+              w={260}
+            >
+              <Badge
+                size="xs"
+                variant="light"
+                color="grape"
+                style={{ flexShrink: 0 }}
+                data-testid="subscription-auto"
+              >
+                Auto
+              </Badge>
+            </Tooltip>
           )}
           {/* The queue badge already says "not open yet" when queued. */}
           {sub.queue == null && opensAt !== null && (
@@ -487,51 +473,40 @@ function SubscriptionRow({
             Both, rather than one: the word is what makes the control
             legible at a glance, and the tooltip is what explains why
             anyone would change it. */}
-        <Tooltip
-          label={
+        <PoolSizeInput
+          value={sub.poolSize}
+          label={`Channels for ${sub.label}`}
+          hint={
             "How many channels to keep resolved for this campaign. "
             + "More absorbs channels going offline between checks; "
             + "fewer leaves room for your other subscriptions."
           }
+          disabled={busy}
+          onCommit={onPoolSize}
+        />
+        <Text size="xs" c="dimmed">channels</Text>
+        <Tooltip
+          label={
+            "Stop collecting this campaign. Its game will not subscribe to it "
+            + "again; it stays listed below as skipped, and Unskip brings it back."
+          }
           multiline
           w={260}
+          disabled={!skippable}
         >
-          <NumberInput
-            size="xs"
-            // Two digits and the stepper, no more. The arrows are hidden
-            // until the control is hovered or focused, so a resting row
-            // is the number and its unit rather than a pair of chevrons
-            // repeated down the panel.
-            w={48}
-            min={1}
-            max={10}
-            clampBehavior="strict"
-            aria-label={`Channels for ${sub.label}`}
-            disabled={busy}
-            value={draft}
-            onChange={setDraft}
-            onBlur={commit}
-            onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
-            classNames={{
-              root: classes.poolField,
-              input: classes.poolInput,
-              controls: classes.poolStepper,
-            }}
-          />
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            color="gray"
+            // Every Remove goes inert, not just the one clicked:
+            // a second removal mid-flight would post against a
+            // subscription the first call is already deleting.
+            loading={busy}
+            onClick={onRemove}
+          >
+            {skippable ? "Skip" : "Remove"}
+          </Button>
         </Tooltip>
-        <Text size="xs" c="dimmed">channels</Text>
-        <Button
-          size="compact-xs"
-          variant="subtle"
-          color="gray"
-          // Every Remove goes inert, not just the one clicked:
-          // a second removal mid-flight would post against a
-          // subscription the first call is already deleting.
-          loading={busy}
-          onClick={onRemove}
-        >
-          Remove
-        </Button>
       </Group>
     </Group>
   );
@@ -558,6 +533,9 @@ export function Drops({ jump = null }: {
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<View>("all");
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
+  const [followed, setFollowed] = useState<FollowedGame[]>([]);
+  const [followOpen, setFollowOpen] = useState(false);
+  const [followNotice, setFollowNotice] = useState<string | null>(null);
   const [campaignQueue, setCampaignQueue] = useState(false);
   /**
    * What is running, and which campaign it belongs to.
@@ -614,20 +592,25 @@ export function Drops({ jump = null }: {
     return () => { live = false; };
   }, []);
 
-  async function loadSubs() {
+  async function loadSubs(): Promise<SubscriptionRow[]> {
     try {
       const res = await api.get<{
         subscriptions?: SubscriptionRow[];
         campaignQueue?: boolean;
+        followedGames?: FollowedGame[];
       }>("/api/subscriptions");
       setCampaignQueue(res.campaignQueue === true);
       // Guarded rather than trusted: a response without the field would
       // otherwise put undefined where an array is expected and take the
       // whole page down on the next render.
-      setSubs(Array.isArray(res.subscriptions) ? res.subscriptions : []);
+      const list = Array.isArray(res.subscriptions) ? res.subscriptions : [];
+      setSubs(list);
+      setFollowed(Array.isArray(res.followedGames) ? res.followedGames : []);
+      return list;
     } catch {
       // The campaign list is the page's job; a subscriptions panel that
       // cannot load must not take the whole screen down with it.
+      return subs;
     }
   }
 
@@ -664,6 +647,32 @@ export function Drops({ jump = null }: {
       await loadRestart();
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "that did not work");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Follows games, then says what it did.
+   *
+   * Not routed through `mutate`: that reports a failure on the page, and
+   * the dialog wants the rejection so it can stay open with the reason.
+   * The campaigns counted are the subscriptions that appeared, which is
+   * what the follow's own resolve pass added.
+   */
+  async function follow(ids: string[], key: string): Promise<void> {
+    setBusy({ key, label: "Following and checking for campaigns…" });
+    try {
+      const before = new Set(subs.map((s) => s.id));
+      const res = await api.post<FollowResponse>("/api/followed-games", { ids });
+      const after = await loadSubs();
+      await loadRestart();
+      const running = res.added.reduce(
+        (sum, g) => sum + runningCampaigns(g.id, data?.campaigns ?? []), 0,
+      );
+      setFollowNotice(followSummary(
+        res, after.filter((s) => !before.has(s.id)).length, running,
+      ));
     } finally {
       setBusy(null);
     }
@@ -808,6 +817,7 @@ export function Drops({ jump = null }: {
   if (data === null) return <Loader />;
 
   const catalogueAge = age(data.catalogueFetchedAt);
+  const skipped = skippedCampaigns(followed, data.campaigns, subs);
   const progressAge = age(data.progressFetchedAt);
 
   return (
@@ -968,7 +978,24 @@ export function Drops({ jump = null }: {
           list unavailable the banner above has already said why, and
           repeating a factual-sounding empty state under it would
           contradict it. */}
-      {subs.length > 0 && (
+      <FollowedGamesCard
+        games={followed}
+        campaigns={data.campaigns}
+        skipped={skipped}
+        busy={busy !== null}
+        notice={followNotice}
+        onAdd={() => setFollowOpen(true)}
+        onRemove={(id) => void mutate(
+          "followed", "Unfollowing…",
+          () => api.post(`/api/followed-games/${encodeURIComponent(id)}/remove`),
+        )}
+        onPoolSize={(id, poolSize) => void mutate(
+          "followed", "Saving…",
+          () => api.post(`/api/followed-games/${encodeURIComponent(id)}/pool-size`, { poolSize }),
+        )}
+      />
+
+      {(subs.length > 0 || skipped.length > 0) && (
         <Card withBorder padding="sm" data-testid="subscriptions">
           <Group justify="space-between" align="center" mb={4}>
             <Text fw={600} size="sm">Subscriptions</Text>
@@ -977,8 +1004,7 @@ export function Drops({ jump = null }: {
                 "Collect one campaign at a time, top of the list first. The "
                 + "others wait without channels of their own, so queuing many "
                 + "campaigns does not fill the streamer list. The next one "
-                + "starts when the current one ends, completes or is removed. "
-                + "Game subscriptions are not queued."
+                + "starts when the current one ends, completes or is removed."
               }
               multiline
               w={300}
@@ -1046,6 +1072,13 @@ export function Drops({ jump = null }: {
                     busy={busy !== null}
                     link={subscriptionLink(sub, data.campaigns)}
                     game={subscriptionGame(sub, data.campaigns)}
+                    auto={sub.viaGame === undefined
+                      ? null
+                      : { game: viaGameName(sub.viaGame, followed, data.campaigns) }}
+                    skippable={sub.viaGame !== undefined || followed.some(
+                      (g) => g.id === data.campaigns
+                        .find((c) => c.id === sub.targetId)?.game?.id,
+                    )}
                     opensAt={subscriptionOpensAt(sub, data.campaigns, Date.now())}
                     onOpen={() => setJumpedTo(sub.targetId)}
                     // Keyed to the campaign, not "panel": the card for
@@ -1071,6 +1104,26 @@ export function Drops({ jump = null }: {
               </Stack>
             </SortableContext>
           </DndContext>
+          {skipped.length > 0 && (
+            <Stack gap="xs" mt={subs.length > 0 ? "xs" : 0}>
+              {skipped.map((entry) => (
+                <SkippedCampaignRow
+                  key={`${entry.game.id}:${entry.campaign.id}`}
+                  skipped={entry}
+                  withGrip={subs.length > 1}
+                  busy={busy !== null}
+                  onUnskip={() => void mutate(
+                    entry.campaign.id,
+                    "Finding channels to watch…",
+                    () => api.post(
+                      `/api/followed-games/${encodeURIComponent(entry.game.id)}/unskip`,
+                      { campaignId: entry.campaign.id },
+                    ),
+                  )}
+                />
+              ))}
+            </Stack>
+          )}
         </Card>
       )}
 
@@ -1090,13 +1143,21 @@ export function Drops({ jump = null }: {
         <div className={classes.grid} data-testid="campaign-grid">
           {shown.map((campaign) => {
             const sub = subs.find(
-              (x) => x.kind === "campaign" && x.targetId === campaign.id,
+              (x) => x.targetId === campaign.id,
             );
             return (
               <CampaignCard
                 key={campaign.id}
                 campaign={campaign}
                 subscribed={sub !== undefined}
+                gameFollowed={campaign.game !== null
+                  && followed.some((g) => g.id === campaign.game?.id)}
+                onFollowGame={campaign.game === null ? undefined : () => {
+                  const gameId = campaign.game!.id;
+                  void follow([gameId], campaign.id).catch((cause: unknown) => {
+                    setError(cause instanceof Error ? cause.message : "could not follow that game");
+                  });
+                }}
                 expand={
                   jumpedTo === campaign.id
                   || matchedByDropOnly(campaign, filter)
@@ -1106,7 +1167,7 @@ export function Drops({ jump = null }: {
                   campaign.id,
                   "Finding channels to watch…",
                   () => api.post("/api/subscriptions", {
-                    kind: "campaign", targetId: campaign.id,
+                    targetId: campaign.id,
                     label: campaign.name,
                   }),
                 )}
@@ -1123,6 +1184,13 @@ export function Drops({ jump = null }: {
         </div>
       )}
 
+      <FollowGamesDialog
+        opened={followOpen}
+        onClose={() => setFollowOpen(false)}
+        followed={followed}
+        campaigns={data.campaigns}
+        onConfirm={(games) => follow(games.map((g) => g.id), "followed")}
+      />
     </Stack>
   );
 }

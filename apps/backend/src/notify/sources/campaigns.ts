@@ -1,4 +1,4 @@
-import type { CampaignStart } from "../../drops/engine.js";
+import type { CampaignFollowed, CampaignStart } from "../../drops/engine.js";
 import type { Campaign, CampaignCatalogue } from "../../state/campaignCatalogue.js";
 import { resolveCampaign } from "../../state/dropState.js";
 import type { InventoryCache } from "../../state/inventory.js";
@@ -26,34 +26,36 @@ export function campaignStartedNotification(e: CampaignStart): PublishInput {
   };
 }
 
+export function campaignFollowedNotification(e: CampaignFollowed): PublishInput {
+  return {
+    kind: NOTIFY_KIND.CAMPAIGN_NEW,
+    title: "New campaign",
+    body: `"${e.label}" for ${e.game} was subscribed automatically.`,
+    link: link(e.targetId),
+    dedupeKey: `campaign.new:${e.targetId}`,
+  };
+}
+
 export interface CampaignWatcherDeps {
-  notifier: Pick<Notifier, "publish" | "wantsAny" | "markSeen">;
+  notifier: Pick<Notifier, "publish" | "markSeen">;
   catalogue: Pick<CampaignCatalogue, "get">;
   inventory: Pick<InventoryCache, "get">;
-  /** Game ids the user has a game subscription for. */
-  subscribedGames: () => string[];
   now?: () => number;
   intervalMs?: number;
 }
 
 /**
- * Completed, ending-soon and new campaigns.
+ * Completed and ending-soon campaigns.
  *
  * Covers every campaign with progress, subscribed or not, which is why
  * it watches the inventory itself rather than hooking the engine. Each
  * notification fires once per campaign, via a persisted dedupe key.
- *
- * The completed and ending-soon passes always run, even with no destination
- * wanting them: they reach the inbox regardless of push subscriptions, and
- * the Notifier -- not this source -- decides who gets pushed. `campaign.new`
- * is the exception: it has no persisted dedupe key, only an in-memory
- * baseline, so it stays gated on `wantsAny` and drops the baseline while
- * nobody wants it (see `run()`).
+ * Both passes always run, even with no destination wanting them: they
+ * reach the inbox regardless of push subscriptions, and the Notifier --
+ * not this source -- decides who gets pushed.
  */
 export class CampaignWatcher {
   private timer: NodeJS.Timeout | null = null;
-  /** Campaign ids on the previous pass; null until one has run. */
-  private known: Set<string> | null = null;
 
   constructor(private readonly deps: CampaignWatcherDeps) {}
 
@@ -84,15 +86,9 @@ export class CampaignWatcher {
 
   private async run(): Promise<void> {
     const { notifier } = this.deps;
-    const wantsNew = notifier.wantsAny(NOTIFY_KIND.CAMPAIGN_NEW);
-    // Without a baseline kept current, turning the kind back on would
-    // announce everything that appeared meanwhile.
-    if (!wantsNew) this.known = null;
-
     const catalogue = await this.deps.catalogue.get();
     if (!catalogue.available) return;
     const now = this.now();
-    if (wantsNew) this.announceNew(catalogue.campaigns);
 
     // Completed and ending-soon always run, regardless of whether any
     // destination currently wants them: the catalogue and inventory are
@@ -133,18 +129,4 @@ export class CampaignWatcher {
     }
   }
 
-  private announceNew(campaigns: readonly Campaign[]): void {
-    const known = this.known;
-    this.known = new Set(campaigns.map((c) => c.id));
-    if (known === null) return;
-    const games = new Set(this.deps.subscribedGames());
-    for (const c of campaigns) {
-      if (known.has(c.id) || c.game === null || !games.has(c.game.id)) continue;
-      this.deps.notifier.publish({
-        kind: NOTIFY_KIND.CAMPAIGN_NEW, title: "New campaign",
-        body: `"${c.name}"${forGame(c)} was announced.`,
-        link: link(c.id), dedupeKey: `campaign.new:${c.id}`,
-      });
-    }
-  }
 }

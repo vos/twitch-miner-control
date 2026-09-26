@@ -4,7 +4,7 @@ import type { Campaign } from "../state/campaignCatalogue.js";
 import type { Subscription } from "../config/schema.js";
 
 const sub = (over: Partial<Subscription> = {}): Subscription => ({
-  id: "s1", kind: "campaign", targetId: "c1",
+  id: "s1", targetId: "c1",
   label: "Alpha", poolSize: 3, rank: 0, ...over,
 });
 
@@ -126,16 +126,6 @@ test("incumbents are matched regardless of login casing", () => {
   expect(out.channels).toEqual(["Alpha", "beta"]);
 });
 
-test("a game subscription resolves without needing a campaign", () => {
-  // Subscribing to a game is not tied to any one campaign's lifetime.
-  const out = resolveSubscription(
-    sub({ kind: "game", targetId: "g1", label: "A Game" }),
-    undefined,
-    [chan("alpha", 10), chan("beta", 500)],
-  );
-  expect(out.channels).toEqual(["beta", "alpha"]);
-  expect(out.degraded).toBe(false);
-});
 
 test("a kept pool reports the decision and how many were live", () => {
   // The evidence behind the decision, so a reader can check it rather

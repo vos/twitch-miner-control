@@ -37,10 +37,14 @@ const payload = {
 
 let calls: Array<{ url: string; init?: RequestInit }>;
 let body: unknown;
+let searchAnswer: unknown;
+let followAnswer: unknown;
 
 beforeEach(() => {
   calls = [];
   body = payload;
+  searchAnswer = { games: [] };
+  followAnswer = { added: [], alreadyFollowed: [], notFound: [] };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
     if (body instanceof Error) throw body;
@@ -522,7 +526,7 @@ test("an ended campaign stays at the bottom even with progress on it", async () 
 // --- subscriptions ---
 
 const asSub = (over: object = {}) => ({
-  id: "s1", kind: "campaign", targetId: "c1", label: "Alpha Campaign",
+  id: "s1", targetId: "c1", label: "Alpha Campaign",
   poolSize: 3, rank: 0, channels: [], ...over,
 });
 
@@ -531,13 +535,20 @@ function withSubs(
   subscriptions: unknown[],
   restart: { pending: boolean } = { pending: false },
   campaignQueue = false,
+  followedGames: unknown[] = [],
 ) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
+    if (url.startsWith("/api/games/search")) {
+      return { ok: true, status: 200, json: async () => searchAnswer };
+    }
+    if (url === "/api/followed-games") {
+      return { ok: true, status: 200, json: async () => followAnswer };
+    }
     if (url.startsWith("/api/subscriptions")) {
       return {
         ok: true, status: 200,
-        json: async () => ({ subscriptions, campaignQueue }),
+        json: async () => ({ subscriptions, campaignQueue, followedGames }),
       };
     }
     if (url.startsWith("/api/status")) {
@@ -569,8 +580,9 @@ test("subscribing posts the campaign the button belongs to", async () => {
     );
     expect(post).toBeTruthy();
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({
-      kind: "campaign", targetId: "c2", label: "Beta Campaign",
+      targetId: "c2", label: "Beta Campaign",
     });
+    expect(JSON.parse(String(post?.init?.body))).not.toHaveProperty("kind");
   });
 });
 
@@ -1186,27 +1198,7 @@ test("a subscription whose campaign has gone gets no dead anchor", async () => {
     .queryByRole("link", { name: /ended campaign/i })).toBeNull();
 });
 
-test("a game subscription for an unknown game gets no link", async () => {
-  // Nothing in the catalogue carries its slug, and a slug guessed from
-  // the display name lands on a 404.
-  withSubs([asSub({ kind: "game", targetId: "g9", label: "Unlisted Game" })]);
-  renderApp(<Drops />);
-  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
-  expect(within(screen.getByTestId("subscriptions"))
-    .queryByRole("link", { name: /unlisted game/i })).toBeNull();
-});
 
-test("a game subscription links to that game's directory", async () => {
-  withSubs([asSub({
-    kind: "game", targetId: "g1", label: "Alpha Game",
-  })]);
-  renderApp(<Drops />);
-  await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
-  const link = within(screen.getByTestId("subscriptions"))
-    .getByRole("link", { name: /alpha game/i });
-  expect(link.getAttribute("href"))
-    .toBe("https://twitch.tv/directory/category/alpha-game");
-});
 
 test("resolved channels link to their Twitch profiles", async () => {
   withSubs([asSub({ channels: ["beta", "gamma"] })]);
@@ -1414,9 +1406,8 @@ test("omits the game when the campaign is no longer in the catalogue", async () 
 });
 
 test("does not repeat the game when it is already the label", async () => {
-  // A game subscription is labelled with the game, and rendering it
-  // twice on one row reads as a rendering fault.
-  withSubs([asSub({ kind: "game", targetId: "g1", label: "Alpha Game" })]);
+  // A campaign named after its game would otherwise read the name twice.
+  withSubs([asSub({ label: "Alpha Game" })]);
   renderApp(<Drops />);
   const row = await screen.findByTestId("subscription-row");
   await waitFor(() => {
@@ -1424,15 +1415,6 @@ test("does not repeat the game when it is already the label", async () => {
   });
 });
 
-test("names the game on a game subscription labelled something else", async () => {
-  withSubs([asSub({ kind: "game", targetId: "g1", label: "My watchlist" })]);
-  renderApp(<Drops />);
-  const row = await screen.findByTestId("subscription-row");
-  await waitFor(() => {
-    expect(within(row).getByTestId("subscription-game").textContent)
-      .toBe("Alpha Game");
-  });
-});
 
 test("the game yields its width to the campaign name, not the reverse", async () => {
   // The bug this exists to prevent: the game was pinned with
@@ -1481,4 +1463,115 @@ test("a jump clears a filter that would hide its campaign", async () => {
   );
   expect(await screen.findByText("Alpha Campaign")).toBeTruthy();
   expect(screen.getByLabelText(/filter/i)).toHaveValue("");
+});
+
+// --- followed games ---
+
+test("a subscription a followed game added carries an Auto badge", async () => {
+  withSubs([asSub({ viaGame: "g1" })], { pending: false }, false, [{
+    id: "g1", name: "Alpha Game", slug: "alpha-game", boxArtUrl: null, poolSize: 3, skipped: [],
+  }]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  const badge = within(row).getByTestId("subscription-auto");
+  expect(badge.textContent).toBe("Auto");
+  await userEvent.hover(badge);
+  expect(await screen.findByText(/Added because you follow Alpha Game/)).toBeTruthy();
+});
+
+test("a hand-added subscription has no Auto badge", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  expect(within(row).queryByTestId("subscription-auto")).toBeNull();
+});
+
+test("the followed games card shows even with nothing subscribed", async () => {
+  withSubs([]);
+  renderApp(<Drops />);
+  expect(await screen.findByTestId("followed-games")).toBeTruthy();
+});
+
+test("following from the dialog posts the ids and reports what it did", async () => {
+  const alpha = { id: "g1", name: "Alpha Game", slug: "alpha-game", boxArtUrl: null };
+  searchAnswer = { games: [alpha] };
+  followAnswer = { added: [alpha], alreadyFollowed: [], notFound: [] };
+  withSubs([]);
+  renderApp(<Drops />);
+  await userEvent.click(await screen.findByRole("button", { name: /follow games/i }));
+  await userEvent.type(await screen.findByRole("textbox", { name: /search twitch games/i }), "alpha");
+  await userEvent.click(await screen.findByRole("checkbox", { name: "Follow Alpha Game" }));
+  await userEvent.click(screen.getByRole("button", { name: "Follow 1 game" }));
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/followed-games");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ ids: ["g1"] });
+  });
+  expect((await screen.findByTestId("follow-notice")).textContent)
+    // Alpha Game has a running campaign the follow did not subscribe to.
+    .toBe("Following Alpha Game · 1 campaign running, none left to subscribe to");
+});
+
+test("Follow game on a card follows that campaign's game", async () => {
+  followAnswer = { added: [{ id: "g2", name: "Beta Game", slug: "beta-game", boxArtUrl: null }],
+                   alreadyFollowed: [], notFound: [] };
+  withSubs([]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Beta Campaign")).toBeTruthy());
+  const card = screen.getAllByTestId("campaign-card")
+    .find((c) => c.textContent?.includes("Beta Campaign"))!;
+  await userEvent.click(within(card).getByRole("button", { name: "Follow game" }));
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/followed-games");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ ids: ["g2"] });
+  });
+});
+
+// --- skipping instead of removing ---
+
+const alphaFollowed = (skipped: string[] = []) => ({
+  id: "g1", name: "Alpha Game", slug: "alpha-game", boxArtUrl: null, poolSize: 3, skipped,
+});
+
+test("an automatic subscription is skipped, not removed", async () => {
+  withSubs([asSub({ viaGame: "g1" })], { pending: false }, false, [alphaFollowed()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  expect(within(row).getByRole("button", { name: "Skip" })).toBeTruthy();
+  expect(within(row).queryByRole("button", { name: "Remove" })).toBeNull();
+});
+
+test("a hand-added subscription for a followed game's campaign is skipped too", async () => {
+  // Removing it records a skip on the server, so the button says so.
+  withSubs([asSub()], { pending: false }, false, [alphaFollowed()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  expect(within(row).getByRole("button", { name: "Skip" })).toBeTruthy();
+});
+
+test("a subscription for a game nobody follows is still removed", async () => {
+  withSubs([asSub()]);
+  renderApp(<Drops />);
+  const row = await screen.findByTestId("subscription-row");
+  expect(within(row).getByRole("button", { name: "Remove" })).toBeTruthy();
+});
+
+test("a skipped campaign stays listed and can be unskipped", async () => {
+  withSubs([], { pending: false }, false, [alphaFollowed(["c1"])]);
+  renderApp(<Drops />);
+  // The card shows for a skipped campaign alone.
+  const row = await screen.findByTestId("skipped-row");
+  expect(row.textContent).toMatch(/Alpha Campaign/);
+  expect(within(row).getByTestId("skipped-badge").textContent).toBe("skipped");
+  await userEvent.click(within(row).getByRole("button", { name: "Unskip" }));
+  await waitFor(() => {
+    const post = calls.find((c) => c.url === "/api/followed-games/g1/unskip");
+    expect(JSON.parse(String(post?.init?.body))).toEqual({ campaignId: "c1" });
+  });
+});
+
+test("the followed game says how many campaigns it skipped", async () => {
+  withSubs([], { pending: false }, false, [alphaFollowed(["c1"])]);
+  renderApp(<Drops />);
+  const game = await screen.findByTestId("followed-game");
+  expect(game.textContent).toMatch(/1 campaign running · 1 skipped/);
 });

@@ -50,20 +50,14 @@ export interface ResolutionResult {
 }
 
 /**
- * Which game a subscription watches for, or null when unanswerable.
+ * Which game a subscription's campaign is for, or null when unanswerable.
  *
- * A campaign subscription takes its game from the campaign, so it stops
- * resolving once the campaign leaves the catalogue. A game subscription
- * carries its own target and is not tied to any campaign's lifetime,
- * which is the point of having the kind at all.
+ * Taken from the campaign, so a subscription stops resolving once its
+ * campaign leaves the catalogue.
  */
 function target(
-  sub: Subscription,
   campaign: Campaign | undefined,
 ): { id: string; name: string; slug: string } | null {
-  if (sub.kind === "game") {
-    return { id: sub.targetId, name: sub.label, slug: "" };
-  }
   if (campaign?.game == null) return null;
   return {
     id: campaign.game.id,
@@ -102,7 +96,7 @@ export function resolveSubscription(
   directory: DirectoryChannel[] | null,
   incumbents: readonly string[] = [],
 ): ResolutionResult {
-  if (target(sub, campaign) === null) {
+  if (target(campaign) === null) {
     return { channels: [], degraded: true, decision: "no-target" };
   }
   if (directory === null) {
@@ -139,11 +133,10 @@ export function resolveSubscription(
   };
 }
 
-/** The game to ask the directory about, for a subscription. */
+/** The game to ask the directory about, for a subscription's campaign. */
 export function directoryTarget(
-  sub: Subscription,
   campaign: Campaign | undefined,
 ): { name: string; slug: string } | null {
-  const game = target(sub, campaign);
+  const game = target(campaign);
   return game === null ? null : { name: game.name, slug: game.slug };
 }

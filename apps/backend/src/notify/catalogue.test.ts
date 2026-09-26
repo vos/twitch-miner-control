@@ -13,7 +13,7 @@ test("every entry belongs to a known group", () => {
 test("the defaults match the spec", () => {
   const on = CATALOGUE.filter((k) => k.defaultOn && k.kind !== NOTIFY_KIND.TEST).map((k) => k.kind);
   expect(on.sort()).toEqual([
-    "app.update", "campaign.completed", "campaign.endingSoon", "drop.claimed",
+    "app.update", "campaign.completed", "campaign.endingSoon", "campaign.new", "drop.claimed",
     "gift.received", "miner.crashed", "restart.pending", "twitch.signedOut",
   ]);
 });

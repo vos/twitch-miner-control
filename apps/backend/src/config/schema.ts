@@ -182,8 +182,7 @@ export function minerFromPython(raw: Record<string, unknown>) {
  */
 export const subscriptionSchema = z.object({
   id: z.string().min(1),
-  kind: z.enum(["campaign", "game"]),
-  /** A campaign id, or a game id, per `kind`. */
+  /** The campaign this subscription collects. */
   targetId: z.string().min(1),
   /**
    * Display name, cached here so the subscriptions list reads correctly
@@ -201,9 +200,42 @@ export const subscriptionSchema = z.object({
   poolSize: z.number().int().min(1).max(10).default(3),
   /** Lower ranks fill the miner's watch slots first. */
   rank: z.number().int().min(0),
+  /**
+   * The followed game that added this subscription, when one did.
+   *
+   * Absent means the user subscribed by hand. When a subscription with
+   * this set leaves, its campaign is recorded in that game's `skipped`
+   * so the game does not add it back.
+   */
+  viaGame: z.string().min(1).optional(),
 }).strict();
 
 export type Subscription = z.infer<typeof subscriptionSchema>;
+
+/**
+ * A Twitch game whose drop campaigns are subscribed to as they appear.
+ *
+ * Mines nothing itself: each pass turns its catalogue campaigns into
+ * ordinary campaign subscriptions (see drops/follow.ts). Name, slug and
+ * box art are what Twitch returned when it was followed.
+ */
+export const followedGameSchema = z.object({
+  /** Twitch game id; the same id the campaign catalogue carries. */
+  id: z.string().min(1),
+  name: z.string().min(1),
+  slug: z.string(),
+  boxArtUrl: z.string().nullable(),
+  /** Copied onto each campaign subscription this game adds. */
+  poolSize: subscriptionSchema.shape.poolSize,
+  /**
+   * Campaigns this game must not subscribe to again: ones the user
+   * removed, or that ended or completed. Pruned once a campaign leaves
+   * a trustworthy catalogue, so it holds running campaigns only.
+   */
+  skipped: z.array(z.string().min(1)).default([]),
+}).strict();
+
+export type FollowedGame = z.infer<typeof followedGameSchema>;
 
 export const configSchema = z
   .object({
@@ -240,12 +272,18 @@ export const configSchema = z
         (list) => new Set(list.map((s) => s.id)).size === list.length,
         { message: "duplicate subscription" },
       ),
+    followedGames: z
+      .array(followedGameSchema)
+      .default([])
+      .refine(
+        (list) => new Set(list.map((g) => g.id)).size === list.length,
+        { message: "duplicate followed game" },
+      ),
     /**
      * Collect one campaign subscription at a time, in rank order.
      *
      * The rest wait with no channels of their own, so many campaigns can
-     * be queued without filling the streamer list. Game subscriptions
-     * are not queued.
+     * be queued without filling the streamer list.
      */
     campaignQueue: z.boolean().default(false),
   })

@@ -32,6 +32,7 @@ const valid = {
   miner: {},
   streamers: [{ username: "alpha", enabled: true, settings: {} }],
   subscriptions: [],
+  followedGames: [],
   campaignQueue: false,
 };
 
@@ -58,37 +59,56 @@ describe("schema", () => {
   test("accepts a campaign subscription with a default pool size", () => {
     const parsed = configSchema.parse({
       ...valid,
-      subscriptions: [{ id: "s1", kind: "campaign", targetId: "c1",
+      subscriptions: [{ id: "s1", targetId: "c1",
                         label: "Alpha Campaign", rank: 0 }],
     });
     expect(parsed.subscriptions[0]?.poolSize).toBe(3);
   });
 
-  test("accepts a game subscription", () => {
-    const parsed = configSchema.parse({
-      ...valid,
-      subscriptions: [{ id: "s1", kind: "game", targetId: "g1",
-                        label: "Once Human", rank: 0 }],
-    });
-    expect(parsed.subscriptions[0]?.kind).toBe("game");
-  });
 
   test("rejects a pool size outside 1-10", () => {
     const bad = {
       ...valid,
-      subscriptions: [{ id: "s1", kind: "campaign", targetId: "c1",
+      subscriptions: [{ id: "s1", targetId: "c1",
                         label: "x", rank: 0, poolSize: 99 }],
     };
     expect(configSchema.safeParse(bad).success).toBe(false);
   });
 
-  test("rejects an unknown subscription kind", () => {
+
+  test("rejects a subscription that still carries a kind", () => {
     const bad = {
       ...valid,
-      subscriptions: [{ id: "s1", kind: "streamer", targetId: "c1",
-                        label: "x", rank: 0 }],
+      subscriptions: [{ id: "s1", kind: "game", targetId: "g1",
+                        label: "Once Human", rank: 0 }],
     };
     expect(configSchema.safeParse(bad).success).toBe(false);
+  });
+
+  test("a subscription may record the followed game that added it", () => {
+    const parsed = configSchema.parse({
+      ...valid,
+      subscriptions: [{ id: "s1", targetId: "c1", label: "a", rank: 0, viaGame: "512953" }],
+    });
+    expect(parsed.subscriptions[0]?.viaGame).toBe("512953");
+  });
+
+  test("followed games default to none, and fill in pool size and skipped", () => {
+    const { followedGames: _omitted, ...older } = valid;
+    expect(configSchema.parse(older).followedGames).toEqual([]);
+    const parsed = configSchema.parse({
+      ...valid,
+      followedGames: [{ id: "512953", name: "ELDEN RING", slug: "elden-ring", boxArtUrl: null }],
+    });
+    expect(parsed.followedGames[0]).toEqual({
+      id: "512953", name: "ELDEN RING", slug: "elden-ring", boxArtUrl: null,
+      poolSize: 3, skipped: [],
+    });
+  });
+
+  test("rejects the same game followed twice", () => {
+    const game = { id: "512953", name: "ELDEN RING", slug: "elden-ring", boxArtUrl: null };
+    expect(configSchema.safeParse({ ...valid, followedGames: [game, game] }).success).toBe(false);
   });
 
   test("rejects duplicate subscription ids", () => {
@@ -97,8 +117,8 @@ describe("schema", () => {
     const bad = {
       ...valid,
       subscriptions: [
-        { id: "s1", kind: "campaign", targetId: "c1", label: "a", rank: 0 },
-        { id: "s1", kind: "campaign", targetId: "c2", label: "b", rank: 1 },
+        { id: "s1", targetId: "c1", label: "a", rank: 0 },
+        { id: "s1", targetId: "c2", label: "b", rank: 1 },
       ],
     };
     expect(configSchema.safeParse(bad).success).toBe(false);
@@ -201,6 +221,19 @@ describe("store", () => {
   test("round-trips a saved config", () => {
     saveConfig(path, valid as AppConfig);
     expect(loadConfig(path)).toEqual(valid);
+  });
+
+  test("campaign subscriptions saved with a kind still load, without it", () => {
+    // Every subscription written before followed games carries
+    // kind: "campaign"; refusing those would refuse every existing config.
+    writeFileSync(path, JSON.stringify({
+      ...valid,
+      subscriptions: [{ id: "s1", kind: "campaign", targetId: "c1", label: "a", rank: 0 }],
+    }));
+    const loaded = loadConfig(path);
+    expect(loaded.subscriptions).toEqual([
+      { id: "s1", targetId: "c1", label: "a", rank: 0, poolSize: 3 },
+    ]);
   });
 
   test("a config saved before subscriptions existed loads with an empty list", () => {

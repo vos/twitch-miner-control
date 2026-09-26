@@ -258,6 +258,7 @@ function rewards(drops: ResolvedDrop[]) {
  */
 export function CampaignCard({
   campaign, subscribed, onSubscribe, onUnsubscribe, busy, expand = false,
+  gameFollowed = false, onFollowGame,
 }: {
   campaign: ResolvedCampaign;
   /**
@@ -273,6 +274,10 @@ export function CampaignCard({
   subscribed?: boolean;
   onSubscribe?: () => void;
   onUnsubscribe?: () => void;
+  /** Whether the campaign's game is already followed. */
+  gameFollowed?: boolean;
+  /** Follows the campaign's game; absent hides the button. */
+  onFollowGame?: () => void;
   /**
    * What this card is waiting on, or undefined when idle.
    *
@@ -607,37 +612,63 @@ export function CampaignCard({
             subscribing inherits the brand, leaving orange to mean "drop
             in progress" on the badge beside it. Subscribed goes neutral,
             unsubscribing not being an action to encourage. */}
-        {onSubscribe !== undefined && (subscribed !== true && finished !== null ? (
-          // data-disabled rather than disabled: a disabled button fires
-          // no mouse events, so the tooltip saying why would never open.
-          <Tooltip label={finished}>
+        <Group gap={6} wrap="nowrap" ml="auto">
+          {onFollowGame !== undefined && campaign.game !== null && (
+            <Tooltip
+              label={gameFollowed
+                ? `You follow ${campaign.game.displayName}: its campaigns are subscribed as they appear`
+                : `Subscribe to every ${campaign.game.displayName} campaign, now and as they appear`}
+              multiline
+              w={240}
+            >
+              <Button
+                size="compact-xs"
+                variant="default"
+                loading={!gameFollowed && busy !== undefined}
+                // data-disabled rather than disabled when followed, like
+                // Subscribe's: a disabled button fires no mouse events, so
+                // the tooltip saying why would never open.
+                data-disabled={gameFollowed || undefined}
+                aria-disabled={gameFollowed || undefined}
+                onClick={(event) => {
+                  if (gameFollowed) event.preventDefault();
+                  else onFollowGame();
+                }}
+              >
+                {gameFollowed ? "Following game" : "Follow game"}
+              </Button>
+            </Tooltip>
+          )}
+          {onSubscribe !== undefined && (subscribed !== true && finished !== null ? (
+            // data-disabled rather than disabled: a disabled button fires
+            // no mouse events, so the tooltip saying why would never open.
+            <Tooltip label={finished}>
+              <Button
+                size="compact-xs"
+                data-disabled
+                aria-disabled
+                onClick={(event) => event.preventDefault()}
+              >
+                Subscribe
+              </Button>
+            </Tooltip>
+          ) : (
             <Button
               size="compact-xs"
-              ml="auto"
-              data-disabled
-              aria-disabled
-              onClick={(event) => event.preventDefault()}
+              variant={subscribed === true ? "default" : "filled"}
+              // The button is what was clicked; leaving it inert while a
+              // notice appears reads as the click not registering. Also
+              // stops a second click racing the first.
+              loading={busy !== undefined}
+              onClick={() => {
+                if (subscribed === true) onUnsubscribe?.();
+                else onSubscribe();
+              }}
             >
-              Subscribe
+              {subscribed === true ? "Unsubscribe" : "Subscribe"}
             </Button>
-          </Tooltip>
-        ) : (
-          <Button
-            size="compact-xs"
-            ml="auto"
-            variant={subscribed === true ? "default" : "filled"}
-            // The button is what was clicked; leaving it inert while a
-            // notice appears reads as the click not registering. Also
-            // stops a second click racing the first.
-            loading={busy !== undefined}
-            onClick={() => {
-              if (subscribed === true) onUnsubscribe?.();
-              else onSubscribe();
-            }}
-          >
-            {subscribed === true ? "Unsubscribe" : "Subscribe"}
-          </Button>
-        ))}
+          ))}
+        </Group>
       </Group>
 
       <Collapse expanded={open} keepMounted={false}>

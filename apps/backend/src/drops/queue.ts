@@ -24,8 +24,7 @@ export interface QueueEntry {
  * the slot, since watching cannot start it; one missing from the
  * catalogue counts as open, because a failed fetch must not stall the
  * queue. `done` names subscriptions leaving on this pass (ended or
- * complete) so the next one takes over at once. Game subscriptions are
- * not queued and get no entry.
+ * complete) so the next one takes over at once.
  */
 export function campaignQueue(
   /** In rank order. */
@@ -38,7 +37,7 @@ export function campaignQueue(
   let active = false;
   let position = 0;
   for (const sub of subs) {
-    if (sub.kind !== "campaign" || done.has(sub.id)) continue;
+    if (done.has(sub.id)) continue;
     const startsAt = campaignOf(sub)?.startsAt;
     if (startsAt != null && startsAt > now) {
       queue.set(sub.id, { state: "scheduled", position: ++position });

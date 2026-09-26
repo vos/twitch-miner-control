@@ -700,3 +700,26 @@ test("a campaign with no dates shows no window panel", () => {
   expect(screen.queryByTestId("campaign-ends")).toBeNull();
   expect(screen.queryByTestId("campaign-window")).toBeNull();
 });
+
+// --- following the campaign's game ---
+
+test("offers to follow the campaign's game", async () => {
+  const onFollowGame = vi.fn();
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={() => {}} onFollowGame={onFollowGame} />);
+  await userEvent.click(screen.getByRole("button", { name: "Follow game" }));
+  expect(onFollowGame).toHaveBeenCalled();
+});
+
+test("a followed game reads as followed and cannot be followed again", async () => {
+  const onFollowGame = vi.fn();
+  renderApp(<CampaignCard campaign={campaign()} onSubscribe={() => {}} onFollowGame={onFollowGame} gameFollowed />);
+  const button = screen.getByRole("button", { name: "Following game" });
+  expect(button).toHaveAttribute("aria-disabled", "true");
+  await userEvent.click(button);
+  expect(onFollowGame).not.toHaveBeenCalled();
+});
+
+test("a campaign with no game offers no follow", () => {
+  renderApp(<CampaignCard campaign={campaign({ game: null })} onSubscribe={() => {}} onFollowGame={() => {}} />);
+  expect(screen.queryByRole("button", { name: /follow/i })).toBeNull();
+});

@@ -24,6 +24,7 @@ import { NdjsonClient } from "./helpers/ndjsonClient.js";
 import { buildServer, updateChecker, type AppServer } from "./http/server.js";
 import { Supervisor } from "./miner/supervisor.js";
 import { ProfileCache } from "./state/profiles.js";
+import { twitchGames } from "./twitch/categories.js";
 import { SubscriptionEngine } from "./drops/engine.js";
 import type { DirectoryChannel } from "./drops/resolution.js";
 import { PendingRestart } from "./drops/pendingRestart.js";
@@ -46,7 +47,9 @@ import {
   DEFAULT_VAPID_SUBJECT, WebPushChannel, loadOrCreateVapid,
 } from "./notify/channels/webPush.js";
 import { Notifier } from "./notify/notifier.js";
-import { CampaignWatcher, campaignStartedNotification } from "./notify/sources/campaigns.js";
+import {
+  CampaignWatcher, campaignFollowedNotification, campaignStartedNotification,
+} from "./notify/sources/campaigns.js";
 import { DigestScheduler } from "./notify/sources/digest.js";
 import { watchDoorbell } from "./notify/sources/doorbell.js";
 import { watchHealth } from "./notify/sources/health.js";
@@ -292,21 +295,15 @@ function subscriptionLabelFor(username: string): OwnerLabel | null {
  *
  * Read from the cached campaigns rather than stored on the subscription:
  * the engine records a label and a target id, and the game is a property
- * of the campaign. A game subscription targets the game directly; a
- * campaign subscription has to go through the campaign to reach it.
+ * of the campaign.
  *
  * Null once the campaign leaves the catalogue, where there is nothing to
  * look up -- the card falls back to the label, which is stored precisely
  * so it still reads correctly then.
  */
-function gameForSubscription(
-  sub: { kind: string; targetId: string },
-): string | null {
+function gameForSubscription(sub: { targetId: string }): string | null {
   const campaigns = catalogue.peek()?.campaigns ?? [];
-  const game = sub.kind === "campaign"
-    ? campaigns.find((c) => c.id === sub.targetId)?.game
-    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
-  const name = game?.displayName;
+  const name = campaigns.find((c) => c.id === sub.targetId)?.game?.displayName;
   return name === undefined || name === "" ? null : name;
 }
 
@@ -434,6 +431,7 @@ const engine = new SubscriptionEngine({
   pending: pendingRestart,
   inventory: inventoryCache,
   onCampaignStarted: (event) => notifier.publish(campaignStartedNotification(event)),
+  onCampaignFollowed: (event) => notifier.publish(campaignFollowedNotification(event)),
   log: appLog.log,
 });
 
@@ -448,9 +446,6 @@ const campaignWatcher = new CampaignWatcher({
   notifier,
   catalogue,
   inventory: inventoryCache,
-  subscribedGames: () => loadConfig(configPath).subscriptions
-    .filter((s) => s.kind === "game")
-    .map((s) => s.targetId),
 });
 const digest = new DigestScheduler({
   notifier,
@@ -464,7 +459,7 @@ const app: AppServer = buildServer({
   streamers, dailyPoints,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
   catalogue, inventory: inventoryCache,
-  engine, pendingRestart,
+  engine, pendingRestart, games: twitchGames(),
   notify: {
     store: notifyStore,
     notifier,

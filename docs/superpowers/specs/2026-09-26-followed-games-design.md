@@ -65,6 +65,11 @@ subscription, and `targetId` is always a campaign ID. Every
 `gameForSubscription` (backend and frontend), and the queue tooltip's
 "Game subscriptions are not queued." sentence.
 
+Every subscription saved before this change carries `kind: "campaign"`,
+because the old schema required it. `loadConfig` drops that tag when
+reading, so existing configs keep loading; any other `kind` is still
+rejected.
+
 Campaign subscriptions gain an optional `viaGame: string`, the ID of
 the followed game that created them. It drives the Auto badge and tells
 the engine which game's `skipped` list to update.
@@ -107,7 +112,8 @@ matches, add a campaign subscription when **all** of these hold:
 - the campaign ID is not in the game's `skipped`;
 - `endsAt` is null or in the future;
 - the inventory is unavailable, or `resolveCampaign(campaign, inventory)`
-  is not `complete`;
+  is not `complete` (a complete one is recorded in `skipped` instead, so
+  a later pass that cannot read progress does not add it);
 - at least one drop is obtainable by watching, using the existing
   unobtainable rules in `state/dropState.ts` (`requiredSubs > 0`,
   `requiredMinutes <= 0`, `preconditionsMet === false`).
@@ -160,10 +166,20 @@ they came from.
 
 `EngineDeps` gains `onCampaignFollowed?: (e: { subscriptionId, label,
 targetId, game }) => void`, modelled on `onCampaignStarted`. It fires
-once per added subscription, **only** on `"timer"` and `"boot"` passes.
-Every other trigger (`"follow"`, `"manual"`, `"subscribe"`, …) is a pass
-the user just started from the UI, which already shows what was
-subscribed. `PassTrigger` gains `"follow"`.
+once per added subscription that was saved, whatever started the pass,
+except for games listed in the pass's `quietGames` option. The follow
+route passes the games it just followed there: the user is looking at
+the result. A campaign added during any other pass is news, even one the
+user started for something unrelated. `PassTrigger` gains `"follow"`.
+
+### Writing the pass
+
+A pass reads the config, then spends seconds asking Twitch while routes
+may save. It therefore re-reads the config before writing and applies
+only its own decisions on top (`drops/rebase.ts`): subscriptions it
+ended, additions whose game is still followed and has not skipped them,
+its `skipped` changes, and the channels of the subscriptions it
+considered. A follow, unfollow or removal made during a pass survives it.
 
 ## API
 
@@ -257,6 +273,18 @@ game in the badge would say it twice. Its tooltip reads: "Added because
 you follow ‹Game›. Removing it skips this campaign; future campaigns for
 the game are still added." The game name comes from `followedGames`, or
 from the catalogue when the game has since been unfollowed.
+
+### Skipping and unskipping
+
+A subscription whose campaign belongs to a followed game shows **Skip**
+instead of **Remove**; the server does the same thing either way, and
+records the skip. Skipped campaigns stay listed at the bottom of the
+Subscriptions card, dimmed, with a *skipped* badge and an **Unskip**
+button (`POST /api/followed-games/:id/unskip { campaignId }`), which
+takes the campaign out of `skipped` and runs a quiet pass so the game
+subscribes to it again. Only campaigns still running, not complete and
+not subscribed are listed. The Followed games row counts them
+("· 1 skipped").
 
 ### Campaign card shortcut
 

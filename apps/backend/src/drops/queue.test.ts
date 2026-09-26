@@ -4,7 +4,7 @@ import type { Subscription } from "../config/schema.js";
 import type { Campaign } from "../state/campaignCatalogue.js";
 
 const sub = (id: string, over: Partial<Subscription> = {}): Subscription => ({
-  id, kind: "campaign", targetId: id, label: id, poolSize: 3, rank: 0, ...over,
+  id, targetId: id, label: id, poolSize: 3, rank: 0, ...over,
 });
 const campaign = (id: string, startsAt: number | null = 1): Campaign => ({
   id, name: id, game: null, startsAt, endsAt: null, drops: [],
@@ -40,10 +40,3 @@ test("a campaign missing from the catalogue can still be active", () => {
   expect(q.get("a")?.state).toBe("active");
 });
 
-test("game subscriptions are not queued", () => {
-  const q = campaignQueue(
-    [sub("g", { kind: "game" }), sub("a")], () => undefined, 10,
-  );
-  expect(q.has("g")).toBe(false);
-  expect(q.get("a")?.state).toBe("active");
-});

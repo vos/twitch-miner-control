@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/schema.js";
 import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { PendingRestart } from "./pendingRestart.js";
+import { followGames, recordSkipped } from "./follow.js";
 import { campaignQueue } from "./queue.js";
+import { rebasePass } from "./rebase.js";
 import { reconcile, type DesiredEntry } from "./reconcile.js";
 import {
   directoryTarget,
@@ -43,6 +46,15 @@ export interface CampaignStart {
   why: "opened" | "queue";
 }
 
+/** A campaign a followed game subscribed to, for notifications. */
+export interface CampaignFollowed {
+  subscriptionId: string;
+  label: string;
+  targetId: string;
+  /** The followed game's name. */
+  game: string;
+}
+
 export interface EngineDeps {
   loadConfig: () => AppConfig;
   saveConfig: (path: string, config: AppConfig) => void;
@@ -58,6 +70,13 @@ export interface EngineDeps {
   log?: AppLog;
   /** Told when a subscription starts collecting. */
   onCampaignStarted?: (event: CampaignStart) => void;
+  /**
+   * Told when a followed game subscribes to a campaign, except for games
+   * the pass was asked to keep quiet about.
+   */
+  onCampaignFollowed?: (event: CampaignFollowed) => void;
+  /** New subscription ids. Injectable so tests get stable ones. */
+  newId?: () => string;
 }
 
 /**
@@ -76,7 +95,9 @@ export type PassTrigger =
   | "remove"
   | "queue"
   | "boot"
-  | "manual";
+  | "manual"
+  | "follow"
+  | "unskip";
 
 /**
  * Keeps the config's subscription-owned channels in step with intent.
@@ -154,17 +175,26 @@ export class SubscriptionEngine {
   }
 
   /** One resolve-reconcile-propose cycle. Public so tests drive it. */
-  async pass(trigger: PassTrigger = "manual"): Promise<void> {
-    const config = this.deps.loadConfig();
-    if (config.subscriptions.length === 0) {
+  async pass(
+    trigger: PassTrigger = "manual",
+    options: {
+      /**
+       * Games whose campaigns are added without being announced: the ones
+       * the user has just followed, and is looking at the result of.
+       */
+      quietGames?: ReadonlySet<string>;
+    } = {},
+  ): Promise<void> {
+    const loaded = this.deps.loadConfig();
+    if (loaded.subscriptions.length === 0 && loaded.followedGames.length === 0) {
       this.scheduled.clear();
       return;
     }
 
     this.log.debug({
       type: EVENT.PASS_START,
-      msg: `resolving ${config.subscriptions.length} subscription(s) (${trigger})`,
-      subscriptions: config.subscriptions.length,
+      msg: `resolving ${loaded.subscriptions.length} subscription(s) (${trigger})`,
+      subscriptions: loaded.subscriptions.length,
       trigger,
     });
 
@@ -173,13 +203,23 @@ export class SubscriptionEngine {
     // Only a catalogue we actually read can tell us a campaign is gone.
     const trustworthy = catalogue.available && !catalogue.stale;
     const now = this.deps.now?.() ?? Date.now();
-    // Only campaign subscriptions complete, so a game-only list skips the
-    // fetch. InventoryCache.get() never rejects.
+    // InventoryCache.get() never rejects.
     const inventory = this.deps.inventory !== undefined
-      && config.subscriptions.some((s) => s.kind === "campaign")
       ? await this.deps.inventory.get()
       : null;
 
+    // Before anything else, so a campaign a followed game adds gets its
+    // channels on this same pass.
+    const follow = followGames(
+      loaded, catalogue, inventory, now, this.deps.newId ?? randomUUID,
+    );
+    const config = follow.changed
+      ? {
+        ...loaded,
+        followedGames: follow.followedGames,
+        subscriptions: [...loaded.subscriptions, ...follow.added.map((a) => a.subscription)],
+      }
+      : loaded;
     // Rank order: lower ranks fill the miner's watch slots first, and
     // the written order is what upstream's priority_order consumes.
     const ordered = [...config.subscriptions].sort((a, b) => a.rank - b.rank);
@@ -195,9 +235,8 @@ export class SubscriptionEngine {
       // campaigns only, so absence is the end signal. Absence from a
       // stale or unavailable one means we could not look, and treating
       // that as an ending would delete a live subscription over a
-      // network blip. Game subscriptions are never ended this way --
-      // they are not tied to any one campaign's lifetime.
-      if (sub.kind === "campaign" && campaign === undefined && trustworthy) {
+      // network blip.
+      if (campaign === undefined && trustworthy) {
         this.log.warn({
           type: EVENT.SUBSCRIPTION_ENDED,
           msg: `campaign "${sub.label}" is gone from a fresh catalogue, so its `
@@ -214,7 +253,7 @@ export class SubscriptionEngine {
       // The tracker keeps an ended campaign listed for a while, so its
       // end date is checked too. A date read from a stale catalogue is
       // still that campaign's end date, so this needs no trustworthy test.
-      if (sub.kind === "campaign" && campaign?.endsAt != null && campaign.endsAt <= now) {
+      if (campaign?.endsAt != null && campaign.endsAt <= now) {
         this.log.info({
           type: EVENT.SUBSCRIPTION_ENDED,
           msg: `campaign "${sub.label}" has ended, so its subscription was `
@@ -229,8 +268,7 @@ export class SubscriptionEngine {
         continue;
       }
 
-      if (sub.kind === "campaign" && campaign !== undefined
-          && inventory !== null && resolveCampaign(campaign, inventory).complete) {
+      if (campaign !== undefined && inventory !== null && resolveCampaign(campaign, inventory).complete) {
         this.log.info({
           type: EVENT.SUBSCRIPTION_COMPLETED,
           msg: `campaign "${sub.label}" is 100% complete, so its subscription `
@@ -266,7 +304,7 @@ export class SubscriptionEngine {
       // channels until then -- subscribing to one adds nothing to the
       // streamer list and so proposes no restart. The first pass after
       // it opens resolves them.
-      const opensAt = sub.kind === "campaign" ? campaign?.startsAt : null;
+      const opensAt = campaign?.startsAt;
       if (opensAt != null && opensAt > now) {
         if (!this.scheduled.has(sub.id)) {
           this.scheduled.add(sub.id);
@@ -322,7 +360,7 @@ export class SubscriptionEngine {
         }
       };
 
-      const game = directoryTarget(sub, campaign);
+      const game = directoryTarget(campaign);
       if (game === null) {
         this.log.warn({
           type: EVENT.DEGRADED,
@@ -403,8 +441,18 @@ export class SubscriptionEngine {
     const live = new Set(ordered.filter((s) => !ended.has(s.id)).map((s) => s.id));
     for (const id of this.scheduled) if (!live.has(id)) this.scheduled.delete(id);
 
-    const { streamers, changed, added, removed } = reconcile(config.streamers, desired);
-    if (!changed && ended.size === 0) {
+    const { changed } = reconcile(config.streamers, desired);
+    // A leaving campaign of a followed game is filed as skipped, so the
+    // game does not add it back while it is still listed -- say on a
+    // pass where progress could not be read to show it complete.
+    const followedGames = ended.size === 0
+      ? config.followedGames
+      : recordSkipped(
+        config.followedGames,
+        ordered.filter((s) => ended.has(s.id)),
+        (id) => byId.get(id)?.game?.id,
+      );
+    if (!changed && ended.size === 0 && !follow.changed) {
       // The common case by design, and deliberately debug: a healthy
       // quarter-hour where nothing needed doing should not fill the log.
       this.log.debug({
@@ -415,23 +463,57 @@ export class SubscriptionEngine {
       return;
     }
 
-    this.log.info({
-      type: EVENT.RECONCILED,
-      msg: added.length === 0 && removed.length === 0
-        ? `the watch list was reordered (${streamers.length} channel(s))`
-        : `the watch list changed: +${added.length} -${removed.length}`,
-      added,
-      removed,
-      changed,
-      endedSubscriptions: ended.size,
-      trigger,
+    // Applied to the config as it is now, not as this pass read it: a
+    // route may have saved while the pass was asking Twitch.
+    const { config: next, reconciliation } = rebasePass(this.deps.loadConfig(), {
+      ended,
+      added: follow.added.map((a) => a.subscription),
+      considered: new Set(ordered.map((s) => s.id)),
+      desired,
+      gamesBefore: loaded.followedGames,
+      gamesAfter: followedGames,
     });
+    const { streamers, added, removed } = reconciliation;
+    if (reconciliation.changed || ended.size > 0) {
+      this.log.info({
+        type: EVENT.RECONCILED,
+        msg: added.length === 0 && removed.length === 0
+          ? `the watch list was reordered (${streamers.length} channel(s))`
+          : `the watch list changed: +${added.length} -${removed.length}`,
+        added,
+        removed,
+        changed: reconciliation.changed,
+        endedSubscriptions: ended.size,
+        trigger,
+      });
+    }
 
-    this.deps.saveConfig(this.deps.configPath, {
-      ...config,
-      streamers,
-      subscriptions: config.subscriptions.filter((s) => !ended.has(s.id)),
-    });
+    this.deps.saveConfig(this.deps.configPath, next);
+    const saved = new Set(next.subscriptions.map((s) => s.id));
+    // After the save, and only for what it kept: an addition dropped
+    // because its game was unfollowed meanwhile never happened.
+    for (const { subscription, game } of follow.added) {
+      if (!saved.has(subscription.id)) continue;
+      this.log.info({
+        type: EVENT.SUBSCRIPTION_FOLLOWED,
+        msg: `"${subscription.label}" is a campaign for followed game "${game.name}", `
+          + "so it was subscribed to",
+        subscriptionId: subscription.id,
+        label: subscription.label,
+        targetId: subscription.targetId,
+        game: game.name,
+      });
+      if (options.quietGames?.has(game.id)) continue;
+      this.deps.onCampaignFollowed?.({
+        subscriptionId: subscription.id,
+        label: subscription.label,
+        targetId: subscription.targetId,
+        game: game.name,
+      });
+    }
+    // Only a different watch list needs the miner restarted; a campaign
+    // added but not open yet changes nothing it can see.
+    if (!reconciliation.changed && ended.size === 0) return;
     // The boot pass runs before the miner starts, which then reads what
     // was just written -- a restart would only repeat that start. Unless
     // it ran past its budget and the miner started without it.

@@ -16,6 +16,7 @@ import { InventoryCache } from "../state/inventory.js";
 import { StateService } from "../state/service.js";
 import type { NotifyRouteDeps } from "../notify/routes.js";
 import { buildServer } from "./server.js";
+import type { TwitchGame } from "../twitch/categories.js";
 
 const PASSWORD = "hunter2";
 // The built frontend (Task 20). A real dist/ is never present in this test
@@ -100,6 +101,10 @@ async function make(options: {
   });
   const inventory = new InventoryCache({ client: client as never });
   const engine = { pass: vi.fn(async () => {}) };
+  const games = {
+    find: vi.fn(async (_q: string): Promise<TwitchGame[]> => []),
+    byId: vi.fn(async (_id: string): Promise<TwitchGame | null> => null),
+  };
   const held = { value: false };
   const pending = {
     cancel: vi.fn(), fireNow: vi.fn(async () => {}),
@@ -121,6 +126,7 @@ async function make(options: {
     catalogue,
     inventory,
     engine: engine as never,
+    games,
     pendingRestart: pending as never,
     minerStartHeld: () => held.value,
     staticRoot: PUBLIC_ROOT,
@@ -134,7 +140,7 @@ async function make(options: {
   });
   return {
     app, supervisor, client, history, streamers, dailyPoints, state, loginRunner, loginStatus, configPath,
-    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held,
+    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held, games,
     cookie: login.cookies[0].value,
   };
 }
@@ -905,6 +911,7 @@ async function makeLive() {
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
     engine: { pass: vi.fn(async () => {}) } as never,
+    games: { find: vi.fn(async () => []), byId: vi.fn(async () => null) },
     pendingRestart: {
       cancel: vi.fn(), fireNow: vi.fn(async () => {}),
       state: () => ({ pending: false, dueAt: null, reason: null }),
@@ -1117,7 +1124,7 @@ test("GET /api/events returns recent events newest first", async () => {
 function seedCookie(username = "alex"): string {
   saveConfig(ctx.configPath, {
     version: 1, username, followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
+    defaults: {}, miner: {}, subscriptions: [], followedGames: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   const file = join(ctx.cookiesDir, `${username}.pkl`);
@@ -1210,7 +1217,7 @@ test("a successful login clears a stale error from the signed-out session", asyn
   );
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
+    defaults: {}, miner: {}, subscriptions: [], followedGames: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
   await ctx.state.refresh();
@@ -1235,7 +1242,7 @@ test("a successful login starts the miner", async () => {
   // logout/login round trip left it stopped with no hint why.
   saveConfig(ctx.configPath, {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
-    defaults: {}, miner: {}, subscriptions: [], campaignQueue: false,
+    defaults: {}, miner: {}, subscriptions: [], followedGames: [], campaignQueue: false,
     streamers: [{ username: "alpha", enabled: true, settings: {} }],
   });
 
@@ -1296,6 +1303,7 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
     engine: { pass: vi.fn(async () => {}) } as never,
+    games: { find: vi.fn(async () => []), byId: vi.fn(async () => null) },
     pendingRestart: {
       cancel: vi.fn(), fireNow: vi.fn(async () => {}),
       state: () => ({ pending: false, dueAt: null, reason: null }),
@@ -1513,7 +1521,7 @@ const withSubs = (subscriptions: unknown[], streamers: unknown[] = []) => {
 };
 
 const aSub = (over: object = {}) => ({
-  id: "s1", kind: "campaign", targetId: "c1", label: "Alpha",
+  id: "s1", targetId: "c1", label: "Alpha",
   poolSize: 3, rank: 0, ...over,
 });
 
@@ -1560,11 +1568,21 @@ test("a subscription whose campaign has left the catalogue reports no game", asy
   expect(sub.game).toBeNull();
 });
 
+test("POST /api/subscriptions will not take a viaGame from the client", async () => {
+  // Only the engine tags a subscription with the game that added it.
+  withSubs([]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions", cookies: auth(),
+    payload: { targetId: "c1", label: "Alpha", viaGame: "g1" },
+  });
+  expect(res.statusCode).toBe(400);
+});
+
 test("POST /api/subscriptions assigns an id and the next rank", async () => {
   withSubs([]);
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(200);
   const sub = res.json().subscription;
@@ -1577,7 +1595,7 @@ test("a second subscription ranks after the first", async () => {
   withSubs([aSub({ rank: 0 })]);
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c2", label: "Beta" },
+    payload: { targetId: "c2", label: "Beta" },
   });
   expect(res.json().subscription.rank).toBe(1);
 });
@@ -1588,7 +1606,7 @@ test("subscribing twice to the same target is rejected", async () => {
   withSubs([aSub()]);
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(409);
 });
@@ -1599,7 +1617,7 @@ test("subscribing to an ended campaign is rejected", async () => {
   await ctx.catalogue.refresh();
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(409);
   expect(res.json().error).toBe("that campaign has ended");
@@ -1615,7 +1633,7 @@ test("subscribing to a complete campaign is rejected", async () => {
   };
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(409);
   expect(res.json().error).toBe("that campaign is already complete");
@@ -1630,7 +1648,7 @@ test("subscribing to a live, unfinished campaign is accepted", async () => {
   };
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(200);
 });
@@ -1639,7 +1657,6 @@ test("GET /api/subscriptions reports each campaign's place in the queue", async 
   withSubs([
     aSub(),
     aSub({ id: "s2", targetId: "c2", label: "Beta", rank: 1 }),
-    aSub({ id: "g", kind: "game", targetId: "g1", label: "A Game", rank: 2 }),
   ]);
   saveConfig(ctx.configPath, { ...loadConfig(ctx.configPath), campaignQueue: true });
   const res = await ctx.app.inject({
@@ -1649,7 +1666,6 @@ test("GET /api/subscriptions reports each campaign's place in the queue", async 
   expect(res.json().subscriptions.map((s: { queue: unknown }) => s.queue)).toEqual([
     { state: "active", position: 0 },
     { state: "waiting", position: 1 },
-    null,
   ]);
 });
 
@@ -1877,7 +1893,7 @@ test("subscribing resolves straight away rather than waiting for the timer", asy
   withSubs([]);
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(200);
   expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
@@ -1890,7 +1906,7 @@ test("a failed resolve still leaves the subscription created", async () => {
   ctx.engine.pass.mockRejectedValueOnce(new Error("directory down"));
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions", cookies: auth(),
-    payload: { kind: "campaign", targetId: "c1", label: "Alpha" },
+    payload: { targetId: "c1", label: "Alpha" },
   });
   expect(res.statusCode).toBe(200);
   expect(loadConfig(ctx.configPath).subscriptions).toHaveLength(1);
@@ -2063,4 +2079,193 @@ test("the service worker is served for revalidation", async () => {
   const res = await ctx.app.inject({ url: "/sw.js" });
   expect(res.statusCode).toBe(200);
   expect(res.headers["cache-control"]).toBe("no-cache");
+});
+
+// --- followed games ---
+
+const elden = {
+  id: "512953", name: "ELDEN RING", slug: "elden-ring",
+  boxArtUrl: "https://static-cdn.jtvnw.net/ttv-boxart/512953_IGDB-144x192.jpg",
+};
+const asFollowed = (over: object = {}) => ({ ...elden, poolSize: 3, skipped: [], ...over });
+const withFollowed = (followedGames: unknown[], subscriptions: unknown[] = []) => {
+  saveConfig(ctx.configPath, {
+    ...loadConfig(ctx.configPath), subscriptions, followedGames,
+  } as never);
+};
+
+test("GET /api/games/search returns what Twitch found", async () => {
+  ctx.games.find.mockResolvedValueOnce([elden]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/games/search?q=elden", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ games: [elden] });
+  expect(ctx.games.find).toHaveBeenCalledWith("elden");
+});
+
+test("GET /api/games/search answers 502 when Twitch fails, never an empty list", async () => {
+  ctx.games.find.mockRejectedValueOnce(new Error("Twitch returned HTTP 503"));
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/games/search?q=elden", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(502);
+  expect(res.json().error).toMatch(/503/);
+});
+
+test("POST /api/followed-games stores what Twitch returned and resolves", async () => {
+  withFollowed([]);
+  ctx.games.byId.mockResolvedValueOnce(elden);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games", cookies: auth(),
+    payload: { ids: ["512953"] },
+  });
+  expect(res.json()).toEqual({ added: [elden], alreadyFollowed: [], notFound: [] });
+  expect(loadConfig(ctx.configPath).followedGames).toEqual([asFollowed()]);
+  expect(ctx.engine.pass).toHaveBeenCalledWith("follow", { quietGames: new Set(["512953"]) });
+});
+
+test("a mixed follow batch reports each id", async () => {
+  withFollowed([asFollowed()]);
+  ctx.games.byId.mockImplementation(async (id) => (id === "263490"
+    ? { id: "263490", name: "Rust", slug: "rust", boxArtUrl: null }
+    : null));
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games", cookies: auth(),
+    payload: { ids: ["512953", "263490", "404"] },
+  });
+  expect(res.json()).toEqual({
+    added: [{ id: "263490", name: "Rust", slug: "rust", boxArtUrl: null }],
+    alreadyFollowed: ["512953"],
+    notFound: ["404"],
+  });
+  expect(loadConfig(ctx.configPath).followedGames.map((g) => g.id))
+    .toEqual(["512953", "263490"]);
+});
+
+test("the same id twice in one request is looked up and followed once", async () => {
+  withFollowed([]);
+  ctx.games.byId.mockResolvedValue(elden);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games", cookies: auth(),
+    payload: { ids: ["512953", "512953"] },
+  });
+  expect(res.json().added).toHaveLength(1);
+  expect(ctx.games.byId).toHaveBeenCalledTimes(1);
+  expect(loadConfig(ctx.configPath).followedGames).toHaveLength(1);
+});
+
+test("a Twitch failure while following saves nothing", async () => {
+  withFollowed([]);
+  ctx.games.byId.mockRejectedValueOnce(new Error("timeout"));
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games", cookies: auth(),
+    payload: { ids: ["512953"] },
+  });
+  expect(res.statusCode).toBe(502);
+  expect(loadConfig(ctx.configPath).followedGames).toEqual([]);
+  expect(ctx.engine.pass).not.toHaveBeenCalled();
+});
+
+test("POST /api/followed-games wants 1-25 ids", async () => {
+  for (const ids of [undefined, [], Array.from({ length: 26 }, (_, i) => String(i)), [""], [7]]) {
+    const res = await ctx.app.inject({
+      method: "POST", url: "/api/followed-games", cookies: auth(), payload: { ids },
+    });
+    expect(res.statusCode, JSON.stringify(ids)).toBe(400);
+  }
+});
+
+test("a followed game's pool size can be changed", async () => {
+  withFollowed([asFollowed()]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/pool-size", cookies: auth(),
+    payload: { poolSize: 5 },
+  });
+  expect(res.json().game.poolSize).toBe(5);
+  expect(loadConfig(ctx.configPath).followedGames[0]?.poolSize).toBe(5);
+  const bad = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/pool-size", cookies: auth(),
+    payload: { poolSize: 11 },
+  });
+  expect(bad.statusCode).toBe(400);
+  const missing = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/1/pool-size", cookies: auth(),
+    payload: { poolSize: 2 },
+  });
+  expect(missing.statusCode).toBe(404);
+});
+
+test("unfollowing keeps the campaign subscriptions the game added", async () => {
+  withFollowed([asFollowed()], [aSub({ viaGame: "512953" })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/remove", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  const config = loadConfig(ctx.configPath);
+  expect(config.followedGames).toEqual([]);
+  expect(config.subscriptions.map((s) => s.id)).toEqual(["s1"]);
+});
+
+test("removing a subscription a game added skips that campaign", async () => {
+  withFollowed([asFollowed()], [aSub({ viaGame: "512953" })]);
+  await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/remove", cookies: auth(),
+  });
+  expect(loadConfig(ctx.configPath).followedGames[0]?.skipped).toEqual(["c1"]);
+});
+
+test("removing a hand-added subscription for a followed game's campaign skips it too", async () => {
+  // Otherwise the game adds it straight back on the next pass.
+  ctx.setCampaigns(() => [{
+    ...aCampaign, endsAt: Date.now() + 86_400_000,
+    game: { id: "512953", slug: "elden-ring", displayName: "ELDEN RING" },
+  }]);
+  await ctx.catalogue.refresh();
+  withFollowed([asFollowed()], [aSub()]);
+  await ctx.app.inject({
+    method: "POST", url: "/api/subscriptions/s1/remove", cookies: auth(),
+  });
+  expect(loadConfig(ctx.configPath).followedGames[0]?.skipped).toEqual(["c1"]);
+});
+
+test("GET /api/subscriptions includes the followed games", async () => {
+  withFollowed([asFollowed()], [aSub({ viaGame: "512953" })]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  expect(res.json().followedGames).toEqual([asFollowed()]);
+  expect(res.json().subscriptions[0].viaGame).toBe("512953");
+});
+
+test("unskipping a campaign lets its followed game subscribe to it again", async () => {
+  withFollowed([asFollowed({ skipped: ["c1", "c2"] })]);
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/unskip", cookies: auth(),
+    payload: { campaignId: "c1" },
+  });
+  expect(res.statusCode).toBe(200);
+  expect(loadConfig(ctx.configPath).followedGames[0]?.skipped).toEqual(["c2"]);
+  // Resolved now, quietly: the user is looking at the result.
+  expect(ctx.engine.pass).toHaveBeenCalledWith("unskip", { quietGames: new Set(["512953"]) });
+});
+
+test("unskip answers 404 for a game not followed or a campaign not skipped", async () => {
+  withFollowed([asFollowed({ skipped: ["c1"] })]);
+  const notFollowed = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/1/unskip", cookies: auth(),
+    payload: { campaignId: "c1" },
+  });
+  expect(notFollowed.statusCode).toBe(404);
+  const notSkipped = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/unskip", cookies: auth(),
+    payload: { campaignId: "c9" },
+  });
+  expect(notSkipped.statusCode).toBe(404);
+  const bad = await ctx.app.inject({
+    method: "POST", url: "/api/followed-games/512953/unskip", cookies: auth(),
+    payload: {},
+  });
+  expect(bad.statusCode).toBe(400);
+  expect(ctx.engine.pass).not.toHaveBeenCalled();
 });

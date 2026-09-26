@@ -12,7 +12,7 @@ const campaign = (over: Partial<Campaign> = {}): Campaign => ({
 });
 
 const sub = (over: object = {}) => ({
-  id: "s1", kind: "campaign" as const, targetId: "c1",
+  id: "s1", targetId: "c1",
   label: "Alpha", poolSize: 2, rank: 0, ...over,
 });
 
@@ -33,18 +33,28 @@ function make(over: {
   /** The catalogue read throws, failing the whole pass. */
   catalogueFails?: boolean;
   onCampaignStarted?: (e: unknown) => void;
+  onCampaignFollowed?: (e: unknown) => void;
+  newId?: () => string;
+  /** What a route saved while the pass was running: later reads see it. */
+  savedMeanwhile?: Partial<AppConfig>;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
     defaults: {}, miner: {},
     streamers: [manual("alpha")],
     subscriptions: [sub()],
+    followedGames: [],
     ...over.config,
   } as unknown as AppConfig;
   const saveConfig = vi.fn();
   const propose = vi.fn();
   const engine = new SubscriptionEngine({
-    loadConfig: () => config,
+    loadConfig: (() => {
+      let reads = 0;
+      return () => (reads++ === 0 || over.savedMeanwhile === undefined
+        ? config
+        : { ...config, ...over.savedMeanwhile } as AppConfig);
+    })(),
     saveConfig,
     configPath: "/tmp/config.json",
     catalogue: {
@@ -69,6 +79,8 @@ function make(over: {
       : over.now === undefined ? undefined : () => over.now as number,
     log: over.log,
     onCampaignStarted: over.onCampaignStarted,
+    onCampaignFollowed: over.onCampaignFollowed,
+    newId: over.newId ?? (() => "new-1"),
   });
   return { engine, saveConfig, propose, config };
 }
@@ -276,20 +288,6 @@ test("an unavailable catalogue never ends a campaign either", async () => {
   expect(saveConfig).not.toHaveBeenCalled();
 });
 
-test("a game subscription outlives the campaign catalogue", async () => {
-  // It is not tied to any one campaign, so an empty catalogue is fine.
-  const { engine, saveConfig } = make({
-    config: {
-      streamers: [],
-      subscriptions: [sub({ kind: "game", targetId: "g1", label: "A Game" })],
-    },
-    catalogue: { campaigns: [] },
-  });
-  await engine.pass();
-  const after = written(saveConfig).streamers;
-  expect(after.some((s) => s.username === "delta")).toBe(false);
-  expect(new Set(after.map((s) => s.ownedBy))).toEqual(new Set(["s1"]));
-});
 
 test("one subscription failing does not sink the others", async () => {
   let call = 0;
@@ -587,15 +585,6 @@ test("a campaign of only unobtainable drops is never complete", async () => {
   expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
 });
 
-test("a game subscription is never ended by one campaign", async () => {
-  const { engine, saveConfig } = make({
-    now: 5_000,
-    catalogue: { campaigns: [campaign({ endsAt: 4_000 })] },
-    config: { subscriptions: [sub({ kind: "game", targetId: "g1" })] },
-  });
-  await engine.pass();
-  expect(written(saveConfig).subscriptions.map((s) => s.id)).toEqual(["s1"]);
-});
 
 // --- campaigns not open yet ---
 
@@ -747,18 +736,6 @@ test("the queue start is logged once, not on every pass", async () => {
   expect(log.ofType("subscription.queue.started")).toHaveLength(1);
 });
 
-test("game subscriptions keep their channels with the queue on", async () => {
-  const { engine, saveConfig } = queued({
-    config: {
-      streamers: [],
-      subscriptions: [...twoSubs, sub({ id: "g", kind: "game", targetId: "g1", rank: 2 })],
-      campaignQueue: true,
-    },
-  });
-  await engine.pass();
-  expect(new Set(written(saveConfig).streamers.map((s) => s.ownedBy)))
-    .toEqual(new Set(["s1", "g"]));
-});
 
 test("an engine with no logger behaves identically", async () => {
   const { engine, saveConfig } = make();
@@ -791,4 +768,203 @@ test("the queue moving on is reported", async () => {
   });
   await engine.pass();
   expect(started).toHaveBeenCalledWith(expect.objectContaining({ subscriptionId: "s1", why: "queue" }));
+});
+
+// --- followed games ---
+
+const watchable = { id: "d1", name: "Crate", benefits: [], requiredMinutes: 60, requiredSubs: 0 };
+const followed = (over: object = {}) => ({
+  id: "g1", name: "A Game", slug: "a-game", boxArtUrl: null,
+  poolSize: 1, skipped: [] as string[], ...over,
+});
+
+test("a followed game's campaign is subscribed and resolved in the same pass", async () => {
+  const { engine, saveConfig, propose } = make({
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.subscriptions).toEqual([{
+    id: "new-1", targetId: "c1", label: "Alpha", poolSize: 1, rank: 0, viaGame: "g1",
+  }]);
+  expect(out.streamers.map((s) => [s.username, s.ownedBy])).toEqual([["beta", "new-1"]]);
+  expect(propose).toHaveBeenCalledTimes(1);
+});
+
+test("adding only a campaign not open yet saves without proposing a restart", async () => {
+  const { engine, saveConfig, propose } = make({
+    now: 1_000,
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ startsAt: 5_000, endsAt: 9_000, drops: [watchable] })] },
+  });
+  await engine.pass("timer");
+  expect(written(saveConfig).subscriptions.map((s) => s.targetId)).toEqual(["c1"]);
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a campaign added by a game that ends is skipped from then on", async () => {
+  const { engine, saveConfig } = make({
+    now: 5_000,
+    config: {
+      subscriptions: [sub({ viaGame: "g1" })],
+      followedGames: [followed()],
+    } as never,
+    catalogue: { campaigns: [campaign({ endsAt: 4_000, drops: [watchable] })] },
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.subscriptions).toEqual([]);
+  expect(out.followedGames[0]?.skipped).toEqual(["c1"]);
+});
+
+test("a campaign added by a game that completes is skipped from then on", async () => {
+  const { engine, saveConfig } = make({
+    config: {
+      subscriptions: [sub({ viaGame: "g1" })],
+      followedGames: [followed()],
+    } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    inventory: { progress: { c1: { d1: { minutes: 60, claimed: true, instanceId: null } } } as never },
+  });
+  await engine.pass("timer");
+  expect(written(saveConfig).followedGames[0]?.skipped).toEqual(["c1"]);
+});
+
+test("a hand-added campaign of a followed game that completes is skipped too", async () => {
+  const { engine, saveConfig } = make({
+    config: { subscriptions: [sub()], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    inventory: { progress: { c1: { d1: { minutes: 60, claimed: true, instanceId: null } } } as never },
+  });
+  await engine.pass("timer");
+  expect(written(saveConfig).followedGames[0]?.skipped).toEqual(["c1"]);
+});
+
+test("an automatic subscription is announced whatever started the pass", async () => {
+  // Only the games the user just followed stay quiet: they are looking at
+  // the result. A campaign added during some unrelated pass is news.
+  for (const trigger of ["timer", "boot", "manual", "subscribe", "follow"] as const) {
+    const told = vi.fn();
+    const { engine } = make({
+      config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+      catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+      onCampaignFollowed: told,
+    });
+    await engine.pass(trigger);
+    expect(told, trigger).toHaveBeenCalledWith({
+      subscriptionId: "new-1", label: "Alpha", targetId: "c1", game: "A Game",
+    });
+  }
+});
+
+test("the games just followed are not announced", async () => {
+  const told = vi.fn();
+  const { engine } = make({
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    onCampaignFollowed: told,
+  });
+  await engine.pass("follow", { quietGames: new Set(["g1"]) });
+  expect(told).not.toHaveBeenCalled();
+});
+
+test("followed games with nothing to add write nothing", async () => {
+  const { engine, saveConfig } = make({
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [] },
+  });
+  await engine.pass("timer");
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+// --- writes made while a pass runs ---
+
+test("a game followed while a pass runs survives the pass's write", async () => {
+  const other = followed({ id: "g2", name: "B Game" });
+  const { engine, saveConfig } = make({
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    savedMeanwhile: { followedGames: [followed(), other] } as never,
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.followedGames.map((g) => g.id)).toEqual(["g1", "g2"]);
+  expect(out.subscriptions.map((s) => s.targetId)).toEqual(["c1"]);
+});
+
+test("a subscription removed while a pass runs stays removed, channels and all", async () => {
+  const { engine, saveConfig } = make({
+    config: { streamers: [], subscriptions: [sub()] },
+    savedMeanwhile: { subscriptions: [] },
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.subscriptions).toEqual([]);
+  expect(out.streamers.filter((s) => s.ownedBy !== undefined)).toEqual([]);
+});
+
+test("a game unfollowed while a pass runs is not followed again, nor its campaign added", async () => {
+  const { engine, saveConfig } = make({
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    savedMeanwhile: { followedGames: [] } as never,
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.followedGames).toEqual([]);
+  expect(out.subscriptions).toEqual([]);
+});
+
+test("channels of a subscription added while a pass runs are left alone", async () => {
+  const added = sub({ id: "s9", targetId: "c9", rank: 1 });
+  const { engine, saveConfig } = make({
+    config: { streamers: [], subscriptions: [sub()] },
+    savedMeanwhile: {
+      subscriptions: [sub(), added],
+      streamers: [owned("zeta", "s9")],
+    } as never,
+  });
+  await engine.pass("timer");
+  const out = written(saveConfig);
+  expect(out.subscriptions.map((s) => s.id)).toEqual(["s1", "s9"]);
+  expect(out.streamers.map((s) => [s.username, s.ownedBy]))
+    .toEqual([["beta", "s1"], ["gamma", "s1"], ["zeta", "s9"]]);
+});
+
+// --- the followed log records only what was saved ---
+
+test("an automatic subscription is logged once it is saved", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+  });
+  await engine.pass("timer");
+  expect(log.ofType("subscription.followed")).toHaveLength(1);
+});
+
+test("an automatic subscription whose save fails is not logged", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig } = make({
+    log,
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+  });
+  saveConfig.mockImplementation(() => { throw new Error("disk full"); });
+  await expect(engine.pass("timer")).rejects.toThrow("disk full");
+  expect(log.ofType("subscription.followed")).toEqual([]);
+});
+
+test("an automatic subscription dropped because its game was unfollowed meanwhile is not logged", async () => {
+  const log = memoryLog();
+  const { engine } = make({
+    log,
+    config: { streamers: [], subscriptions: [], followedGames: [followed()] } as never,
+    catalogue: { campaigns: [campaign({ drops: [watchable] })] },
+    savedMeanwhile: { followedGames: [] } as never,
+  });
+  await engine.pass("timer");
+  expect(log.ofType("subscription.followed")).toEqual([]);
 });

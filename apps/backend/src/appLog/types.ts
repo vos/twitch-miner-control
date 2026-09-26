@@ -40,6 +40,8 @@ export const EVENT = {
   SUBSCRIPTION_SCHEDULED: "subscription.scheduled",
   /** A scheduled campaign opened, so its channels are being resolved. */
   SUBSCRIPTION_OPENED: "subscription.opened",
+  /** A followed game's campaign was subscribed to automatically. */
+  SUBSCRIPTION_FOLLOWED: "subscription.followed",
   /** The campaign queue moved on: a waiting subscription became active. */
   QUEUE_STARTED: "subscription.queue.started",
   /** The streamer list actually changed, and how. */
@@ -71,6 +73,10 @@ export const EVENT = {
   USER_SUB_REORDERED: "user.subscription.reordered",
   USER_SUB_POOL_SIZE: "user.subscription.poolSize",
   USER_SUB_QUEUE: "user.subscription.queue",
+  USER_GAME_FOLLOWED: "user.game.followed",
+  USER_GAME_UNFOLLOWED: "user.game.unfollowed",
+  USER_GAME_POOL_SIZE: "user.game.poolSize",
+  USER_GAME_UNSKIPPED: "user.game.unskipped",
   /** The operator vetoed a restart the engine wanted. */
   USER_RESTART_CANCELLED: "user.restart.cancelled",
   USER_RESTART_FORCED: "user.restart.forced",

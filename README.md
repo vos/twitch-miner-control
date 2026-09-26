@@ -180,6 +180,16 @@ Campaigns are cached for 24 hours (they barely change once published)
 and your progress for ten minutes; both ages are shown, and **Refresh**
 re-reads both on demand.
 
+**Following games.** *Follow games* on the Drops page searches Twitch's
+category list (by name, or paste a Twitch game ID) and follows the games
+you tick. Whenever a followed game has a drop campaign, the app
+subscribes to it for you, marked **Auto**, and it takes its place in the
+campaign queue like any other. **Skip** on an Auto subscription stops
+that campaign only: it stays listed as skipped, **Unskip** brings it back,
+and the game's future campaigns are still added. Unfollowing a game keeps
+the subscriptions it already made. The search asks Twitch directly
+and needs no login.
+
 ### Notifications
 
 The **bell** in the header is an inbox of what happened while you were

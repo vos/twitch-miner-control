@@ -5,7 +5,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { ZodError } from "zod";
 import {
-  type AppConfig, configSchema, subscriptionSchema, usernameSchema,
+  type AppConfig, configSchema, followedGameSchema, subscriptionSchema, usernameSchema,
 } from "../config/schema.js";
 import type { AppLogBuffer } from "../appLog/buffer.js";
 import { NULL_LOG, type AppLog } from "../appLog/port.js";
@@ -22,6 +22,8 @@ import { type NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { ProcStats } from "../miner/procStats.js";
 import type { Supervisor } from "../miner/supervisor.js";
 import type { SubscriptionEngine } from "../drops/engine.js";
+import { recordSkipped } from "../drops/follow.js";
+import type { TwitchGame, TwitchGames } from "../twitch/categories.js";
 import type { PendingRestart } from "../drops/pendingRestart.js";
 import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
@@ -204,6 +206,8 @@ export interface ServerDeps {
   inventory: InventoryCache;
   /** Resolves subscriptions into channels; driven on its own timer. */
   engine: Pick<SubscriptionEngine, "pass">;
+  /** Twitch's category search and lookup, for following games. */
+  games: Pick<TwitchGames, "find" | "byId">;
   /**
    * Whether the miner's start is waiting on the boot subscription check.
    * Absent means never: tests and a server built without a boot sequence.
@@ -252,20 +256,16 @@ export interface AppServer extends FastifyInstance {
 }
 
 /**
- * The game a subscription is for, from the campaigns on hand.
+ * The game a subscription's campaign is for, from the campaigns on hand.
  *
- * A game subscription targets the game directly; a campaign
- * subscription reaches it through the campaign. Null when the target is
- * unknown or the campaign carries no game -- a guess would be worse.
+ * Null when the campaign is unknown or carries no game -- a guess would
+ * be worse.
  */
 function gameForSubscription(
-  sub: { kind: string; targetId: string },
+  sub: { targetId: string },
   campaigns: readonly Campaign[],
 ): string | null {
-  const game = sub.kind === "campaign"
-    ? campaigns.find((c) => c.id === sub.targetId)?.game
-    : campaigns.find((c) => c.game?.id === sub.targetId)?.game;
-  const name = game?.displayName;
+  const name = campaigns.find((c) => c.id === sub.targetId)?.game?.displayName;
   return name === undefined || name === "" ? null : name;
 }
 
@@ -653,6 +653,7 @@ export function buildServer(deps: ServerDeps): AppServer {
         : null;
       return {
         campaignQueue: config.campaignQueue,
+        followedGames: config.followedGames,
         subscriptions: ordered
           .map((sub) => ({
             ...sub,
@@ -665,8 +666,7 @@ export function buildServer(deps: ServerDeps): AppServer {
             // Drops page does. Null once the campaign leaves the
             // catalogue; the stored label still identifies it.
             game: gameForSubscription(sub, campaigns),
-            // Null when the queue is off, and for a game subscription,
-            // which is never queued.
+            // Null when the queue is off.
             queue: queue?.get(sub.id) ?? null,
           })),
       };
@@ -675,7 +675,7 @@ export function buildServer(deps: ServerDeps): AppServer {
     instance.post("/api/subscriptions", async (request, reply) => {
       const config = loadConfig(deps.configPath);
       const body = subscriptionSchema
-        .omit({ id: true, rank: true })
+        .omit({ id: true, rank: true, viaGame: true })
         .safeParse(request.body);
       if (!body.success) {
         return reply.code(400).send({ error: "not a valid subscription" });
@@ -683,7 +683,7 @@ export function buildServer(deps: ServerDeps): AppServer {
       // One subscription per target: two would resolve the same channels
       // and fight over ownership on every pass.
       const clash = config.subscriptions.some(
-        (s) => s.kind === body.data.kind && s.targetId === body.data.targetId,
+        (s) => s.targetId === body.data.targetId,
       );
       if (clash) {
         return reply.code(409).send({ error: "already subscribed to that" });
@@ -692,16 +692,14 @@ export function buildServer(deps: ServerDeps): AppServer {
       // pass, so accepting one would only add channels, restart the miner
       // and take them away again. A campaign missing from the catalogue is
       // let through: that is the engine's call, on a catalogue it trusts.
-      if (body.data.kind === "campaign") {
-        const campaign = (await deps.catalogue.get()).campaigns
-          .find((c) => c.id === body.data.targetId);
-        if (campaign?.endsAt != null && campaign.endsAt <= Date.now()) {
-          return reply.code(409).send({ error: "that campaign has ended" });
-        }
-        if (campaign !== undefined
-            && resolveCampaign(campaign, await deps.inventory.get()).complete) {
-          return reply.code(409).send({ error: "that campaign is already complete" });
-        }
+      const campaign = (await deps.catalogue.get()).campaigns
+        .find((c) => c.id === body.data.targetId);
+      if (campaign?.endsAt != null && campaign.endsAt <= Date.now()) {
+        return reply.code(409).send({ error: "that campaign has ended" });
+      }
+      if (campaign !== undefined
+          && resolveCampaign(campaign, await deps.inventory.get()).complete) {
+        return reply.code(409).send({ error: "that campaign is already complete" });
       }
       const subscription = {
         ...body.data,
@@ -722,9 +720,8 @@ export function buildServer(deps: ServerDeps): AppServer {
       // exists at all.
       log.info({
         type: EVENT.USER_SUB_ADDED,
-        msg: `subscribed to ${subscription.kind} "${subscription.label}"`,
+        msg: `subscribed to "${subscription.label}"`,
         subscriptionId: subscription.id,
-        kind: subscription.kind,
         targetId: subscription.targetId,
         label: subscription.label,
         poolSize: subscription.poolSize,
@@ -825,10 +822,16 @@ export function buildServer(deps: ServerDeps): AppServer {
       // Both in one write, so the config can never hold a streamer owned
       // by a subscription that no longer exists.
       const released = config.streamers.filter((s) => s.ownedBy === id);
+      const leaving = config.subscriptions.find((s) => s.id === id)!;
+      // Skipped under its followed game, so that game does not add it back.
+      // A hand-added one is matched through its campaign's game.
+      const gameOf = (campaignId: string) =>
+        deps.catalogue.peek()?.campaigns.find((c) => c.id === campaignId)?.game?.id;
       saveConfig(deps.configPath, {
         ...config,
         subscriptions: config.subscriptions.filter((s) => s.id !== id),
         streamers: config.streamers.filter((s) => s.ownedBy !== id),
+        followedGames: recordSkipped(config.followedGames, [leaving], gameOf),
       });
       log.info({
         type: EVENT.USER_SUB_REMOVED,
@@ -861,6 +864,167 @@ export function buildServer(deps: ServerDeps): AppServer {
       // The flag alone moves no channels: the pass releases the waiting
       // subscriptions' channels, or resolves them all when turned off.
       await deps.engine.pass("queue").catch(() => {});
+      return { ok: true };
+    });
+
+    /**
+     * Twitch's categories matching what was typed.
+     *
+     * A failure is a 502, never an empty list: "no such game" and "could
+     * not ask" are different answers, and only one is about the game.
+     */
+    instance.get("/api/games/search", async (request, reply) => {
+      const q = (request.query as { q?: unknown }).q;
+      try {
+        return { games: await deps.games.find(typeof q === "string" ? q : "") };
+      } catch (cause) {
+        return reply.code(502).send({
+          error: `Twitch search is unavailable: ${messageOf(cause)}`,
+        });
+      }
+    });
+
+    /**
+     * Follows games by Twitch id.
+     *
+     * Each id is looked up on Twitch again and what Twitch returns is
+     * stored -- that is the validation, and it keeps names and box art
+     * from ever being whatever the browser sent. All or nothing on a
+     * Twitch failure, so a half-applied batch never needs explaining.
+     */
+    instance.post("/api/followed-games", async (request, reply) => {
+      const ids = (request.body as { ids?: unknown } | null)?.ids;
+      const valid = Array.isArray(ids) && ids.length >= 1 && ids.length <= 25
+        && ids.every((id) => typeof id === "string" && id !== "");
+      if (!valid) {
+        return reply.code(400).send({ error: "ids must list 1-25 Twitch game ids" });
+      }
+      const unique = [...new Set(ids as string[])];
+      const before = new Set(loadConfig(deps.configPath).followedGames.map((g) => g.id));
+      const alreadyFollowed = unique.filter((id) => before.has(id));
+      const wanted = unique.filter((id) => !before.has(id));
+      let found: Array<TwitchGame | null>;
+      try {
+        found = await Promise.all(wanted.map((id) => deps.games.byId(id)));
+      } catch (cause) {
+        return reply.code(502).send({
+          error: `Twitch could not be reached: ${messageOf(cause)}`,
+        });
+      }
+      const notFound = wanted.filter((_, i) => found[i] === null);
+      // Re-read: the lookups took time, and a pass may have written since.
+      const config = loadConfig(deps.configPath);
+      const known = new Set(config.followedGames.map((g) => g.id));
+      const added = found.filter((g): g is TwitchGame => g !== null && !known.has(g.id));
+      if (added.length > 0) {
+        saveConfig(deps.configPath, {
+          ...config,
+          followedGames: [
+            ...config.followedGames,
+            ...added.map((g) => followedGameSchema.parse(g)),
+          ],
+        });
+        log.info({
+          type: EVENT.USER_GAME_FOLLOWED,
+          msg: `followed ${added.map((g) => `"${g.name}"`).join(", ")}`,
+          games: added.map((g) => ({ id: g.id, name: g.name })),
+        });
+        // Subscribes to what is already running now rather than in up to
+        // fifteen minutes, quietly for these games: the page shows what was
+        // subscribed. Swallowed: the games are saved either way.
+        await deps.engine.pass("follow", {
+          quietGames: new Set(added.map((g) => g.id)),
+        }).catch(() => {});
+      }
+      return { added, alreadyFollowed, notFound };
+    });
+
+    /** Pool size for the campaigns this game adds from now on. */
+    instance.post("/api/followed-games/:id/pool-size", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const config = loadConfig(deps.configPath);
+      const current = config.followedGames.find((g) => g.id === id);
+      if (current === undefined) {
+        return reply.code(404).send({ error: "that game is not followed" });
+      }
+      const poolSize = followedGameSchema.shape.poolSize
+        .safeParse((request.body as { poolSize?: unknown } | null)?.poolSize);
+      if (!poolSize.success) {
+        return reply.code(400).send({ error: "not a valid pool size" });
+      }
+      const game = { ...current, poolSize: poolSize.data };
+      saveConfig(deps.configPath, {
+        ...config,
+        followedGames: config.followedGames.map((g) => (g.id === id ? game : g)),
+      });
+      log.info({
+        type: EVENT.USER_GAME_POOL_SIZE,
+        msg: `pool size for followed game "${game.name}" set to ${game.poolSize}`,
+        gameId: id,
+        from: current.poolSize,
+        to: game.poolSize,
+      });
+      return { game };
+    });
+
+    /**
+     * Lets a followed game subscribe to a campaign it had skipped.
+     *
+     * The pass that follows adds it back at the end of the queue, unless
+     * it has since completed -- then it is skipped again.
+     */
+    instance.post("/api/followed-games/:id/unskip", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const campaignId = (request.body as { campaignId?: unknown } | null)?.campaignId;
+      if (typeof campaignId !== "string" || campaignId === "") {
+        return reply.code(400).send({ error: "campaignId is required" });
+      }
+      const config = loadConfig(deps.configPath);
+      const game = config.followedGames.find((g) => g.id === id);
+      if (game === undefined) {
+        return reply.code(404).send({ error: "that game is not followed" });
+      }
+      if (!game.skipped.includes(campaignId)) {
+        return reply.code(404).send({ error: "that campaign is not skipped" });
+      }
+      saveConfig(deps.configPath, {
+        ...config,
+        followedGames: config.followedGames.map((g) => (g.id === id
+          ? { ...g, skipped: g.skipped.filter((c) => c !== campaignId) }
+          : g)),
+      });
+      log.info({
+        type: EVENT.USER_GAME_UNSKIPPED,
+        msg: `"${game.name}" may subscribe to campaign ${campaignId} again`,
+        gameId: id,
+        campaignId,
+      });
+      // Quietly: the user is looking at the result. Swallowed like the
+      // follow route's -- the change is saved either way.
+      await deps.engine.pass("unskip", { quietGames: new Set([id]) }).catch(() => {});
+      return { ok: true };
+    });
+
+    /**
+     * Stops following a game. The campaign subscriptions it added stay:
+     * one may be partway collected, and each can be removed on its own.
+     */
+    instance.post("/api/followed-games/:id/remove", async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const config = loadConfig(deps.configPath);
+      const game = config.followedGames.find((g) => g.id === id);
+      if (game === undefined) {
+        return reply.code(404).send({ error: "that game is not followed" });
+      }
+      saveConfig(deps.configPath, {
+        ...config,
+        followedGames: config.followedGames.filter((g) => g.id !== id),
+      });
+      log.info({
+        type: EVENT.USER_GAME_UNFOLLOWED,
+        msg: `unfollowed "${game.name}"`,
+        gameId: id,
+      });
       return { ok: true };
     });
 
