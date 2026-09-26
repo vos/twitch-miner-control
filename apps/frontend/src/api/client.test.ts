@@ -45,3 +45,15 @@ test("post sends a json body", async () => {
   expect(init.method).toBe("POST");
   expect(init.body).toBe(JSON.stringify({ password: "x" }));
 });
+
+test("a successful response whose body is cut off rejects instead of resolving empty", async () => {
+  // What a dropped connection looks like (ERR_CONTENT_LENGTH_MISMATCH): the
+  // status line arrived, the body did not. Resolving {} handed callers an
+  // object missing every field, and the streamer dialog crashed on it.
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => { throw new TypeError("network error"); },
+  })));
+  await expect(api.get("/api/history")).rejects.toThrow(/cut off/);
+});
