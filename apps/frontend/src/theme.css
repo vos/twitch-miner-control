@@ -60,3 +60,14 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Gives every titled Modal and Drawer body its top padding back.
+   Mantine zeroes it whenever the body is not the only child -- that is,
+   whenever there is a header -- which leaves the first control flush
+   against the title bar's underside. Half the body padding: the header
+   already brings its own. Same specificity as Mantine's rule, and this
+   sheet loads after Mantine's, so it wins without !important. */
+.mantine-Modal-body:where(:not(:only-child)),
+.mantine-Drawer-body:where(:not(:only-child)) {
+  padding-top: calc(var(--mb-padding, var(--mantine-spacing-md)) / 2);
+}

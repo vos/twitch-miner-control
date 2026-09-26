@@ -182,7 +182,7 @@ export function NotificationBell({ onOpenLink, onOpenSettings }: {
               <Drawer.CloseButton />
             </Group>
           </Drawer.Header>
-          <Drawer.Body className={classes.body}>
+          <Drawer.Body>
             <Stack gap="xs">
               {confirmClear && items.length > 0 && (
                 <>

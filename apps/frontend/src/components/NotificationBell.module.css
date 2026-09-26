@@ -1,11 +1,3 @@
-/* Gives the body back its top padding. Mantine zeroes it on any drawer
-   with a title (`.mantine-Drawer-body:where(:not(:only-child))`), which
-   left the first card's border touching the header's underside. Half the
-   body padding, as in StreamerDetailModal: the header brings its own. */
-.body {
-  padding-top: calc(var(--mantine-spacing-md) / 2);
-}
-
 .row {
   position: relative;
 }

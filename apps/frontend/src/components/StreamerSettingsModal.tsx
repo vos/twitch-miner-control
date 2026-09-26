@@ -58,9 +58,9 @@ export function StreamerSettingsModal(props: StreamerSettingsModalProps) {
 
   return (
     <Modal opened={opened} onClose={onClose} title={`Settings — ${username}`} size="lg">
-      {/* The modal header sits directly on the tab row otherwise -- the
-          title and the tabs read as one block. */}
-      <Tabs defaultValue="general" mt="md">
+      {/* Twice the gap every titled modal gets (theme.css): a bare tab row
+          under the title still read as one block with it. */}
+      <Tabs defaultValue="general" mt="xs">
         <Tabs.List>
           <Tabs.Tab value="general">General</Tabs.Tab>
           <Tabs.Tab value="points">Points &amp; chat</Tabs.Tab>

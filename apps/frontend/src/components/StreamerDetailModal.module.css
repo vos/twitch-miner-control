@@ -1,21 +1,3 @@
-/* Gives the body back its top padding.
-
-   Mantine zeroes it whenever the body is not an only child -- which is
-   every modal that HAS a title:
-
-     .mantine-Modal-body:where(:not(:only-child)) { padding-top: 0 }
-
-   That is right for a modal whose body opens with a form control
-   carrying its own label spacing, and wrong here: the balance is a bare
-   line of text, so it landed flush against the sticky header's underside
-   with only the header's own padding between them. Half the body padding
-   rather than all of it -- the header already contributes its own, and a
-   full md on top of that opened a gap wide enough to read as a section
-   break. */
-.body {
-  padding-top: calc(var(--mantine-spacing-md) / 2);
-}
-
 /* The balance and its gain, on one line under the title. */
 .summary {
   display: flex;

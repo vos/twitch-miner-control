@@ -77,7 +77,7 @@ export function StreamerDetailModal({ streamer, opened, onClose, animateBalance 
         // On the Activity view the feed owns the scrolling, so the
         // modal itself must not also scroll -- see the CSS.
         content: showActivity ? classes.contentActivity : undefined,
-        body: showActivity ? `${classes.body} ${classes.bodyActivity}` : classes.body,
+        body: showActivity ? classes.bodyActivity : undefined,
       }}
       title={
         <Group gap="sm" wrap="nowrap" data-testid="detail-title">
