@@ -1,5 +1,5 @@
-import { ActionIcon, Alert, Anchor, Text, Tooltip, UnstyledButton } from "@mantine/core";
-import { IconGift, IconRefresh } from "@tabler/icons-react";
+import { ActionIcon, Alert, Anchor, Button, Text, Tooltip, UnstyledButton } from "@mantine/core";
+import { IconGift, IconPlus, IconRefresh } from "@tabler/icons-react";
 import { useState } from "react";
 import { api } from "../api/client.js";
 import { giftEnds, giftFrom, giftTitle } from "../lib/giftSubs.js";
@@ -20,11 +20,17 @@ import type { GiftSub } from "../api/useLiveState.js";
  * the backend's GiftSubsCache). The new list arrives through the live
  * state frame; the response here is read only for its error.
  */
-export function GiftSubsSection({ gifts, roster, onOpenStreamer }: {
+export function GiftSubsSection({ gifts, roster, onOpenStreamer, onAddStreamer }: {
   gifts: GiftSub[];
   /** Logins on the dashboard, whose rows open the streamer detail. */
   roster: string[];
   onOpenStreamer?: (login: string) => void;
+  /**
+   * Starts adding a gifted channel that is not on the dashboard. The
+   * caller only prefills the add box: adding goes through Apply, which
+   * restarts the miner, and that stays the user's own step.
+   */
+  onAddStreamer?: (login: string) => void;
 }) {
   const [open, toggleOpen] = useLocalToggle("dashboard.gifts", true);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,12 +90,35 @@ export function GiftSubsSection({ gifts, roster, onOpenStreamer }: {
                     {giftTitle(g)} · from {giftFrom(g) ?? "an anonymous gifter"}
                   </Text>
                 </div>
+                {onAddStreamer && g.target !== null && !onDashboard.has(g.target.login) && (
+                  <AddButton target={g.target} onAdd={onAddStreamer} />
+                )}
                 <Text size="xs" c="dimmed" className={classes.ends}>{giftEnds(g, now)}</Text>
               </div>
             ))}
           </div>
         ))}
     </>
+  );
+}
+
+/** A gift usually multiplies the channel's points, which is the reason to mine it. */
+function AddButton({ target, onAdd }: {
+  target: NonNullable<GiftSub["target"]>;
+  onAdd: (login: string) => void;
+}) {
+  return (
+    <Tooltip label="Add to the dashboard: a gift sub usually multiplies channel points here">
+      <Button
+        variant="light" size="compact-xs"
+        leftSection={<IconPlus size={12} />}
+        className={classes.add}
+        aria-label={`Add ${target.displayName} to the dashboard`}
+        onClick={() => onAdd(target.login)}
+      >
+        Add
+      </Button>
+    </Tooltip>
   );
 }
 

@@ -456,6 +456,7 @@ const digest = new DigestScheduler({
   notifier,
   store: notifyStore,
   summary: (day) => buildDaySummary({ history, daily: dailyPoints, streamers }, day, Date.now()),
+  giftSubs: () => giftSubs.active(),
 });
 digest.start();
 

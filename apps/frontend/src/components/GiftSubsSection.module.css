@@ -46,6 +46,10 @@
   white-space: nowrap;
 }
 
+.add {
+  flex-shrink: 0;
+}
+
 /* A figure, so it keeps its width and lines up down the list. */
 .ends {
   flex-shrink: 0;

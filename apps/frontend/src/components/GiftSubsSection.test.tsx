@@ -35,9 +35,12 @@ const respond = (body: unknown, ok = true) => fetchMock.mockResolvedValueOnce({
   ok, status: ok ? 200 : 500, json: async () => body,
 });
 
-const view = (gifts: GiftSub[], onOpenStreamer = vi.fn()) => {
+const view = (gifts: GiftSub[], onOpenStreamer = vi.fn(), onAddStreamer = vi.fn()) => {
   renderApp(
-    <GiftSubsSection gifts={gifts} roster={["kdrkitten"]} onOpenStreamer={onOpenStreamer} />,
+    <GiftSubsSection
+      gifts={gifts} roster={["kdrkitten"]}
+      onOpenStreamer={onOpenStreamer} onAddStreamer={onAddStreamer}
+    />,
   );
   return onOpenStreamer;
 };
@@ -116,4 +119,21 @@ test("collapses from its heading", async () => {
   expect(screen.queryByTestId("gift-row")).not.toBeInTheDocument();
   // The refresh button is beside the toggle, not inside it.
   expect(screen.getByRole("button", { name: /refresh gift subs/i })).toBeInTheDocument();
+});
+
+test("offers to add a gifted channel that is not on the dashboard", async () => {
+  const onAdd = vi.fn();
+  view([elsewhere], vi.fn(), onAdd);
+  await userEvent.click(screen.getByRole("button", { name: "Add Other to the dashboard" }));
+  expect(onAdd).toHaveBeenCalledWith("other");
+});
+
+test("offers no add for a channel already on the dashboard", () => {
+  view([kitten]);
+  expect(screen.queryByRole("button", { name: /to the dashboard/ })).not.toBeInTheDocument();
+});
+
+test("offers no add for a gift with no channel", () => {
+  view([turbo]);
+  expect(screen.queryByRole("button", { name: /to the dashboard/ })).not.toBeInTheDocument();
 });

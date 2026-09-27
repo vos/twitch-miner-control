@@ -46,11 +46,13 @@ const SORT_INPUT_ID = "dashboard-sort";
  */
 const CARD_MIN_WIDTH = 320;
 
-export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
+export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer, onAddStreamer }: {
   loginRequired?: boolean;
   onSignIn?: () => void;
   /** Opens a streamer's detail dialog, which the shell hosts. */
   onOpenStreamer?: (login: string) => void;
+  /** Starts adding a channel, from a gift sub the roster does not hold. */
+  onAddStreamer?: (login: string) => void;
 } = {}) {
   const { snapshot, loadError } = useLiveState();
   // Decided once here and handed down, so the cards stay plain components.
@@ -201,6 +203,7 @@ export function Dashboard({ loginRequired = false, onSignIn, onOpenStreamer }: {
         gifts={snapshot.giftSubs ?? []}
         roster={snapshot.streamers.map((s) => s.username)}
         onOpenStreamer={openDetail}
+        onAddStreamer={onAddStreamer}
       />
     </>
   );

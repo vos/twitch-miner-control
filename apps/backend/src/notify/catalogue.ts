@@ -24,6 +24,7 @@ export const NOTIFY_KIND = {
   RAID_JOINED: "raid.joined",
   CHAT_MENTION: "chat.mention",
   GIFT_RECEIVED: "gift.received",
+  GIFT_ENDING_SOON: "gift.endingSoon",
   DIGEST_DAILY: "digest.daily",
   /** "Send test" on the Notifications screen. Never offered as a preference. */
   TEST: "test",
@@ -121,6 +122,9 @@ export const CATALOGUE: readonly KindInfo[] = [
   { kind: NOTIFY_KIND.GIFT_RECEIVED, group: "points", label: "Gift sub received",
     description: "Someone gifted you a sub.",
     defaultOn: true, inbox: true, urgency: "normal", ttlSeconds: DAY_S, batch: false },
+  { kind: NOTIFY_KIND.GIFT_ENDING_SOON, group: "points", label: "Gift sub ending soon",
+    description: "A gift sub ends within 3 days. Sent at your digest time, once per gift.",
+    defaultOn: true, inbox: false, urgency: "low", ttlSeconds: 12 * HOUR_S, batch: false },
   { kind: NOTIFY_KIND.DIGEST_DAILY, group: "digest", label: "Daily digest",
     description: "Yesterday's points, drops and hours in one notification.",
     defaultOn: false, inbox: false, urgency: "low", ttlSeconds: 12 * HOUR_S, batch: false },

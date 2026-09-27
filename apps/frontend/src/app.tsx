@@ -46,6 +46,7 @@ const SCREENS = {
         loginRequired={p.loginRequired}
         onSignIn={() => p.navigate("account")}
         onOpenStreamer={p.openStreamer}
+        onAddStreamer={(login) => p.navigate("streamers", { prefill: login })}
       />
     ),
   },

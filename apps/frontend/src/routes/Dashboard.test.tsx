@@ -413,3 +413,18 @@ test("survives a snapshot with no gift list at all", async () => {
   view();
   expect(await screen.findByTestId("gifts-heading")).toHaveTextContent("GIFT SUBS · 0");
 });
+
+test("a gift row's add hands the channel to the caller", async () => {
+  stub({
+    ...snapshot,
+    giftSubs: [{
+      id: "g1", tier: 1, product: "Other Sub", gifter: null,
+      target: { channelId: "9", login: "other", displayName: "Other" },
+      endsAt: Date.now() + 5 * 86_400_000,
+    }],
+  });
+  const onAdd = vi.fn();
+  renderLive(<Dashboard onAddStreamer={onAdd} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Add Other to the dashboard" }));
+  expect(onAdd).toHaveBeenCalledWith("other");
+});
