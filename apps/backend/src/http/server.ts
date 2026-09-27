@@ -32,6 +32,7 @@ import { buildCalendar } from "../insights/calendar.js";
 import { buildRecap } from "../insights/recap.js";
 import { gainWindow } from "../state/gains.js";
 import type { InventoryCache } from "../state/inventory.js";
+import type { GiftSubsCache } from "../state/giftSubs.js";
 import type { StateService } from "../state/service.js";
 import { clip, intersect, total } from "../state/spans.js";
 import { registerAuth } from "./auth.js";
@@ -204,6 +205,8 @@ export interface ServerDeps {
   catalogue: CampaignCatalogue;
   /** Viewer drop progress, on the ten-minute clock. */
   inventory: InventoryCache;
+  /** The account's gift subs; refetched on demand, never on a timer. */
+  giftSubs: Pick<GiftSubsCache, "refresh">;
   /** Resolves subscriptions into channels; driven on its own timer. */
   engine: Pick<SubscriptionEngine, "pass">;
   /** Twitch's category search and lookup, for following games. */
@@ -622,6 +625,17 @@ export function buildServer(deps: ServerDeps): AppServer {
         });
       },
     );
+
+    /**
+     * The dashboard's gift list refresh button.
+     *
+     * The only way to pick up a gift the miner never reports: one for a
+     * channel it does not watch, or one with no channel at all. A failed
+     * fetch still answers 200 with the list we hold and the error beside
+     * it, since that list is still the best answer there is. The new list
+     * also reaches every open dashboard through the state frame.
+     */
+    instance.post("/api/gift-subs/refresh", async () => deps.giftSubs.refresh());
 
     /**
      * The subscriptions, each with the channels it currently owns.

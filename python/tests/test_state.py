@@ -1379,3 +1379,75 @@ def test_inventory_earned_failure_on_an_expired_session_reports_auth():
     out = h.handle({"id": 1, "op": "inventory"})
     assert out["ok"] is False
     assert out["code"] == "AUTH"
+
+
+def _gift(gid="g1", tier=1, gifter=("123", "badbeard95", "BadBeard95"),
+          target=("42", "kdrkitten", "KDRkitten"), product="KDRkitten Sub",
+          ends=datetime.datetime(2026, 10, 6, 14, 17, 21, tzinfo=datetime.timezone.utc)):
+    """A real upstream GiftSub, so the serialiser is held to the classes the
+    miner's parser actually produces rather than to a lookalike."""
+    from TwitchChannelPointsMiner.classes.entities.GiftSub import GiftSub, Gifter, Target
+    return GiftSub(
+        _id=gid,
+        target=Target(*target) if target is not None else None,
+        gifter=Gifter(*gifter) if gifter is not None else None,
+        tier=tier,
+        display_name=product,
+        ends_at=ends,
+    )
+
+
+def _gift_handler(gifts=None, error=None):
+    h = handler()
+
+    def gift_subs(limit=100):
+        if error is not None:
+            raise error
+        return list(gifts or [])
+
+    h.session.gql.gift_subs = gift_subs
+    return h
+
+
+def test_gift_subs_reports_a_channel_gift():
+    h = _gift_handler([_gift()])
+    out = h.handle({"id": 1, "op": "gift_subs"})
+    assert out["ok"] is True
+    assert out["data"]["giftSubs"] == [{
+        "id": "g1",
+        "tier": 1,
+        "product": "KDRkitten Sub",
+        "gifter": {"login": "badbeard95", "displayName": "BadBeard95"},
+        "target": {"channelId": "42", "login": "kdrkitten", "displayName": "KDRkitten"},
+        "endsAt": 1791296241000,
+    }]
+
+
+def test_gift_subs_reports_an_anonymous_gifter_as_null():
+    h = _gift_handler([_gift(gifter=None)])
+    out = h.handle({"id": 1, "op": "gift_subs"})
+    assert out["data"]["giftSubs"][0]["gifter"] is None
+
+
+def test_gift_subs_keeps_a_non_channel_gift_with_a_null_target():
+    """Turbo has no channel. It still belongs in the account-wide list."""
+    h = _gift_handler([_gift(target=None, tier="Custom", product="Twitch Turbo")])
+    out = h.handle({"id": 1, "op": "gift_subs"})
+    gift = out["data"]["giftSubs"][0]
+    assert gift["target"] is None
+    assert gift["tier"] == "Custom"
+    assert gift["product"] == "Twitch Turbo"
+
+
+def test_gift_subs_is_json_serialisable():
+    h = _gift_handler([_gift()])
+    json.dumps(h.handle({"id": 1, "op": "gift_subs"}))
+
+
+def test_gift_subs_propagates_a_failure_rather_than_reporting_none():
+    """An empty list says there are no gifts, which a failed query cannot
+    know -- the backend keeps its last list on an error instead."""
+    h = _gift_handler(error=RuntimeError("gql exploded"))
+    out = h.handle({"id": 1, "op": "gift_subs"})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"

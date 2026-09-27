@@ -7,6 +7,7 @@ import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
 import type { ProfileRowData } from "./profiles.js";
 import type { DropProgress, DropsTarget } from "./drops.js";
+import type { GiftSub, GiftSubsCache } from "./giftSubs.js";
 import { roundViewers } from "./viewers.js";
 
 export interface StreamerState {
@@ -161,6 +162,8 @@ export interface StreamerState {
    * every poll and would wake every browser for nothing.
    */
   viewers: number | null;
+  /** The active gift sub the account holds for this channel, or null. */
+  giftSub: GiftSub | null;
 }
 
 /** What the Python helper reports, before this service derives the rest. */
@@ -170,7 +173,7 @@ export type RawStreamerState = Omit<
   | "liveSince" | "lastLive" | "lastActivity" | "watching"
   | "online24h" | "mined24h" | "minedTotal" | "pointsPerHour"
   | "game" | "streamTitle" | "viewers" | "drop" | "ownedByLabel"
-  | "ownedByGame"
+  | "ownedByGame" | "giftSub"
 > & {
   /** Twitch's stream createdAt in epoch ms; null when offline. */
   streamStartedAt: number | null;
@@ -249,6 +252,11 @@ const quantise = (ms: number) => Math.floor(ms / QUANTUM_MS) * QUANTUM_MS;
 
 export interface StateSnapshot {
   streamers: StreamerState[];
+  /**
+   * Every active gift sub on the account, including ones for channels
+   * off the roster and ones with no channel at all (Turbo).
+   */
+  giftSubs: GiftSub[];
   lastUpdated: number | null;
   stale: boolean;
   error: string | null;
@@ -326,6 +334,11 @@ export interface StateServiceDeps {
     resolve(targets: DropsTarget[]): Promise<Map<string, DropProgress>>;
   };
   /**
+   * The account's gift subs, fetched on their own triggers (see
+   * GiftSubsCache). Absent, no card carries a gift and the list is empty.
+   */
+  giftSubs?: Pick<GiftSubsCache, "active" | "forChannel" | "on">;
+  /**
    * Whether anyone is currently watching the dashboard.
    *
    * This process spends most of its life running the miner with no
@@ -397,9 +410,29 @@ export class StateService extends EventEmitter {
    * backend that boots never announces a stream that ended while it was down.
    */
   private liveLogins: Set<string> | null = null;
+  /** The gift list as of the last derive, so it changes in step with the cards. */
+  private gifts: GiftSub[] = [];
 
   constructor(private readonly deps: StateServiceDeps) {
     super();
+    // A new gift is pushed onto the cards already held rather than
+    // waiting for, or forcing, a full state pass. Not before the first
+    // paint: that frame would carry an empty roster, which the dashboard
+    // reads as a finished answer.
+    deps.giftSubs?.on("change", () => {
+      if (this.undrawn) return;
+      this.gifts = this.activeGifts();
+      this.streamers = this.streamers.map((s) => ({ ...s, giftSub: this.giftFor(s) }));
+      this.emit("change", this.snapshot());
+    });
+  }
+
+  private activeGifts(): GiftSub[] {
+    return this.deps.giftSubs?.active() ?? [];
+  }
+
+  private giftFor(s: { channelId: string | null; username: string }): GiftSub | null {
+    return this.deps.giftSubs?.forChannel(s.channelId, s.username) ?? null;
   }
 
   private now(): number {
@@ -415,6 +448,7 @@ export class StateService extends EventEmitter {
     // the snapshot stale, independent of the age check below.
     return {
       streamers: this.streamers,
+      giftSubs: this.gifts,
       lastUpdated: this.lastUpdated,
       stale: this.lastError !== null || this.sessionDead || age > staleAfter,
       error: this.lastError,
@@ -534,7 +568,9 @@ export class StateService extends EventEmitter {
       const data = await this.deps.client.request<{ streamers: RawStreamerState[] }>(
         "state", { streamers: usernames },
       );
-      const before = JSON.stringify(this.streamers);
+      // The gift list rides along so a gift expiring between polls,
+      // which the miner sends no event for, still reaches the dashboard.
+      const before = JSON.stringify([this.streamers, this.gifts]);
       const previous = new Map(this.streamers.map((s) => [s.username, s]));
       const at = this.now();
       this.lastUpdated = at;
@@ -648,10 +684,11 @@ export class StateService extends EventEmitter {
       this.streamers = data.streamers.map(
         (s) => this.deriveOne(s, at, dayAgo, profiles, drops),
       );
+      this.gifts = this.activeGifts();
 
       this.undrawn = false;
 
-      if (before !== JSON.stringify(this.streamers)) {
+      if (before !== JSON.stringify([this.streamers, this.gifts])) {
         this.emit("change", this.snapshot());
       }
     } catch (cause) {
@@ -749,6 +786,7 @@ export class StateService extends EventEmitter {
       // Damped so a count that drifts every poll does not push an SSE
       // frame to every browser -- see roundViewers.
       viewers: roundViewers(profile?.viewers ?? null),
+      giftSub: this.giftFor(s),
       liveSince: s.streamStartedAt,
       lastLive: this.deps.history.lastLive(s.username),
       lastActivity: this.deps.history.lastActivity(s.username),
@@ -809,6 +847,7 @@ export class StateService extends EventEmitter {
   private paintFrom(roster: string[]): boolean {
     if (!this.undrawn || roster.length === 0) return false;
     this.streamers = this.deriveLocal(roster);
+    this.gifts = this.activeGifts();
     this.emit("change", this.snapshot());
     return true;
   }

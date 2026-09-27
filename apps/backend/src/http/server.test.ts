@@ -13,6 +13,7 @@ import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
 import { CampaignCatalogue, type Campaign } from "../state/campaignCatalogue.js";
 import { InventoryCache } from "../state/inventory.js";
+import { GiftSubsCache } from "../state/giftSubs.js";
 import { StateService } from "../state/service.js";
 import type { NotifyRouteDeps } from "../notify/routes.js";
 import { buildServer } from "./server.js";
@@ -100,6 +101,7 @@ async function make(options: {
     path: join(dir, "campaigns.json"),
   });
   const inventory = new InventoryCache({ client: client as never });
+  const giftSubs = new GiftSubsCache({ client: client as never });
   const engine = { pass: vi.fn(async () => {}) };
   const games = {
     find: vi.fn(async (_q: string): Promise<TwitchGame[]> => []),
@@ -125,6 +127,7 @@ async function make(options: {
     cookiesDir,
     catalogue,
     inventory,
+    giftSubs,
     engine: engine as never,
     games,
     pendingRestart: pending as never,
@@ -141,7 +144,7 @@ async function make(options: {
   return {
     app, supervisor, client, history, streamers, dailyPoints, state, loginRunner, loginStatus, configPath,
     cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held, games,
-    cookie: login.cookies[0].value,
+    giftSubs, cookie: login.cookies[0].value,
   };
 }
 
@@ -908,6 +911,7 @@ async function makeLive() {
       source: async () => [], path: join(dir, "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: helper as never }),
+    giftSubs: new GiftSubsCache({ client: helper as never }),
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
     engine: { pass: vi.fn(async () => {}) } as never,
@@ -1300,6 +1304,7 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
       path: join(mkdtempSync(join(tmpdir(), "srv-")), "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: ctx.client as never }),
+    giftSubs: new GiftSubsCache({ client: ctx.client as never }),
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
     engine: { pass: vi.fn(async () => {}) } as never,
@@ -2268,4 +2273,40 @@ test("unskip answers 404 for a game not followed or a campaign not skipped", asy
   });
   expect(bad.statusCode).toBe(400);
   expect(ctx.engine.pass).not.toHaveBeenCalled();
+});
+
+const kittenGift = {
+  id: "g1", tier: 1, product: "KDRkitten Sub",
+  gifter: { login: "badbeard95", displayName: "BadBeard95" },
+  target: { channelId: "42", login: "kdrkitten", displayName: "KDRkitten" },
+  endsAt: Date.now() + 86_400_000,
+};
+
+test("POST /api/gift-subs/refresh refetches and returns the gift list", async () => {
+  ctx.helperResponses["gift_subs"] = { giftSubs: [kittenGift] };
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/gift-subs/refresh", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ giftSubs: [kittenGift], error: null });
+  expect(ctx.client.request).toHaveBeenCalledWith("gift_subs");
+});
+
+test("POST /api/gift-subs/refresh reports a failure beside the last list", async () => {
+  // A 200 rather than a 5xx: the list it returns is still the best
+  // answer there is, and the button shows the error next to it.
+  ctx.helperResponses["gift_subs"] = { giftSubs: [kittenGift] };
+  await ctx.giftSubs.refresh();
+  ctx.helperResponses["gift_subs"] = new Error("gql exploded");
+  const res = await ctx.app.inject({
+    method: "POST", url: "/api/gift-subs/refresh", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().giftSubs).toEqual([kittenGift]);
+  expect(res.json().error).toMatch(/try again/i);
+});
+
+test("POST /api/gift-subs/refresh requires a session", async () => {
+  const res = await ctx.app.inject({ method: "POST", url: "/api/gift-subs/refresh" });
+  expect(res.statusCode).toBe(401);
 });

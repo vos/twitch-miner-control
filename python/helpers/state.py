@@ -334,6 +334,35 @@ def _directory_channel(edge) -> dict | None:
     }
 
 
+def _gift_sub(gift) -> dict:
+    """One upstream GiftSub as plain JSON.
+
+    Both people are optional on Twitch's side: an anonymous gift has no
+    gifter, and a non-channel gift (Turbo) has no target channel. The
+    account-wide list keeps both, so neither may be treated as required.
+    """
+    gifter = gift.gifter
+    target = gift.target
+    return {
+        "id": gift.id,
+        # 1/2/3, or "Custom" where the product tier is not a number.
+        "tier": gift.tier,
+        "product": gift.display_name,
+        "gifter": (
+            {"login": gifter.username, "displayName": gifter.display_name}
+            if gifter is not None
+            else None
+        ),
+        "target": (
+            {"channelId": target.id, "login": target.username,
+             "displayName": target.display_name}
+            if target is not None
+            else None
+        ),
+        "endsAt": int(gift.ends_at.timestamp() * 1000),
+    }
+
+
 class Handler:
     def __init__(self, session):
         self.session = session
@@ -375,6 +404,12 @@ class Handler:
                 return {"id": req_id, "ok": True,
                         "data": {"inventory": self._inventory(),
                                  "earned": self._earned()}}
+            if op == "gift_subs":
+                self._ensure_token()
+                return {"id": req_id, "ok": True,
+                        "data": {"giftSubs": [
+                            _gift_sub(g) for g in self.session.gql.gift_subs()
+                        ]}}
             if op == "directory":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,

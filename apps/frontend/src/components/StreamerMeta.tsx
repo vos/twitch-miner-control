@@ -1,6 +1,7 @@
 import { Badge, Group, Progress, Text, Tooltip, UnstyledButton } from "@mantine/core";
 import { useState } from "react";
 import { DropBadge } from "./DropBadge.js";
+import { GiftBadge } from "./GiftBadge.js";
 import { OwnedBadge } from "./OwnedBadge.js";
 import classes from "./StreamerMeta.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
@@ -31,6 +32,7 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   // to a property access that takes the whole dashboard down.
   const goal = s.goal ?? null;
   const drop = s.drop ?? null;
+  const giftSub = s.giftSub ?? null;
   const multiplier = s.multiplier ?? null;
   const claimPending = s.claimPending ?? false;
   const watching = s.watching ?? false;
@@ -85,6 +87,9 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
         </Tooltip>
       )}
       {drop !== null && <DropBadge drop={drop} />}
+      {/* Kept on an offline card, like the multiplier: a gift is a
+          standing property of the channel, not of the stream. */}
+      {giftSub !== null && <GiftBadge gift={giftSub} />}
       {/* Why this channel is on the dashboard at all, which is the
           question a name you do not recognise actually raises. Sits
           beside the drop badge rather than replacing it: that one says
@@ -104,7 +109,8 @@ export function StreamerMeta({ streamer: s }: { streamer: StreamerState }) {
   // An empty strip still costs a row gap on every card that has none of
   // these, so the whole thing is omitted rather than rendered blank.
   const hasBadges = multiplier !== null || claimPending || watching
-    || drop !== null || campaign !== null || s.pointsEnabled === false;
+    || drop !== null || giftSub !== null || campaign !== null
+    || s.pointsEnabled === false;
   if (!hasBadges && goal === null) return null;
 
   return (

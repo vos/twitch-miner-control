@@ -33,6 +33,7 @@ import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
 import { InventoryCache } from "./state/inventory.js";
+import { GiftSubsCache, watchGiftSubs } from "./state/giftSubs.js";
 import type { OwnerLabel } from "./state/service.js";
 import { StateService } from "./state/service.js";
 import { resolveVersion } from "./config/version.js";
@@ -317,6 +318,8 @@ const dropsCache = new DropsCache({
   eligible: (login) => dropsEligible(loadConfig(configPath), login),
 });
 
+const giftSubs = new GiftSubsCache({ client: helper });
+
 /**
  * Set once buildServer has run, below. The state service is constructed
  * first -- the server takes it as a dependency -- so the connection count
@@ -350,6 +353,7 @@ const stateService = new StateService({
   ownerLabel: subscriptionLabelFor,
   profiles: profileCache,
   drops: dropsCache,
+  giftSubs,
   // This process normally runs for days with no browser attached. A
   // refresh with nobody watching still writes the full history (points,
   // sessions, the miner heartbeat) and then stops before the profile and
@@ -442,6 +446,7 @@ let minerStartHeld = false;
 watchHealth({ notifier, supervisor, loginStatus, updates: updateChecker });
 watchStreams({ notifier, stateService });
 watchDoorbell({ notifier, stateService });
+watchGiftSubs({ giftSubs, supervisor, stateService });
 const campaignWatcher = new CampaignWatcher({
   notifier,
   catalogue,
@@ -458,7 +463,7 @@ const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers, dailyPoints,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
-  catalogue, inventory: inventoryCache,
+  catalogue, inventory: inventoryCache, giftSubs,
   engine, pendingRestart, games: twitchGames(),
   notify: {
     store: notifyStore,
@@ -481,6 +486,9 @@ server = app;
 // next poll on, a refresh with nobody watching writes history and skips
 // the display half.
 void stateService.start().finally(() => { booting = false; });
+// Not left to the miner's start, which also refetches: that waits on the
+// boot subscription pass below, and may not happen at all.
+void giftSubs.refresh();
 // The boot pass runs before the miner, so the miner starts on channels
 // that are already current and no restart is needed to apply them; the
 // timer starts after both. Not awaited: the pass can take seconds, and

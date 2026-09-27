@@ -1,0 +1,21 @@
+/* Button reset as on DropBadge; the family only, never `font: inherit`. */
+.badge {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+/* Sized to the badge's own cap height so it sits level with the text
+   badges beside it rather than stretching the row. */
+.icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.detailIcon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--mantine-color-pink-5);
+}

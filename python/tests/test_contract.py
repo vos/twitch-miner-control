@@ -87,6 +87,7 @@ def test_client_session_and_gql_construction():
     assert params(GQL.with_is_stream_live_query) == ["self", "channel_id"]
     assert params(GQL.get_id_from_login) == ["self", "streamer_username"]
     assert params(GQL.channel_follows) == ["self", "limit", "order"]
+    assert params(GQL.gift_subs) == ["self", "limit"]
     assert params(GQL.post_gql_request_batch) == ["self", "operation_name", "request_json", "parser"]
 
 

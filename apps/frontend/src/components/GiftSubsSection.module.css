@@ -1,0 +1,68 @@
+/* One surface for the whole list, rows ruled inside it: a card per gift
+   would read as a third streamer grid. */
+.list {
+  border: 1px solid var(--tw-border);
+  border-radius: 8px;
+  background: var(--tw-surface);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  min-width: 0;
+}
+
+.row + .row {
+  border-top: 1px solid var(--tw-border);
+}
+
+.icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: var(--mantine-color-pink-5);
+}
+
+/* The one column allowed to lose width. */
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  display: block;
+  max-width: 100%;
+}
+
+.name:hover {
+  text-decoration: underline;
+}
+
+.sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A figure, so it keeps its width and lines up down the list. */
+.ends {
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* At the dashboard's narrowest the end date moves under the name rather
+   than squeezing it to nothing. */
+@media (max-width: 480px) {
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .ends {
+    flex-basis: 100%;
+    text-align: left;
+    padding-left: 30px;
+  }
+}

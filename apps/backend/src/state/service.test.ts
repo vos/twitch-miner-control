@@ -3,6 +3,7 @@ import { History } from "../db/history.js";
 import { Streamers } from "../db/streamers.js";
 import { openDb } from "../db/schema.js";
 import { StateService } from "./service.js";
+import { GiftSubsCache, type GiftSub } from "./giftSubs.js";
 
 let history: History;
 let streamers: Streamers;
@@ -1469,4 +1470,91 @@ test("an owning campaign with no known game reports a null game", () => {
     ownerLabel: () => ({ label: "Rust Twitch Drops", game: null }),
   });
   expect(service.deriveLocal(["alpha"])[0].ownedByGame).toBeNull();
+});
+
+const kittenGift = (endsAt: number): GiftSub => ({
+  id: "g1", tier: 1, product: "Alpha Sub",
+  gifter: { login: "badbeard95", displayName: "BadBeard95" },
+  target: { channelId: "42", login: "alpha", displayName: "Alpha" },
+  endsAt,
+});
+const turboGift = (endsAt: number): GiftSub => ({
+  id: "g2", tier: "Custom", product: "Twitch Turbo", gifter: null, target: null, endsAt,
+});
+
+/** A service whose gift list comes from a real cache behind a stub op. */
+async function withGifts(initial: GiftSub[], responses: unknown[]) {
+  let gifts = initial;
+  const giftSubs = new GiftSubsCache({
+    client: { request: vi.fn(async () => ({ giftSubs: gifts })) } as never,
+    now: () => clock,
+  });
+  await giftSubs.refresh();
+  const queue = [...responses];
+  const service = new StateService({
+    client: { request: vi.fn(async () => queue.shift()) } as never,
+    history,
+    streamers,
+    getStreamers: () => ["alpha"],
+    giftSubs,
+    now: () => clock,
+  });
+  const setGifts = (next: GiftSub[]) => { gifts = next; };
+  return { service, giftSubs, setGifts };
+}
+
+test("the snapshot carries every active gift, channel or not", async () => {
+  const { service } = await withGifts(
+    [kittenGift(clock + 1000), turboGift(clock + 1000)], [alpha(100)],
+  );
+  await service.refresh();
+  expect(service.snapshot().giftSubs.map((g) => g.id)).toEqual(["g1", "g2"]);
+});
+
+test("each card carries the gift for its own channel", async () => {
+  const { service } = await withGifts([kittenGift(clock + 1000)], [alpha(100)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].giftSub?.id).toBe("g1");
+});
+
+test("a card with no gift reports null", async () => {
+  const { service } = await withGifts([turboGift(clock + 1000)], [alpha(100)]);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].giftSub).toBeNull();
+});
+
+test("a changed gift list is pushed without a state pass", async () => {
+  // A new gift must reach an open dashboard at once, not on the next
+  // 60s tick -- and must not cost a per-streamer GQL loop to get there.
+  const { service, giftSubs, setGifts } = await withGifts([], [alpha(100)]);
+  await service.refresh();
+  const frames: unknown[] = [];
+  service.on("change", (s) => frames.push(s));
+  setGifts([kittenGift(clock + 1000)]);
+  await giftSubs.refresh();
+  expect(frames).toHaveLength(1);
+  expect(service.snapshot().streamers[0].giftSub?.id).toBe("g1");
+});
+
+test("a changed gift list is not pushed before the first paint", async () => {
+  // A frame here would carry an empty roster, which the dashboard reads
+  // as a finished answer rather than "not loaded yet".
+  const { service, giftSubs, setGifts } = await withGifts([], []);
+  const frames: unknown[] = [];
+  service.on("change", (s) => frames.push(s));
+  setGifts([kittenGift(clock + 1000)]);
+  await giftSubs.refresh();
+  expect(frames).toHaveLength(0);
+});
+
+test("a gift expiring between polls is pushed by the next poll", async () => {
+  const { service } = await withGifts([kittenGift(clock + 1000)], [alpha(100), alpha(100)]);
+  await service.refresh();
+  const frames: unknown[] = [];
+  service.on("change", (s) => frames.push(s));
+  clock += 1000;
+  await service.refresh();
+  expect(frames).toHaveLength(1);
+  expect(service.snapshot().streamers[0].giftSub).toBeNull();
+  expect(service.snapshot().giftSubs).toEqual([]);
 });

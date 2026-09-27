@@ -395,3 +395,21 @@ test("asks for the clicked streamer's detail dialog", async () => {
   await userEvent.click(await screen.findByTestId("streamer-beta"));
   expect(onOpenStreamer).toHaveBeenCalledWith("beta");
 });
+
+test("lists the account's gift subs below the streamer grids", async () => {
+  stub({
+    ...snapshot,
+    giftSubs: [{
+      id: "g1", tier: "Custom", product: "Twitch Turbo", gifter: null, target: null,
+      endsAt: Date.now() + 5 * 86_400_000,
+    }],
+  });
+  view();
+  expect(await screen.findByTestId("gifts-heading")).toHaveTextContent("GIFT SUBS · 1");
+  expect(screen.getByTestId("gift-row")).toHaveTextContent("Twitch Turbo");
+});
+
+test("survives a snapshot with no gift list at all", async () => {
+  view();
+  expect(await screen.findByTestId("gifts-heading")).toHaveTextContent("GIFT SUBS · 0");
+});

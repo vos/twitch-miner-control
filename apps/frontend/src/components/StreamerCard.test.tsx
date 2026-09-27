@@ -806,3 +806,69 @@ test("a card that is not animating floats nothing", () => {
   rerender(animated(1050, false));
   expect(screen.queryByTestId("gain-float")).toBeNull();
 });
+
+const giftAt = (over: Partial<NonNullable<StreamerState["giftSub"]>> = {}) => ({
+  id: "g1", tier: 1, product: "Alpha Sub",
+  gifter: { login: "badbeard95", displayName: "BadBeard95" },
+  target: { channelId: "1", login: "alpha", displayName: "Alpha" },
+  endsAt: Date.now() + 9 * 86_400_000 + 60_000,
+  ...over,
+});
+
+test("shows no gift badge when the channel has none", () => {
+  view({ giftSub: null });
+  expect(screen.queryByTestId("gift-sub")).not.toBeInTheDocument();
+});
+
+test("survives a snapshot with no gift field at all", () => {
+  view();
+  expect(screen.queryByTestId("gift-sub")).not.toBeInTheDocument();
+});
+
+test("shows a gift badge that names the gifter for assistive tech", () => {
+  view({ giftSub: giftAt() });
+  expect(screen.getByTestId("gift-sub")).toHaveAccessibleName(/gift sub from BadBeard95/i);
+});
+
+test("shows the gift badge on an offline card too", () => {
+  // A gift is a standing property of the channel, like the multiplier.
+  view({ isOnline: false, giftSub: giftAt() });
+  expect(screen.getByTestId("gift-sub")).toBeInTheDocument();
+});
+
+test("opens the gift detail on tap", async () => {
+  const user = userEvent.setup();
+  view({ giftSub: giftAt() });
+  await user.click(screen.getByTestId("gift-sub"));
+  const detail = await screen.findByTestId("gift-detail");
+  expect(detail).toHaveTextContent("Tier 1 gift sub");
+  expect(detail).toHaveTextContent("in 9d");
+});
+
+test("links the gifter to their channel", async () => {
+  const user = userEvent.setup();
+  view({ giftSub: giftAt() });
+  await user.click(screen.getByTestId("gift-sub"));
+  const link = await screen.findByRole("link", { name: "BadBeard95" });
+  expect(link).toHaveAttribute("href", "https://twitch.tv/badbeard95");
+});
+
+test("says an anonymous gift is anonymous", async () => {
+  const user = userEvent.setup();
+  view({ giftSub: giftAt({ gifter: null }) });
+  expect(screen.getByTestId("gift-sub")).toHaveAccessibleName(/anonymous/i);
+  await user.click(screen.getByTestId("gift-sub"));
+  expect(await screen.findByTestId("gift-detail")).toHaveTextContent(/anonymous gifter/i);
+});
+
+test("tapping the gift badge does not open the card's detail", async () => {
+  const user = userEvent.setup();
+  const onOpen = vi.fn();
+  render(
+    <MantineProvider>
+      <StreamerCard streamer={{ ...base, giftSub: giftAt() }} onOpen={onOpen} />
+    </MantineProvider>,
+  );
+  await user.click(screen.getByTestId("gift-sub"));
+  expect(onOpen).not.toHaveBeenCalled();
+});

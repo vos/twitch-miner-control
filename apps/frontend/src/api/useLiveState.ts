@@ -4,6 +4,21 @@ import {
 } from "react";
 import { api, UnauthorizedError } from "./client.js";
 
+/** A gifted subscription the account holds; see the backend's giftSubs.ts. */
+export interface GiftSub {
+  id: string;
+  /** 1, 2 or 3; "Custom" for a product without a numbered tier (Turbo). */
+  tier: number | string;
+  /** Twitch's product name, e.g. "KDRkitten Sub" or "Twitch Turbo". */
+  product: string;
+  /** Null for an anonymous gift. */
+  gifter: { login: string; displayName: string } | null;
+  /** Null for a gift that is not for a channel (Turbo). */
+  target: { channelId: string; login: string; displayName: string } | null;
+  /** Epoch ms. */
+  endsAt: number;
+}
+
 export interface StreamerState {
   username: string;
   displayName: string | null;
@@ -110,10 +125,18 @@ export interface StreamerState {
     /** Campaign deadline in epoch ms, or null when unknown. */
     endsAt: number | null;
   } | null;
+  /** The active gift sub the account holds for this channel, or null. */
+  giftSub?: GiftSub | null;
 }
 
 export interface StateSnapshot {
   streamers: StreamerState[];
+  /**
+   * Every active gift sub on the account, including ones for channels
+   * off the roster and ones with no channel (Turbo). Optional like the
+   * card fields: an older backend sends no such key.
+   */
+  giftSubs?: GiftSub[];
   lastUpdated: number | null;
   stale: boolean;
   error: string | null;
