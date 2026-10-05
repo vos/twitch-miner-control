@@ -106,3 +106,18 @@ def test_miner_still_refuses_to_start_without_a_username(tmp_path):
     combined = _run_miner(tmp_path, config={**CONFIG, "username": ""},
                           with_cookies=False, timeout=30)
     assert "No username" in combined, combined
+
+
+def test_miner_starts_with_a_drop_subscription_pool(tmp_path):
+    """The drop slot selector is put on the miner after construction, so
+    this is the one place that proves the miner still starts with it."""
+    config = {**CONFIG, "streamers": [
+        *CONFIG["streamers"],
+        {"username": "beta", "enabled": True, "settings": {}, "ownedBy": "s1"},
+    ]}
+    combined = _run_miner(tmp_path, config=config)
+    # Not "no Traceback": the planted cookie is fake, so Twitch answers
+    # 401s that upstream logs with tracebacks. A failed wrap raises before
+    # mine() and so never reaches the session.
+    assert "AttributeError" not in combined, combined
+    assert "Start session" in combined, combined

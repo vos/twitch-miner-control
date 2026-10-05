@@ -17,7 +17,12 @@ from TwitchChannelPointsMiner.classes.Settings import FollowersOrder
 from TwitchChannelPointsMiner.logger import LoggerSettings
 
 from helpers.doorbell import DoorbellHook
-from miner_config import build_mine_kwargs, build_streamers
+from miner_config import (
+    DropSlotSelector,
+    build_mine_kwargs,
+    build_streamers,
+    drop_pools,
+)
 
 CONFIG_PATH = os.environ.get("MINER_CONFIG", "config.json")
 DOORBELL_URL = os.environ.get("DOORBELL_URL", "http://127.0.0.1:8080/internal/doorbell")
@@ -89,6 +94,14 @@ twitch_miner = TwitchChannelPointsMiner(
         hooks=[DoorbellHook(DOORBELL_URL, DOORBELL_TOKEN)],
     ),
 )
+
+# Wrapped after construction so it sits on top of whatever chain upstream
+# built from `priority`, configured or default; mine() reads it from here.
+pools = drop_pools(cfg)
+if pools:
+    twitch_miner.streamer_selector = DropSlotSelector(
+        twitch_miner.streamer_selector, pools
+    )
 
 twitch_miner.mine(
     streamers=build_streamers(cfg),

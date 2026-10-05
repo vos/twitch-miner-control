@@ -7,6 +7,7 @@ mirrors it in Zod.
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
 from TwitchChannelPointsMiner.classes.Settings import Priority
+from TwitchChannelPointsMiner.classes.StreamerSelector import StreamerSelector
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     BetSettings,
     Condition,
@@ -20,6 +21,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.utils.AttemptStrategy import AttemptStrategy
+from TwitchChannelPointsMiner.utils.Utils import normalise_username
 
 BOOL_SETTINGS = (
     "make_predictions",
@@ -114,3 +116,62 @@ def build_mine_kwargs(cfg: dict) -> dict:
             BasicConfiguration(**weekly) if isinstance(weekly, dict) else weekly
         ),
     }
+
+
+def drop_pools(cfg: dict) -> list[list[str]]:
+    """The drop subscriptions' channels, one list per subscription.
+
+    In config order, which the backend writes in subscription rank order,
+    so the first pool is the highest-ranked campaign's.
+    """
+    pools: dict[str, list[str]] = {}
+    for s in cfg["streamers"]:
+        owner = s.get("ownedBy")
+        if owner is None or not s.get("enabled", True):
+            continue
+        pools.setdefault(owner, []).append(normalise_username(s["username"]))
+    return list(pools.values())
+
+
+class DropSlotSelector(StreamerSelector):
+    """Holds one watch slot for a drop subscription's channel.
+
+    Upstream's DROPS priority only picks a channel with a drop already
+    earned and waiting to be claimed, so a channel still earning one is
+    watched by config order alone -- after every hand-added streamer, so
+    two of those live take both slots and the campaign makes no progress.
+
+    One slot only: the other stays with the configured priorities, which
+    pick first so the slot they rank highest is the one kept.
+    """
+
+    def __init__(self, inner: StreamerSelector, pools: list[list[str]]):
+        self.inner = inner
+        self.pools = pools
+        self.pooled = {login for pool in pools for login in pool}
+
+    def select(self, streamers, max_amount: int) -> list[str]:
+        chosen = self.inner.select(streamers, max_amount)
+        by_id = {s.channel_id: s for s in streamers}
+        if any(
+            normalise_username(by_id[c].username) in self.pooled
+            for c in chosen if c in by_id
+        ):
+            return chosen
+        candidate = self._first_live(streamers)
+        if candidate is None or max_amount <= 0:
+            return chosen
+        rest = [c for c in chosen if c != candidate.channel_id]
+        return [candidate.channel_id, *rest][:max_amount]
+
+    def _first_live(self, streamers):
+        by_login = {
+            normalise_username(s.username): s
+            for s in streamers
+            if s.settings.claim_drops is True
+        }
+        for pool in self.pools:
+            for login in pool:
+                if login in by_login:
+                    return by_login[login]
+        return None

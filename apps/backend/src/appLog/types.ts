@@ -25,8 +25,13 @@ export const EVENT = {
   PASS_FAILED: "subscription.pass.failed",
   /** A pool kept because at least one member is still live. */
   POOL_KEPT: "subscription.pool.kept",
-  /** A pool rebuilt because nobody in it was live any more. */
+  /** A pool rebuilt: nobody in it was live, the user asked, or it stalled.
+   * `reason` says which. */
   POOL_REBUILT: "subscription.pool.rebuilt",
+  /** A live pool's campaign stopped progressing, so it is being replaced. */
+  SUBSCRIPTION_STALLED: "subscription.stalled",
+  /** Asking Twitch which campaigns the candidate channels run failed. */
+  CAMPAIGN_CHECK_FAILED: "subscription.campaignCheck.failed",
   /** Resolution could not answer, so the existing pool was left alone. */
   DEGRADED: "subscription.degraded",
   /** A directory lookup failed for one subscription. */

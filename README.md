@@ -190,6 +190,14 @@ and the game's future campaigns are still added. Unfollowing a game keeps
 the subscriptions it already made. The search asks Twitch directly
 and needs no login.
 
+**How a subscribed campaign is watched.** Each subscription gets a small
+pool of live channels for its game, preferring ones Twitch says are
+running that campaign. One of the miner's two watch slots always goes to
+a live channel from the highest-ranked pool; your own streamers share
+the other. A pool with a live channel is kept, unless its campaign stops
+progressing for 45 minutes, in which case those channels are swapped for
+others. **Re-resolve now** fetches a fresh pool straight away.
+
 ### Notifications
 
 The **bell** in the header is an inbox of what happened while you were
@@ -310,7 +318,8 @@ miner's console output and is not affected by this setting.
 The backend keeps its own log of what *it* decided, separate from the
 miner's. It records the things the miner's own output cannot show: which
 channels a drop subscription resolved to and why, when a pool was left
-alone because one of its streamers was still live, every automatic
+alone because one of its streamers was still live or replaced because
+its campaign stopped progressing, every automatic
 restart along with the crash count that justified it, and the actions
 taken through the UI.
 

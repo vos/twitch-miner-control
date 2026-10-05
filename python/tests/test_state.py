@@ -1451,3 +1451,43 @@ def test_gift_subs_propagates_a_failure_rather_than_reporting_none():
     out = h.handle({"id": 1, "op": "gift_subs"})
     assert out["ok"] is False
     assert out["code"] == "GQL"
+
+
+# --- channel_campaigns -----------------------------------------------------
+
+def _campaigns_handler(by_channel):
+    h = handler(balances={"alpha": 10}, live={"42": True})
+
+    def available(channel_id):
+        ids = by_channel[channel_id]
+        if isinstance(ids, Exception):
+            raise ids
+        return SimpleNamespace(ids=ids)
+
+    h.session.gql.get_available_drops = available
+    return h
+
+
+def test_channel_campaigns_lists_each_channels_campaign_ids():
+    h = _campaigns_handler({"42": ["c1", "c2"], "43": []})
+    out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42", "43"]})
+    assert out["ok"] is True
+    assert out["data"]["campaigns"] == {"42": ["c1", "c2"], "43": []}
+
+
+def test_channel_campaigns_reports_null_for_a_channel_that_failed():
+    # Null is "could not say", not "runs nothing" -- the engine must not
+    # read a failed lookup as proof a channel lacks the campaign.
+    h = _campaigns_handler({"42": RuntimeError("lookup failed"), "43": ["c1"]})
+    out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42", "43"]})
+    assert out["data"]["campaigns"] == {"42": None, "43": ["c1"]}
+
+
+def test_channel_campaigns_reports_auth_failure():
+    response = requests.Response()
+    response.status_code = 401
+    h = _campaigns_handler({"42": requests.exceptions.HTTPError(response=response)})
+    h.session.is_logged_in = lambda: False
+    out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42"]})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"

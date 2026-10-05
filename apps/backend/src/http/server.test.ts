@@ -1847,13 +1847,16 @@ test("setting the pool size of an unknown subscription is a 404", async () => {
   expect(ctx.engine.pass).not.toHaveBeenCalled();
 });
 
-test("POST /api/subscriptions/resolve runs a pass immediately", async () => {
+test("POST /api/subscriptions/resolve rebuilds every pool now", async () => {
+  // A live pool is otherwise kept, so without the rebuild the button did
+  // nothing at all while one channel was still up.
   withSubs([aSub()]);
   const res = await ctx.app.inject({
     method: "POST", url: "/api/subscriptions/resolve", cookies: auth(),
   });
   expect(res.statusCode).toBe(200);
   expect(ctx.engine.pass).toHaveBeenCalledTimes(1);
+  expect(ctx.engine.pass).toHaveBeenCalledWith("manual", { rebuild: true });
 });
 
 test("restart cancel and fire-now reach the pending restart", async () => {

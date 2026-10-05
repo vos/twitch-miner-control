@@ -415,6 +415,11 @@ class Handler:
                 return {"id": req_id, "ok": True,
                         "data": {"channels": self._directory(
                             req["game"], req["slug"], req.get("limit", 30))}}
+            if op == "channel_campaigns":
+                self._ensure_token()
+                return {"id": req_id, "ok": True,
+                        "data": {"campaigns": self._channel_campaigns(
+                            req["channelIds"])}}
             return {"id": req_id, "ok": False, "error": f"unknown op: {op}",
                     "code": "BAD_REQUEST"}
         except KeyError as exc:
@@ -572,6 +577,29 @@ class Handler:
                 out[login] = None
         if auth_error is not None:
             raise auth_error
+        return out
+
+    def _channel_campaigns(self, channel_ids: list) -> dict:
+        """The drop campaign ids each channel runs, by channel id.
+
+        Twitch's directory filter says only that a channel has drops for
+        its game; this says which campaign, so a pool is not filled with
+        channels running another campaign of the same game.
+
+        None for a channel whose lookup failed: unknown, not "runs
+        nothing", so one bad channel neither costs the batch nor reads as
+        proof against it. An auth failure still propagates.
+        """
+        out = {}
+        for channel_id in channel_ids:
+            try:
+                out[channel_id] = list(getattr(
+                    self.session.gql.get_available_drops(channel_id), "ids", None
+                ) or [])
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    raise
+                out[channel_id] = None
         return out
 
     def _inventory(self) -> dict:

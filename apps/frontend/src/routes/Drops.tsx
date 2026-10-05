@@ -1031,7 +1031,7 @@ export function Drops({ jump = null }: {
               loading={busy !== null}
               onClick={() => void mutate(
                 "panel",
-                "Re-checking channels…",
+                "Finding fresh channels…",
                 () => api.post("/api/subscriptions/resolve"),
               )}
             >
@@ -1047,8 +1047,9 @@ export function Drops({ jump = null }: {
             </Group>
           ) : (
             <Text size="xs" c="dimmed" mb="xs">
-              Channels are re-checked every 15 minutes, and the miner
-              restarts when they change.
+              Channels are re-checked every 15 minutes and replaced when
+              a campaign stops progressing; the miner restarts when they
+              change.
             </Text>
           )}
           <DndContext

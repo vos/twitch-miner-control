@@ -168,3 +168,83 @@ def test_weekly_rewards_false_disables_rather_than_configuring():
 def test_weekly_rewards_dict_becomes_basic_configuration():
     kwargs = build_mine_kwargs(cfg(miner={"weekly_rewards": {"max_concurrent": 4}}))
     assert kwargs["weekly_rewards"].max_concurrent == 4
+
+
+# --- the drop slot --------------------------------------------------------
+
+from types import SimpleNamespace
+
+from miner_config import DropSlotSelector, drop_pools
+
+
+def _streamer(login, claim_drops=True):
+    return SimpleNamespace(
+        username=login,
+        channel_id=f"id-{login}",
+        settings=SimpleNamespace(claim_drops=claim_drops),
+    )
+
+
+class _Inner:
+    """Stands in for upstream's chain: picks the given logins, in order."""
+
+    def __init__(self, *logins):
+        self.logins = logins
+
+    def select(self, streamers, max_amount):
+        online = {s.username for s in streamers}
+        return [f"id-{l}" for l in self.logins if l in online][:max_amount]
+
+
+def _owned(login, sub):
+    return {"username": login, "enabled": True, "settings": {}, "ownedBy": sub}
+
+
+def test_drop_pools_group_owned_channels_in_config_order():
+    c = cfg(streamers=[
+        {"username": "manual", "enabled": True, "settings": {}},
+        _owned("a1", "sub-a"), _owned("a2", "sub-a"), _owned("B1", "sub-b"),
+    ])
+    assert drop_pools(c) == [["a1", "a2"], ["b1"]]
+
+
+def test_drop_pools_skip_disabled_channels():
+    c = cfg(streamers=[{**_owned("a1", "sub-a"), "enabled": False},
+                       _owned("a2", "sub-a")])
+    assert drop_pools(c) == [["a2"]]
+
+
+def test_a_live_pool_channel_takes_a_slot_from_manual_streamers():
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1", "a2"]])
+    online = [_streamer("house"), _streamer("cohh"), _streamer("a2")]
+    assert selector.select(online, 2) == ["id-a2", "id-house"]
+
+
+def test_the_inner_choice_stands_when_it_already_holds_a_pool_channel():
+    selector = DropSlotSelector(_Inner("house", "a2"), [["a1", "a2"]])
+    online = [_streamer("house"), _streamer("a1"), _streamer("a2")]
+    assert selector.select(online, 2) == ["id-house", "id-a2"]
+
+
+def test_the_higher_ranked_pool_wins_the_slot():
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"], ["b1"]])
+    online = [_streamer("house"), _streamer("cohh"), _streamer("b1"), _streamer("a1")]
+    assert selector.select(online, 2) == ["id-a1", "id-house"]
+
+
+def test_only_one_slot_goes_to_drops():
+    selector = DropSlotSelector(_Inner("house"), [["a1", "a2"]])
+    online = [_streamer("house"), _streamer("a1"), _streamer("a2")]
+    assert selector.select(online, 2) == ["id-a1", "id-house"]
+
+
+def test_a_pool_channel_with_drops_off_is_not_given_the_slot():
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"]])
+    online = [_streamer("house"), _streamer("cohh"), _streamer("a1", claim_drops=False)]
+    assert selector.select(online, 2) == ["id-house", "id-cohh"]
+
+
+def test_nothing_changes_without_a_live_pool_channel():
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"]])
+    online = [_streamer("house"), _streamer("cohh")]
+    assert selector.select(online, 2) == ["id-house", "id-cohh"]

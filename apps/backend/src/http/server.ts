@@ -1042,10 +1042,14 @@ export function buildServer(deps: ServerDeps): AppServer {
       return { ok: true };
     });
 
-    /** Re-resolve now rather than waiting out the engine's timer. */
+    /**
+     * Re-resolve now rather than waiting out the engine's timer, and
+     * rebuild every pool even with a member still live: pressing it says
+     * the current channels are not trusted.
+     */
     instance.post("/api/subscriptions/resolve", async (_request, reply) => {
       try {
-        await deps.engine.pass("manual");
+        await deps.engine.pass("manual", { rebuild: true });
       } catch (cause) {
         return reply.code(500).send({ error: messageOf(cause) });
       }

@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { SubscriptionEngine } from "./engine.js";
+import { STALL_AFTER_MS, SubscriptionEngine } from "./engine.js";
 import type { AppConfig } from "../config/schema.js";
 import type { Campaign, CampaignDrop, Catalogue } from "../state/campaignCatalogue.js";
 import type { InventorySnapshot } from "../state/inventory.js";
@@ -28,7 +28,8 @@ function make(over: {
     game: { name: string; slug: string },
   ) => Promise<Array<{ login: string; channelId: string; viewers: number }>>;
   log?: ReturnType<typeof memoryLog>;
-  inventory?: Partial<InventorySnapshot>;
+  /** A function is read on every pass, so progress can move between them. */
+  inventory?: Partial<InventorySnapshot> | (() => Partial<InventorySnapshot>);
   now?: number | (() => number);
   /** The catalogue read throws, failing the whole pass. */
   catalogueFails?: boolean;
@@ -37,6 +38,10 @@ function make(over: {
   newId?: () => string;
   /** What a route saved while the pass was running: later reads see it. */
   savedMeanwhile?: Partial<AppConfig>;
+  channelCampaigns?: (
+    channelIds: string[],
+  ) => Promise<Record<string, string[] | null>>;
+  minerRunning?: () => boolean;
 } = {}) {
   const config = {
     version: 1, username: "alex", followers: true, followersOrder: "ASC",
@@ -71,7 +76,7 @@ function make(over: {
     inventory: {
       get: async (): Promise<InventorySnapshot> => ({
         progress: {}, earned: {}, fetchedAt: 1, available: true,
-        ...over.inventory,
+        ...(typeof over.inventory === "function" ? over.inventory() : over.inventory),
       }),
     },
     now: typeof over.now === "function"
@@ -81,6 +86,8 @@ function make(over: {
     onCampaignStarted: over.onCampaignStarted,
     onCampaignFollowed: over.onCampaignFollowed,
     newId: over.newId ?? (() => "new-1"),
+    channelCampaigns: over.channelCampaigns,
+    minerRunning: over.minerRunning,
   });
   return { engine, saveConfig, propose, config };
 }
@@ -967,4 +974,277 @@ test("an automatic subscription dropped because its game was unfollowed meanwhil
   });
   await engine.pass("timer");
   expect(log.ofType("subscription.followed")).toEqual([]);
+});
+
+// --- rebuilding a live pool ---------------------------------------------
+
+const earnable = (over: Partial<CampaignDrop> = {}): CampaignDrop => ({
+  id: "d1", name: "Hat", benefits: [], requiredMinutes: 60, requiredSubs: 0,
+  ...over,
+});
+
+/** Campaign c1 at `minutes` into its one drop. */
+const progressAt = (minutes: number) => ({
+  progress: { c1: { d1: { minutes, claimed: false, instanceId: null } } },
+});
+
+/** A live pool [beta] for campaign c1, with a clock the test moves. */
+function stallSetup(over: Parameters<typeof make>[0] = {}) {
+  let now = Date.now();
+  const log = memoryLog();
+  const made = make({
+    log,
+    now: () => now,
+    catalogue: { campaigns: [campaign({ drops: [earnable()] })] },
+    config: {
+      streamers: [manual("alpha"), owned("beta", "s1")] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+    directory: async () => [
+      { login: "beta", channelId: "id-beta", viewers: 500 },
+      { login: "gamma", channelId: "id-gamma", viewers: 50 },
+    ],
+    inventory: progressAt(10),
+    ...over,
+  });
+  return { ...made, log, advance: (ms: number) => { now += ms; } };
+}
+
+test("a manual rebuild replaces a pool that still has a live member", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig, propose } = make({
+    log,
+    config: {
+      streamers: [owned("gamma", "s1")] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+  });
+  await engine.pass("manual", { rebuild: true });
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["beta"]);
+  expect(propose).toHaveBeenCalledTimes(1);
+  expect(log.ofType("subscription.pool.rebuilt")[0])
+    .toMatchObject({ reason: "manual", from: ["gamma"], to: ["beta"] });
+});
+
+test("a manual rebuild that resolves the same pool changes nothing", async () => {
+  const { engine, saveConfig, propose } = make({
+    config: {
+      streamers: [owned("beta", "s1")] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+  });
+  await engine.pass("manual", { rebuild: true });
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a live pool whose campaign stops progressing is rebuilt without it", async () => {
+  const { engine, saveConfig, propose, log, advance } = stallSetup();
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS - 1);
+  await engine.pass("timer");
+  expect(saveConfig).not.toHaveBeenCalled();
+
+  advance(1);
+  await engine.pass("timer");
+  expect(written(saveConfig).streamers.map((s) => s.username))
+    .toEqual(["alpha", "gamma"]);
+  expect(propose).toHaveBeenCalledTimes(1);
+  expect(log.ofType("subscription.stalled")[0]).toMatchObject({
+    subscriptionId: "s1", channels: ["beta"], minutes: 10,
+  });
+  expect(log.ofType("subscription.pool.rebuilt")[0])
+    .toMatchObject({ reason: "stalled", from: ["beta"], to: ["gamma"] });
+});
+
+test("a pool whose campaign keeps progressing is never stalled", async () => {
+  let minutes = 10;
+  const { engine, saveConfig, advance } = stallSetup({
+    inventory: () => progressAt(minutes),
+  });
+  for (let i = 0; i < 6; i++) {
+    await engine.pass("timer");
+    minutes += 5;
+    advance(STALL_AFTER_MS / 2);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("a stall is not judged while the miner is not running", async () => {
+  // A stopped miner earns nothing anywhere; swapping channels cannot help.
+  const { engine, saveConfig, advance } = stallSetup({ minerRunning: () => false });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    advance(STALL_AFTER_MS);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("the stall clock restarts once the miner runs again", async () => {
+  let running = true;
+  const { engine, saveConfig, advance } = stallSetup({ minerRunning: () => running });
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS / 2);
+  running = false;
+  await engine.pass("timer");
+  running = true;
+  advance(STALL_AFTER_MS / 2);
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS / 2);
+  await engine.pass("timer");
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("a campaign with nothing left to earn by watching is never stalled", async () => {
+  // A gated drop cannot move however the pool is chosen.
+  const { engine, saveConfig, advance } = stallSetup({
+    catalogue: { campaigns: [campaign({ drops: [earnable({ requiredMinutes: 0 })] })] },
+  });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    advance(STALL_AFTER_MS);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("a drop whose window has not opened is not a stall", async () => {
+  const { engine, saveConfig, advance } = stallSetup({
+    catalogue: {
+      campaigns: [campaign({ drops: [earnable({ startsAt: Date.now() + 10 * STALL_AFTER_MS })] })],
+    },
+  });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    advance(STALL_AFTER_MS);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("unread progress is not a stall", async () => {
+  const { engine, saveConfig, advance } = stallSetup({
+    inventory: { ...progressAt(10), available: false },
+  });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    advance(STALL_AFTER_MS);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("only the subscription holding the drop slot is judged", async () => {
+  // The miner gives drops one slot, to the highest-ranked live pool, so a
+  // lower-ranked one is expected to sit still.
+  const start = Date.now();
+  let now = start;
+  const { engine, saveConfig } = make({
+    now: () => now,
+    catalogue: {
+      campaigns: [
+        campaign({ drops: [earnable({ requiredMinutes: 10_000 })] }),
+        campaign({ id: "c2", drops: [earnable({ id: "d2" })] }),
+      ],
+    },
+    config: {
+      streamers: [owned("beta", "s1"), owned("delta", "s2")] as never,
+      subscriptions: [
+        sub({ poolSize: 1 }),
+        sub({ id: "s2", targetId: "c2", label: "Two", rank: 1, poolSize: 1 }),
+      ],
+    },
+    directory: async () => [
+      { login: "beta", channelId: "id-beta", viewers: 500 },
+      { login: "delta", channelId: "id-delta", viewers: 400 },
+      { login: "gamma", channelId: "id-gamma", viewers: 50 },
+    ],
+    // c1 moves, c2 does not.
+    inventory: () => ({
+      progress: {
+        c1: { d1: { minutes: Math.floor((now - start) / 60_000), claimed: false, instanceId: null } },
+        c2: { d2: { minutes: 5, claimed: false, instanceId: null } },
+      },
+    }),
+  });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    now += STALL_AFTER_MS;
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("channels that stalled are passed over by later rebuilds too", async () => {
+  let live = [
+    { login: "beta", channelId: "id-beta", viewers: 500 },
+    { login: "gamma", channelId: "id-gamma", viewers: 50 },
+  ];
+  const { engine, saveConfig, advance, config } = stallSetup({
+    directory: async () => live,
+  });
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS);
+  await engine.pass("timer");
+  config.streamers = written(saveConfig).streamers;
+  // gamma goes offline; beta is the biggest channel left, but it stalled.
+  live = [
+    { login: "beta", channelId: "id-beta", viewers: 500 },
+    { login: "delta", channelId: "id-delta", viewers: 10 },
+  ];
+  advance(60_000);
+  await engine.pass("timer");
+  expect((saveConfig.mock.calls[1]?.[1] as AppConfig).streamers.map((s) => s.username))
+    .toEqual(["alpha", "delta"]);
+});
+
+test("a stalled pool with nobody else live stands", async () => {
+  const { engine, saveConfig, propose, advance } = stallSetup({
+    directory: async () => [{ login: "beta", channelId: "id-beta", viewers: 500 }],
+  });
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS);
+  await engine.pass("timer");
+  expect(saveConfig).not.toHaveBeenCalled();
+  expect(propose).not.toHaveBeenCalled();
+});
+
+test("a rebuild prefers channels Twitch says carry the campaign", async () => {
+  const log = memoryLog();
+  const asked: string[][] = [];
+  const { engine, saveConfig } = make({
+    log,
+    config: { streamers: [], subscriptions: [sub({ poolSize: 1 })] },
+    directory: async () => [
+      { login: "beta", channelId: "id-beta", viewers: 500 },
+      { login: "gamma", channelId: "id-gamma", viewers: 50 },
+    ],
+    channelCampaigns: async (ids) => {
+      asked.push(ids);
+      return { "id-beta": ["other"], "id-gamma": ["c1", "other"] };
+    },
+  });
+  await engine.pass("timer");
+  expect(asked).toEqual([["id-beta", "id-gamma"]]);
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["gamma"]);
+  expect(log.ofType("subscription.pool.rebuilt")[0])
+    .toMatchObject({ checked: 2, carrying: 1 });
+});
+
+test("a failing campaign check rebuilds from the directory alone", async () => {
+  const log = memoryLog();
+  const { engine, saveConfig } = make({
+    log,
+    config: { streamers: [], subscriptions: [sub({ poolSize: 1 })] },
+    channelCampaigns: async () => { throw new Error("gql down"); },
+  });
+  await engine.pass("timer");
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["beta"]);
+  expect(log.ofType("subscription.campaignCheck.failed")).toHaveLength(1);
+});
+
+test("a kept pool costs no campaign check", async () => {
+  const channelCampaigns = vi.fn(async () => ({}));
+  const { engine } = make({
+    config: { streamers: [owned("beta", "s1")] as never, subscriptions: [sub({ poolSize: 1 })] },
+    channelCampaigns,
+  });
+  await engine.pass("timer");
+  expect(channelCampaigns).not.toHaveBeenCalled();
 });

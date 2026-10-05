@@ -432,6 +432,11 @@ const engine = new SubscriptionEngine({
     helper.request<{ channels: DirectoryChannel[] }>("directory", {
       game: game.name, slug: game.slug, limit: 30,
     }).then((r) => r.channels),
+  channelCampaigns: (channelIds) =>
+    helper.request<{ campaigns: Record<string, string[] | null> }>(
+      "channel_campaigns", { channelIds },
+    ).then((r) => r.campaigns),
+  minerRunning: () => supervisor.state === "RUNNING",
   pending: pendingRestart,
   inventory: inventoryCache,
   onCampaignStarted: (event) => notifier.publish(campaignStartedNotification(event)),

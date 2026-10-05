@@ -18,7 +18,7 @@ export interface DirectoryChannel {
 export type ResolutionDecision =
   /** At least one incumbent was live, so the pool was left alone. */
   | "kept"
-  /** Nobody was live, so the pool was rebuilt from the directory. */
+  /** Nobody was live, or a rebuild was asked for, so the pool was rebuilt. */
   | "rebuilt"
   /** No game to ask about: an unknown campaign, or one with no game. */
   | "no-target"
@@ -43,8 +43,8 @@ export interface ResolutionResult {
    *
    * The evidence behind a "kept": one live member out of three is the
    * case the pool exists for, and is worth being able to see after the
-   * fact. Zero on a rebuild, and undefined when degraded -- we never
-   * found out.
+   * fact. Zero on a rebuild of a dead pool, and undefined when degraded
+   * -- we never found out.
    */
   liveCount?: number;
 }
@@ -77,14 +77,17 @@ function target(
  * catalogue is not Twitch's own.
  *
  * A pool that still has ONE live member is left exactly as it is. That
- * member is collecting the drop, and every alternative -- reordering by
+ * member can collect the drop, and every alternative -- reordering by
  * viewers, evicting a live member for a bigger channel, topping the pool
  * back up to full -- costs a miner restart and the watch-session state
- * that goes with it, to buy nothing the drop needs right now. A pool is
- * rebuilt only once nobody in it is live, because only then has
- * collection actually stopped. The cost is a little downtime when that
- * last member goes offline mid-interval, which is the trade the pool
- * exists to make.
+ * that goes with it, to buy nothing the drop needs right now. The cost
+ * is a little downtime when that last member goes offline mid-interval,
+ * which is the trade the pool exists to make.
+ *
+ * Live is not proof of collecting, though: Twitch's drops filter is per
+ * game, so a live member can be running another campaign of it. So the
+ * caller can ask for a rebuild of a live pool through `options` -- the
+ * user asked for one, or the engine saw the campaign stop progressing.
  *
  * `degraded` never means "use an empty pool". Emptying a pool stops drop
  * collection with no visible cause, which is the one failure the user
@@ -95,6 +98,7 @@ export function resolveSubscription(
   campaign: Campaign | undefined,
   directory: DirectoryChannel[] | null,
   incumbents: readonly string[] = [],
+  options: ResolveOptions = {},
 ): ResolutionResult {
   if (target(campaign) === null) {
     return { channels: [], degraded: true, decision: "no-target" };
@@ -112,25 +116,66 @@ export function resolveSubscription(
   const liveCount = incumbents.filter((l) => live.has(l.toLowerCase())).length;
   // The config's own spelling is kept, so a directory that reports a
   // different casing than the config holds does not rewrite the entry.
-  if (liveCount > 0) {
+  if (liveCount > 0 && options.rebuild !== true) {
     return {
       channels: [...incumbents], degraded: false, decision: "kept", liveCount,
     };
   }
 
-  // Nobody left. Viewers descending: a bigger channel is likelier to
-  // still be live at the end of a drop, which is what the pool exists to
-  // protect against. Ties break by login so two rebuilds from the same
-  // directory agree, rather than restarting over an arbitrary shuffle.
+  // Everyone excluded falls back to the whole directory: an empty pool
+  // stops collection invisibly, which is worse than a doubtful one.
+  const open = rankDirectory(directory, options.exclude);
+  let ranked = open.length > 0 ? open : rankDirectory(directory);
+  const { carries } = options;
+  if (carries !== undefined) {
+    const confirmed = ranked.filter((c) => carries.get(c.login.toLowerCase()) === true);
+    // Unchecked channels follow the confirmed ones, since they may still
+    // carry it; checked ones that do not are dropped. A check that
+    // confirmed nobody says nothing useful, so the ranking stands.
+    if (confirmed.length > 0) {
+      ranked = [
+        ...confirmed,
+        ...ranked.filter((c) => !carries.has(c.login.toLowerCase())),
+      ];
+    }
+  }
   return {
-    channels: [...directory]
-      .sort((a, b) => b.viewers - a.viewers || a.login.localeCompare(b.login))
-      .slice(0, sub.poolSize)
-      .map((c) => c.login),
+    channels: ranked.slice(0, sub.poolSize).map((c) => c.login),
     degraded: false,
     decision: "rebuilt",
-    liveCount: 0,
+    liveCount,
   };
+}
+
+/** How a resolution may depart from keeping a live pool. */
+export interface ResolveOptions {
+  /** Rebuild even though an incumbent is live. */
+  rebuild?: boolean;
+  /** Logins, lowercase, a rebuild passes over: they were tried and stalled. */
+  exclude?: ReadonlySet<string>;
+  /**
+   * Whether a channel, by lowercase login, is running this campaign, for
+   * the channels that were checked. Twitch's drops filter is per game, so
+   * a channel it lists can be running a different campaign of that game.
+   */
+  carries?: ReadonlyMap<string, boolean>;
+}
+
+/**
+ * The directory best first, less any excluded logins.
+ *
+ * Viewers descending: a bigger channel is likelier to still be live at
+ * the end of a drop, which is what the pool exists to protect against.
+ * Ties break by login so two rebuilds from the same directory agree,
+ * rather than restarting over an arbitrary shuffle.
+ */
+export function rankDirectory(
+  directory: readonly DirectoryChannel[],
+  exclude?: ReadonlySet<string>,
+): DirectoryChannel[] {
+  return directory
+    .filter((c) => exclude?.has(c.login.toLowerCase()) !== true)
+    .sort((a, b) => b.viewers - a.viewers || a.login.localeCompare(b.login));
 }
 
 /** The game to ask the directory about, for a subscription's campaign. */

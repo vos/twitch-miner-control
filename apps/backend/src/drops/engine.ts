@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../config/schema.js";
 import type { CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
-import type { InventoryCache } from "../state/inventory.js";
+import type { InventoryCache, InventorySnapshot } from "../state/inventory.js";
+import type { Campaign } from "../state/campaignCatalogue.js";
 import type { PendingRestart } from "./pendingRestart.js";
 import { followGames, recordSkipped } from "./follow.js";
 import { campaignQueue } from "./queue.js";
@@ -10,6 +11,7 @@ import { rebasePass } from "./rebase.js";
 import { reconcile, type DesiredEntry } from "./reconcile.js";
 import {
   directoryTarget,
+  rankDirectory,
   resolveSubscription,
   type DirectoryChannel,
 } from "./resolution.js";
@@ -27,6 +29,23 @@ import { COMPONENT, EVENT } from "../appLog/types.js";
  * pool costs at most half a drop's progress.
  */
 export const RECONCILE_INTERVAL_MS = 900_000;
+
+/**
+ * How long a live pool's campaign may sit still before the pool is replaced.
+ *
+ * Three passes. Progress is read from an inventory up to ten minutes old,
+ * so this is at least half an hour of nothing, and a watched channel
+ * that carries the campaign moves it every minute.
+ */
+export const STALL_AFTER_MS = 2_700_000;
+
+/**
+ * How many rebuild candidates are asked which campaigns they run.
+ *
+ * One query per channel, best first, so this bounds a rebuild's cost
+ * while still reaching past the top few when they run something else.
+ */
+export const CAMPAIGN_CHECK_LIMIT = 10;
 
 /**
  * How long the miner's start waits on the boot pass.
@@ -77,6 +96,13 @@ export interface EngineDeps {
   onCampaignFollowed?: (event: CampaignFollowed) => void;
   /** New subscription ids. Injectable so tests get stable ones. */
   newId?: () => string;
+  /**
+   * The campaign ids each channel runs, by channel id; null for one that
+   * could not be read. Throws when the lookup fails as a whole.
+   */
+  channelCampaigns?: (channelIds: string[]) => Promise<Record<string, string[] | null>>;
+  /** Whether the miner is running, without which no campaign can progress. */
+  minerRunning?: () => boolean;
 }
 
 /**
@@ -121,6 +147,13 @@ export class SubscriptionEngine {
   private readonly scheduled = new Set<string>();
   /** Set once the miner has stopped waiting on the boot pass. */
   private bootLate = false;
+  /**
+   * The drop-slot subscription's progress when it last moved, and the
+   * pool it had then. In memory only: a restart starts the clock again.
+   */
+  private readonly progress = new Map<string, { pool: string; minutes: number; since: number }>();
+  /** Lowercase logins each subscription's rebuilds pass over: they stalled. */
+  private readonly stalled = new Map<string, Set<string>>();
 
   private readonly log: AppLog;
 
@@ -183,6 +216,8 @@ export class SubscriptionEngine {
        * the user has just followed, and is looking at the result of.
        */
       quietGames?: ReadonlySet<string>;
+      /** Rebuild every pool, even one with a live member: the user asked. */
+      rebuild?: boolean;
     } = {},
   ): Promise<void> {
     const loaded = this.deps.loadConfig();
@@ -291,6 +326,11 @@ export class SubscriptionEngine {
     const active = queue === null
       ? null
       : [...queue].find(([, e]) => e.state === "active")?.[0] ?? null;
+    // Only the first live pool in rank order holds the miner's drop slot
+    // (see DropSlotSelector in python/miner_config.py), so only its
+    // progress says anything about its channels.
+    let slotTaken = false;
+    const judged = new Set<string>();
 
     for (const sub of ordered) {
       if (ended.has(sub.id)) continue;
@@ -390,7 +430,7 @@ export class SubscriptionEngine {
         });
       }
 
-      const result = resolveSubscription(sub, campaign, directory, incumbents);
+      let result = resolveSubscription(sub, campaign, directory, incumbents);
       if (result.degraded) {
         // Keep whatever this subscription already owns rather than
         // dropping it -- an empty pool stops collection invisibly.
@@ -406,7 +446,38 @@ export class SubscriptionEngine {
         keepExisting();
         continue;
       }
+      const holdsSlot = !slotTaken;
+      let reason: "empty" | "manual" | "stalled" = "empty";
       if (result.decision === "kept") {
+        if (options.rebuild === true) {
+          reason = "manual";
+        } else if (holdsSlot) {
+          judged.add(sub.id);
+          if (this.stalledNow(sub, campaign, inventory, incumbents, now)) reason = "stalled";
+        }
+      }
+      if (result.decision === "rebuilt" || reason !== "empty") {
+        const exclude = this.stalled.get(sub.id);
+        // Not degraded, so the directory was read.
+        const check = await this.campaignCheck(sub, directory!, exclude);
+        result = resolveSubscription(sub, campaign, directory, incumbents, {
+          rebuild: true, exclude, carries: check?.carries,
+        });
+        this.log.info({
+          type: EVENT.POOL_REBUILT,
+          msg: `"${sub.label}" ${REBUILD_WHY[reason]}, so its pool was rebuilt `
+            + `from ${directory?.length ?? 0} live channel(s)`,
+          subscriptionId: sub.id,
+          label: sub.label,
+          reason,
+          poolSize: sub.poolSize,
+          from: [...incumbents],
+          to: [...result.channels],
+          directorySize: directory?.length ?? 0,
+          checked: check?.checked ?? 0,
+          carrying: check?.carrying ?? 0,
+        });
+      } else {
         // The decision the pool exists to make, and the one that used to
         // be invisible: still collecting, so nothing is touched.
         this.log.info({
@@ -419,19 +490,8 @@ export class SubscriptionEngine {
           incumbents: [...incumbents],
           liveCount: result.liveCount,
         });
-      } else {
-        this.log.info({
-          type: EVENT.POOL_REBUILT,
-          msg: `"${sub.label}" has nobody live left, so its pool was rebuilt `
-            + `from ${directory?.length ?? 0} live channel(s)`,
-          subscriptionId: sub.id,
-          label: sub.label,
-          poolSize: sub.poolSize,
-          from: [...incumbents],
-          to: [...result.channels],
-          directorySize: directory?.length ?? 0,
-        });
       }
+      if (result.channels.length > 0) slotTaken = true;
       for (const login of result.channels) {
         desired.push({ username: login, ownedBy: sub.id });
       }
@@ -440,6 +500,10 @@ export class SubscriptionEngine {
     this.activeInQueue = active;
     const live = new Set(ordered.filter((s) => !ended.has(s.id)).map((s) => s.id));
     for (const id of this.scheduled) if (!live.has(id)) this.scheduled.delete(id);
+    // A subscription that lost the slot starts its clock afresh when it
+    // gets it back, rather than being judged on the time it waited.
+    for (const id of this.progress.keys()) if (!judged.has(id)) this.progress.delete(id);
+    for (const id of this.stalled.keys()) if (!live.has(id)) this.stalled.delete(id);
 
     const { changed } = reconcile(config.streamers, desired);
     // A leaving campaign of a followed game is filed as skipped, so the
@@ -524,4 +588,119 @@ export class SubscriptionEngine {
         : "drop subscriptions resolved new channels",
     );
   }
+
+  /**
+   * Whether the drop-slot subscription's campaign has sat still too long.
+   *
+   * Judged only when it could have moved: the miner running, progress
+   * read, and a drop open that watching can earn. Anything else forgets
+   * the clock, so a pause is never counted as a stall.
+   */
+  private stalledNow(
+    sub: { id: string; label: string; targetId: string },
+    campaign: Campaign | undefined,
+    inventory: InventorySnapshot | null,
+    incumbents: readonly string[],
+    now: number,
+  ): boolean {
+    const minutes = this.deps.minerRunning?.() === false
+      ? null
+      : earnableMinutes(campaign, inventory, now);
+    if (minutes === null) {
+      this.progress.delete(sub.id);
+      return false;
+    }
+    const pool = incumbents.map((l) => l.toLowerCase()).sort().join(",");
+    const seen = this.progress.get(sub.id);
+    if (seen === undefined || seen.pool !== pool || minutes > seen.minutes) {
+      this.progress.set(sub.id, { pool, minutes, since: now });
+      return false;
+    }
+    if (now - seen.since < STALL_AFTER_MS) return false;
+
+    // The clock starts over, so a rebuild that finds nobody better is
+    // logged once per period rather than on every pass.
+    this.progress.set(sub.id, { pool, minutes, since: now });
+    const excluded = this.stalled.get(sub.id) ?? new Set<string>();
+    for (const login of incumbents) excluded.add(login.toLowerCase());
+    this.stalled.set(sub.id, excluded);
+    this.log.warn({
+      type: EVENT.SUBSCRIPTION_STALLED,
+      msg: `"${sub.label}" has not progressed in ${Math.round((now - seen.since) / 60_000)} `
+        + "minutes although its pool is live, so its channels are being replaced",
+      subscriptionId: sub.id,
+      label: sub.label,
+      targetId: sub.targetId,
+      channels: [...incumbents],
+      minutes,
+      since: seen.since,
+    });
+    return true;
+  }
+
+  /**
+   * Asks Twitch which campaigns the best rebuild candidates run.
+   *
+   * Undefined when it cannot be asked or the lookup fails: the rebuild
+   * then ranks the directory alone, as it did before this existed.
+   */
+  private async campaignCheck(
+    sub: { id: string; targetId: string },
+    directory: DirectoryChannel[],
+    exclude: ReadonlySet<string> | undefined,
+  ): Promise<{ carries: Map<string, boolean>; checked: number; carrying: number } | undefined> {
+    if (this.deps.channelCampaigns === undefined) return undefined;
+    const candidates = rankDirectory(directory, exclude).slice(0, CAMPAIGN_CHECK_LIMIT);
+    if (candidates.length === 0) return undefined;
+    let runs: Record<string, string[] | null>;
+    try {
+      runs = await this.deps.channelCampaigns(candidates.map((c) => c.channelId));
+    } catch (cause) {
+      this.log.warn({
+        type: EVENT.CAMPAIGN_CHECK_FAILED,
+        msg: "could not ask which campaigns the candidate channels run, so "
+          + "the pool is ranked by viewers alone",
+        subscriptionId: sub.id,
+        err: cause instanceof Error ? cause.message : String(cause),
+      });
+      return undefined;
+    }
+    const carries = new Map<string, boolean>();
+    for (const c of candidates) {
+      const ids = runs[c.channelId];
+      if (ids != null) carries.set(c.login.toLowerCase(), ids.includes(sub.targetId));
+    }
+    return {
+      carries,
+      checked: carries.size,
+      carrying: [...carries.values()].filter(Boolean).length,
+    };
+  }
+}
+
+/** How each rebuild reason reads in the log. */
+const REBUILD_WHY = {
+  empty: "has nobody live left",
+  manual: "was re-resolved by hand",
+  stalled: "stopped progressing",
+} as const;
+
+/**
+ * Minutes watched across a campaign's drops, or null when watching
+ * could not move them now: progress unread, or no drop open that is
+ * earnable by watching and not yet earned.
+ */
+function earnableMinutes(
+  campaign: Campaign | undefined,
+  inventory: InventorySnapshot | null,
+  now: number,
+): number | null {
+  if (campaign === undefined || inventory === null || !inventory.available) return null;
+  const drops = resolveCampaign(campaign, inventory).drops;
+  const open = drops.some((d) =>
+    (d.status === "in-progress" || d.status === "not-started")
+    && (d.startsAt == null || d.startsAt <= now)
+    && (d.endsAt == null || d.endsAt > now));
+  if (!open) return null;
+  return drops.reduce((sum, d) => sum + d.minutes, 0);
 }

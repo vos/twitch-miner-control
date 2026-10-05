@@ -820,7 +820,7 @@ test("the banner names what is happening for a re-resolve", async () => {
   await waitFor(() => expect(screen.getByTestId("subscriptions")).toBeTruthy());
   await userEvent.click(screen.getByRole("button", { name: /re-resolve/i }));
   await waitFor(() =>
-    expect(screen.getByTestId("resolving").textContent).toMatch(/re-checking/i));
+    expect(screen.getByTestId("resolving").textContent).toMatch(/fresh channels/i));
   release!();
 });
 

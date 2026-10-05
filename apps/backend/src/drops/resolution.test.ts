@@ -166,3 +166,63 @@ test("a degraded result reports no live count at all", () => {
   expect(resolveSubscription(sub(), campaign(), null, ["alpha"]).liveCount)
     .toBeUndefined();
 });
+
+test("a forced rebuild ignores live incumbents", () => {
+  const out = resolveSubscription(
+    sub({ poolSize: 2 }), campaign(),
+    [chan("alpha", 10), chan("beta", 500), chan("gamma", 90)],
+    ["alpha"], { rebuild: true },
+  );
+  expect(out.decision).toBe("rebuilt");
+  expect(out.channels).toEqual(["beta", "gamma"]);
+  // Still the evidence, so a log can say the pool was not dead.
+  expect(out.liveCount).toBe(1);
+});
+
+test("a rebuild passes over excluded channels", () => {
+  const out = resolveSubscription(
+    sub({ poolSize: 2 }), campaign(),
+    [chan("alpha", 10), chan("beta", 500), chan("gamma", 90)],
+    ["beta"], { rebuild: true, exclude: new Set(["beta"]) },
+  );
+  expect(out.channels).toEqual(["gamma", "alpha"]);
+});
+
+test("a rebuild with everyone excluded falls back to the whole directory", () => {
+  // An empty pool stops collection invisibly; a pool that may not help
+  // at least keeps the stall detector watching it.
+  const out = resolveSubscription(
+    sub({ poolSize: 1 }), campaign(), [chan("beta", 500)],
+    ["beta"], { rebuild: true, exclude: new Set(["beta"]) },
+  );
+  expect(out.channels).toEqual(["beta"]);
+});
+
+test("a rebuild prefers channels confirmed to carry the campaign", () => {
+  const out = resolveSubscription(
+    sub({ poolSize: 2 }), campaign(),
+    [chan("alpha", 10), chan("beta", 500), chan("gamma", 90), chan("delta", 5)],
+    [],
+    { carries: new Map([["beta", false], ["gamma", true], ["alpha", false]]) },
+  );
+  // gamma is confirmed; delta was never checked, so it may still carry
+  // it; beta and alpha were checked and do not.
+  expect(out.channels).toEqual(["gamma", "delta"]);
+});
+
+test("a check that confirms nobody leaves the ranking as it was", () => {
+  const out = resolveSubscription(
+    sub({ poolSize: 2 }), campaign(),
+    [chan("alpha", 10), chan("beta", 500)],
+    [], { carries: new Map([["beta", false], ["alpha", false]]) },
+  );
+  expect(out.channels).toEqual(["beta", "alpha"]);
+});
+
+test("the campaign check plays no part in keeping a live pool", () => {
+  const out = resolveSubscription(
+    sub(), campaign(), [chan("alpha", 10), chan("beta", 500)],
+    ["alpha"], { carries: new Map([["alpha", false]]) },
+  );
+  expect(out.decision).toBe("kept");
+});
