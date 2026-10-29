@@ -40,3 +40,19 @@
     margin-left: 24px;
   }
 }
+
+/* The two refresh buttons need about 380px side by side, more than a
+   phone has. Below the same breakpoint as the subscription row they take
+   the toolbar's full width and wrap, each growing to fill its line, so
+   they sit side by side where they fit and stack where they do not. */
+@media (max-width: 560px) {
+  .refresh {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    margin-left: 0;
+  }
+
+  .refresh > * {
+    flex: 1 1 auto;
+  }
+}

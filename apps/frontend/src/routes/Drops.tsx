@@ -903,7 +903,7 @@ export function Drops({ jump = null }: {
             land?" is what the page is reloaded for. Campaigns stays
             subtle beside it: useful when something has just been
             announced, and otherwise not worth reaching for. */}
-        <Group gap="xs" ml="auto" wrap="nowrap">
+        <Group gap="xs" ml="auto" wrap="nowrap" className={classes.refresh}>
           <Button
             leftSection={<IconRefresh size={16} />}
             onClick={() => void refresh("progress")}
