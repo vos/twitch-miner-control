@@ -759,7 +759,8 @@ export function Drops({ jump = null }: {
       ));
       setError(null);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "refresh failed");
+      setError(`The refresh did not complete: ${
+        cause instanceof Error ? cause.message : "unknown error"}`);
     } finally {
       setRefreshing(null);
     }
@@ -955,6 +956,21 @@ export function Drops({ jump = null }: {
           , not Twitch. Your progress comes from Twitch.
         </Text>
       </Group>
+
+      {/* A failed action with the list already on screen. The list stays
+          -- it is still the best answer -- but without this the failure
+          is silent: a spinner that stops reads as success. */}
+      {error !== null && (
+        <Alert
+          color="red"
+          icon={<IconAlertTriangle />}
+          withCloseButton
+          onClose={() => setError(null)}
+          data-testid="action-error"
+        >
+          {error}
+        </Alert>
+      )}
 
       {/* Unavailable outranks stale: when we have never read the list,
           saying it "may be missing campaigns" understates it -- there is

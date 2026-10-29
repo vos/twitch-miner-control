@@ -88,13 +88,23 @@ willing to lose. **Rejected.**
 
 ### The split: tracker for campaigns, Twitch for progress
 
-**Campaigns** come from a public tracker,
-`twitch-drops.fenrisapps.com/campaigns`, requested with an `RSC: 1`
-header. That returns the page's React Server Component payload, which
-embeds the campaign array using Twitch's own field names --
-`timeBasedDrops`, `requiredMinutesWatched`, `requiresSub`, `startAt`,
-`endAt`, plus a full `game` object. One request yields the whole
-catalogue (71 campaigns / 220 drops when this was written).
+**Campaigns** come from a public tracker, `twitch-drops.fenrisapps.com`,
+requested with an `RSC: 1` header. That returns each page's React
+Server Component payload instead of HTML. Since the tracker's October
+2026 redesign the catalogue takes a sweep rather than one request:
+
+- `/games` lists every game with its current campaigns, but only as
+  summaries -- rewards flattened across drops, and no drop ids.
+- `/` features the scheduled campaigns too, which `/games` omits until
+  they open.
+- `/games/<slug>` for each of those games carries the full campaigns:
+  drop ids, `requiredMinutesWatched`, `requiresSub` (now actually set),
+  grouped `benefits`, and Twitch's own category slug. It has no per-drop
+  windows and no campaign owner, so drops take the campaign's window and
+  the owner is the game's publisher.
+
+About 90 page fetches per sweep (115 campaigns / 365 drops when this was
+updated), all served from the tracker's edge cache.
 
 **Progress** still comes from Twitch. The `Inventory` query
 (`constants.py:125`) is **not** gated -- verified directly against a

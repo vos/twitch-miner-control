@@ -51,10 +51,9 @@ test("unobtainable wins even over recorded progress", () => {
 });
 
 test("a drop requiring no watch time is unobtainable", () => {
-  // The tracker never sets requiresSub -- it is false on every drop in
-  // the live feed -- so zero required minutes is what actually catches a
-  // drop gated behind something other than watching (a sub, a gift sub,
-  // an external hunt). A drop earnable by watching must cost some watching.
+  // Zero required minutes catches a drop gated behind something other
+  // than watching even when requiresSub is false (a gift sub, an
+  // external hunt). A drop earnable by watching must cost some watching.
   expect(resolveDrop(drop({ requiredMinutes: 0 }), undefined, true).status)
     .toBe("unobtainable");
 });

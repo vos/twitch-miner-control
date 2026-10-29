@@ -1,190 +1,263 @@
 import { expect, test, vi } from "vitest";
-import { extractCampaigns, fetchCampaigns } from "./campaignSource.js";
+import {
+  extractFeaturedSlugs, extractGamePage, extractGames, fetchCampaigns,
+  toCampaigns, type GamePage,
+} from "./campaignSource.js";
 
 /**
- * A miniature of the real payload: the campaigns array is embedded in a
- * React Server Component stream, surrounded by rendered markup, and its
- * dates carry the `$D` marker the RSC format prefixes them with.
+ * Miniatures of the real payloads. Each embeds its data in a React
+ * Server Component stream, surrounded by rendered markup, with dates
+ * carrying the `$D` marker the RSC format prefixes them with.
  */
-const payload = (inner: string) =>
-  `3:["$","div",null,{"className":"x","children":"All drop campaigns"}]
-4:["$","$L25",null,{"campaigns":${inner},"total":2}]
+const rsc = (line: string) =>
+  `3:["$","div",null,{"className":"x","children":"Twitch Drops"}]
+4:${line}
 5:["$","footer",null,{}]`;
 
-const campaign = `[{
-  "id":"c1","name":"Console Launch Drops","gameId":"1441208453",
-  "ownerId":"o1",
-  "startAt":"$D2026-08-25T18:00:00.000Z","endAt":"$D2026-09-22T17:59:59.999Z",
-  "game":{"id":"1441208453","displayName":"Once Human","slug":"once-human",
-    "boxArtUrl":"https://cdn/ttv-boxart/1441208453_IGDB-285x380.jpg"},
-  "owner":{"id":"o1","name":"Starry","type":"Organization"},
-  "timeBasedDrops":[
-    {"id":"d1","name":"DECAL: GRAFFITI","requiredMinutesWatched":60,
-     "startAt":"$D2026-08-25T18:00:00.000Z","endAt":"$D2026-09-01T00:00:00.000Z",
-     "requiresSub":false,
-     "benefits":[{"benefitId":"b1","name":"Graffiti Decal",
-       "imageAssetUrl":"https://cdn/REWARD/b1.png"}]},
-    {"id":"d2","name":"Supporter Crate","requiredMinutesWatched":240,
-     "requiresSub":true,
-     "benefits":[{"benefitId":"b2","name":"Crate",
-       "imageAssetUrl":"https://cdn/REWARD/b2.png"}]}
-  ]}]`;
+const NOW = Date.parse("2026-10-29T12:00:00.000Z");
 
-test("pulls campaigns out of the surrounding RSC stream", () => {
-  const out = extractCampaigns(payload(campaign));
-  expect(out).toHaveLength(1);
-  expect(out[0]?.name).toBe("Console Launch Drops");
-  expect(out[0]?.game?.displayName).toBe("Once Human");
+/** The /games index: every game, campaigns summarised without drop ids. */
+const index = rsc(`["$","$L26",null,{"games":[
+  {"id":"500188","urlSlug":"hunt-showdown","displayName":"Hunt: Showdown 1896",
+   "boxArtUrl":"https://cdn/ttv-boxart/500188.jpg","publisher":"Crytek",
+   "lastEndedAt":"$D2026-10-16T16:59:59.999Z",
+   "campaigns":[{"id":"c1","name":"Halloween","startAt":"$D2026-10-26T15:00:00.000Z",
+     "endAt":"$D2026-11-09T13:59:59.999Z",
+     "rewards":[{"name":"Hunt Red","imageUrl":"x","minutes":0,"sub":true}]}]},
+  {"id":"177579460","urlSlug":"fellowship","displayName":"FELLOWSHIP",
+   "publisher":"Chief Rebel","campaigns":[]},
+  {"id":"1","urlSlug":"quiet-game","displayName":"Quiet","campaigns":[]}
+]}]`);
+
+/** The home page: featured campaigns, the only place in Twitch's shape. */
+const home = rsc(`["$","$L2b",null,{"campaigns":[
+  {"id":"c9","name":"Scheduled","startAt":"$D2026-10-30T15:00:00.000Z",
+   "endAt":"$D2026-11-01T14:59:59.999Z",
+   "game":{"id":"177579460","slug":"fellowship-1","urlSlug":"fellowship"},
+   "timeBasedDrops":[]}
+]}]`);
+
+/**
+ * A game page. The full campaigns sit beside window-only stubs (for the
+ * "live now" badge) and a summary-shaped history, all under similar keys.
+ */
+const gamePage = (campaigns: string, slug = `"twitchSlug":"hunt-showdown",`) =>
+  `1:["$","$L2b",null,{"campaigns":[{"startAt":"$D2026-10-26T15:00:00.000Z","endAt":"$D2026-11-09T13:59:59.999Z"}]}]
+2:["$","$L44",null,{"gameName":"Hunt",${slug}"windows":"$26:props"}]
+3:["$","$L3e",null,{"campaigns":${campaigns}}]
+4:["$","$L43",null,{"history":[{"id":"old","name":"Week 2","dropCount":1,
+  "rewards":[{"name":"Crate","imageUrl":"x","minutes":30,"sub":false}]}]}]`;
+
+const huntCampaigns = `[
+  {"id":"c1","name":"HS 1896 Halloween 2026",
+   "startAt":"$D2026-10-26T14:54:34.000Z","endAt":"$D2026-11-09T13:59:59.999Z",
+   "drops":[
+     {"id":"d1","name":"Hunt Red","requiredMinutesWatched":0,"requiresSub":true,
+      "benefits":[{"benefitId":"b1","name":"Hunt Red","imageAssetUrl":"https://cdn/REWARD/b1.png"}]},
+     {"id":"d2","name":"Starter Pack","requiredMinutesWatched":60,"requiresSub":false,
+      "benefits":[
+        {"benefitId":"b2","name":"Binocular","imageAssetUrl":"https://cdn/REWARD/b2.png"},
+        {"benefitId":"b3","name":"G3"},
+        {"benefitId":"b2","name":"Binocular","imageAssetUrl":"https://cdn/REWARD/b2.png"}]}]},
+  {"id":"c2","name":"Week 1 [Pt. 2]",
+   "startAt":"$D2026-10-30T15:00:00.000Z","endAt":"$D2026-11-02T14:59:59.999Z",
+   "drops":[]},
+  {"id":"c3","name":"Ended Last Week",
+   "startAt":"$D2026-10-14T15:00:00.000Z","endAt":"$D2026-10-27T14:59:59.999Z",
+   "drops":[]}
+]`;
+
+const huntGame = extractGames(index)[0]!;
+const huntPage = (): GamePage => extractGamePage(gamePage(huntCampaigns));
+
+test("reads every game off the index", () => {
+  const games = extractGames(index);
+  expect(games.map((g) => g.urlSlug)).toEqual(["hunt-showdown", "fellowship", "quiet-game"]);
+});
+
+test("throws when the index carries no games array", () => {
+  // The source's format changed, or we were served something else
+  // entirely. Throwing lets the catalogue mark itself unavailable rather
+  // than reporting an empty list as fact.
+  expect(() => extractGames("<html>nothing here</html>")).toThrow(/games/i);
+});
+
+test("reads the featured games' slugs off the home page", () => {
+  expect(extractFeaturedSlugs(home)).toEqual(["fellowship"]);
+});
+
+test("throws when the home page carries no campaigns", () => {
+  expect(() => extractFeaturedSlugs(rsc(`{"campaigns":[{"startAt":"x"}]}`)))
+    .toThrow(/home page/);
+});
+
+test("picks the campaigns with drops out of a game page", () => {
+  // Not the window-only stubs before them, and not the history after.
+  expect(huntPage().campaigns.map((c) => c.id)).toEqual(["c1", "c2", "c3"]);
+});
+
+test("reads Twitch's slug off a game page", () => {
+  expect(huntPage().twitchSlug).toBe("hunt-showdown");
+});
+
+test("throws when a game page has no campaigns with drops", () => {
+  expect(() => extractGamePage(gamePage(`[{"startAt":"x"}]`))).toThrow(/game page/);
+});
+
+test("throws on a campaigns array that is not valid JSON", () => {
+  expect(() => extractGamePage(`x:{"campaigns":[{"id":`)).toThrow();
 });
 
 test("strips the RSC date marker and converts to epoch ms", () => {
-  // "$D2026-08-25T…" is not a date any parser accepts as-is.
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.startsAt).toBe(Date.parse("2026-08-25T18:00:00.000Z"));
-  expect(out?.endsAt).toBe(Date.parse("2026-09-22T17:59:59.999Z"));
+  // "$D2026-10-26T…" is not a date any parser accepts as-is.
+  const [out] = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out?.startsAt).toBe(Date.parse("2026-10-26T14:54:34.000Z"));
+  expect(out?.endsAt).toBe(Date.parse("2026-11-09T13:59:59.999Z"));
 });
 
 test("maps drops onto the shape the rest of the app already uses", () => {
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.drops[0]).toEqual({
-    id: "d1",
-    name: "DECAL: GRAFFITI",
-    benefits: [{ name: "Graffiti Decal", imageUrl: "https://cdn/REWARD/b1.png" }],
+  const [out] = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out?.drops[1]).toEqual({
+    id: "d2",
+    name: "Starter Pack",
+    benefits: [
+      { name: "Binocular", imageUrl: "https://cdn/REWARD/b2.png" },
+      { name: "G3", imageUrl: null },
+    ],
     requiredMinutes: 60,
     requiredSubs: 0,
-    startsAt: Date.parse("2026-08-25T18:00:00.000Z"),
-    endsAt: Date.parse("2026-09-01T00:00:00.000Z"),
+    startsAt: null,
+    endsAt: null,
   });
 });
 
 test("carries requiresSub through as the sub requirement", () => {
   // The rest of the app reads requiredSubs > 0 as unobtainable, so the
   // boolean has to become a count rather than being dropped.
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.drops[1]?.requiredSubs).toBe(1);
+  const [out] = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out?.drops[0]?.requiredSubs).toBe(1);
 });
 
-test("carries the game's box art through", () => {
-  // The card leads with this image; without it every campaign renders
-  // the same monogram placeholder.
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.game?.boxArtUrl).toBe(
-    "https://cdn/ttv-boxart/1441208453_IGDB-285x380.jpg",
+test("takes the game from the index and its slug from the game page", () => {
+  const [out] = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out?.game).toEqual({
+    id: "500188",
+    slug: "hunt-showdown",
+    displayName: "Hunt: Showdown 1896",
+    boxArtUrl: "https://cdn/ttv-boxart/500188.jpg",
+  });
+});
+
+test("prefers Twitch's slug when the tracker's differs", () => {
+  // The directory query takes Twitch's slug; the tracker's own one for
+  // FELLOWSHIP finds nothing there.
+  const fellowship = extractGames(index)[1]!;
+  const page = extractGamePage(
+    gamePage(huntCampaigns, `"twitchSlug":"fellowship-1",`),
   );
+  expect(toCampaigns(fellowship, page, NOW)[0]?.game?.slug).toBe("fellowship-1");
 });
 
-test("carries the campaign owner through", () => {
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.owner).toEqual({ name: "Starry", type: "Organization" });
+test("falls back to the tracker's slug when the page omits Twitch's", () => {
+  const page = extractGamePage(gamePage(huntCampaigns, ""));
+  expect(toCampaigns(huntGame, page, NOW)[0]?.game?.slug).toBe("hunt-showdown");
 });
 
-test("carries each benefit's image alongside its name", () => {
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.drops[1]?.benefits).toEqual([
-    { name: "Crate", imageUrl: "https://cdn/REWARD/b2.png" },
-  ]);
+test("names the game's publisher as the campaign owner", () => {
+  const [out] = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out?.owner).toEqual({ name: "Crytek", type: "" });
 });
 
-test("reports a drop's own window, which can be shorter than the campaign's", () => {
-  // A weekly drop inside a month-long campaign has its own dates, and
-  // showing the campaign's would overstate how long is left to earn it.
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.drops[0]?.endsAt).toBe(Date.parse("2026-09-01T00:00:00.000Z"));
+test("survives a game with no box art or publisher", () => {
+  // The card falls back rather than rendering a broken image or a blank.
+  const [out] = toCampaigns(extractGames(index)[2]!, huntPage(), NOW);
+  expect(out?.game?.boxArtUrl).toBeNull();
+  expect(out?.owner).toBeNull();
 });
 
-test("leaves a drop's window null when the source omits it", () => {
-  const [out] = extractCampaigns(payload(campaign));
-  expect(out?.drops[1]?.startsAt).toBeNull();
-  expect(out?.drops[1]?.endsAt).toBeNull();
+test("drops campaigns that have ended and keeps upcoming ones", () => {
+  // The cached page lingers on a closed campaign, and lists the next
+  // ones further ahead than the index does.
+  const out = toCampaigns(huntGame, huntPage(), NOW);
+  expect(out.map((c) => c.name)).toEqual(["HS 1896 Halloween 2026", "Week 1 [Pt. 2]"]);
 });
 
-test("survives a game with no box art", () => {
-  // Older cached payloads and the odd category have none; the card falls
-  // back rather than rendering a broken image.
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z",
-      "game":{"id":"g1","displayName":"Game","slug":"game"},
-      "timeBasedDrops":[]}]`),
+/** A fetch answering each URL from a table, 404 for anything else. */
+function site(pages: Record<string, string | (() => string)>) {
+  return vi.fn(async (url: string) => {
+    const page = pages[url.replace("https://twitch-drops.fenrisapps.com", "")];
+    if (page === undefined) return { ok: false, status: 404, text: async () => "" };
+    return { ok: true, status: 200, text: async () => (typeof page === "string" ? page : page()) };
+  });
+}
+
+const fellowshipPage = gamePage(`[
+  {"id":"c9","name":"Scheduled","startAt":"$D2026-10-30T15:00:00.000Z",
+   "endAt":"$D2026-11-01T14:59:59.999Z","drops":[]},
+  {"id":"c1","name":"Shared","startAt":"$D2026-10-26T15:00:00.000Z",
+   "endAt":"$D2026-11-09T13:59:59.999Z","drops":[]}]`, `"twitchSlug":"fellowship-1",`);
+
+const fetchAll = (impl: ReturnType<typeof site>) =>
+  fetchCampaigns({ fetchImpl: impl as unknown as typeof fetch, now: () => NOW });
+
+test("sweeps the game pages of running and featured games only", async () => {
+  // fellowship has nothing running, so only the home page reveals its
+  // scheduled campaign; quiet-game has nothing at all and is not fetched.
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": gamePage(huntCampaigns),
+    "/games/fellowship": fellowshipPage,
+  });
+  const out = await fetchAll(impl);
+  // c1 sits under both games; the first one keeps it.
+  expect(out.map((c) => c.id)).toEqual(["c1", "c2", "c9"]);
+  expect(impl.mock.calls.map(([url]) => url)).not.toContain(
+    "https://twitch-drops.fenrisapps.com/games/quiet-game",
   );
-  expect(out[0]?.game?.boxArtUrl).toBeNull();
-});
-
-test("survives a campaign with no owner reported", () => {
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,"timeBasedDrops":[]}]`),
-  );
-  expect(out[0]?.owner).toBeNull();
-});
-
-test("survives a benefit with no image", () => {
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,
-      "timeBasedDrops":[{"id":"d1","name":"Thing","requiredMinutesWatched":30,
-        "benefits":[{"benefitId":"b1","name":"Thing"}]}]}]`),
-  );
-  expect(out[0]?.drops[0]?.benefits).toEqual([
-    { name: "Thing", imageUrl: null },
-  ]);
-});
-
-test("survives a campaign with no game reported", () => {
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"Bare","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z","timeBasedDrops":[]}]`),
-  );
-  expect(out[0]?.game).toBeNull();
-  expect(out[0]?.drops).toEqual([]);
-});
-
-test("survives a drop with no benefits listed", () => {
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"X","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,
-      "timeBasedDrops":[{"id":"d1","name":"Thing","requiredMinutesWatched":30}]}]`),
-  );
-  expect(out[0]?.drops[0]?.benefits).toEqual([]);
-  expect(out[0]?.drops[0]?.requiredSubs).toBe(0);
-});
-
-test("handles a bracket inside a string without truncating", () => {
-  // The scan is string-aware: a "]" inside a campaign name must not be
-  // mistaken for the end of the array.
-  const out = extractCampaigns(
-    payload(`[{"id":"c1","name":"Drops [Week 2]","startAt":"$D2026-01-01T00:00:00.000Z",
-      "endAt":"$D2026-02-01T00:00:00.000Z","game":null,"timeBasedDrops":[]}]`),
-  );
-  expect(out).toHaveLength(1);
-  expect(out[0]?.name).toBe("Drops [Week 2]");
-});
-
-test("throws when the payload carries no campaigns array", () => {
-  // The source's format changed, or we were served something else
-  // entirely. Throwing lets the catalogue mark itself unavailable rather
-  // than reporting an empty list as fact.
-  expect(() => extractCampaigns("<html>nothing here</html>")).toThrow(/campaign/i);
-});
-
-test("throws on a campaigns array that is not valid JSON", () => {
-  expect(() => extractCampaigns(`x:{"campaigns":[{"id":`)).toThrow();
 });
 
 test("fetches with the RSC header the source needs", async () => {
   // Without it the server returns rendered HTML with no data in it.
-  const impl = vi.fn(async () => ({
-    ok: true, status: 200, text: async () => payload(campaign),
-  })) as unknown as typeof fetch;
-  const out = await fetchCampaigns({ fetchImpl: impl });
-  expect(out).toHaveLength(1);
-  const init = vi.mocked(impl).mock.calls[0]?.[1];
-  expect((init?.headers as Record<string, string>)["RSC"]).toBe("1");
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": gamePage(huntCampaigns),
+    "/games/fellowship": fellowshipPage,
+  });
+  await fetchAll(impl);
+  for (const call of impl.mock.calls) {
+    const init = (call as unknown[])[1] as RequestInit;
+    expect((init.headers as Record<string, string>)["RSC"]).toBe("1");
+  }
 });
 
-test("throws on a non-ok response rather than returning nothing", async () => {
-  const impl = vi.fn(async () => ({
-    ok: false, status: 503, text: async () => "",
-  })) as unknown as typeof fetch;
-  await expect(fetchCampaigns({ fetchImpl: impl })).rejects.toThrow(/503/);
+test("retries a game page that comes back without its data", async () => {
+  let served = 0;
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": () => (served++ === 0 ? "<html></html>" : gamePage(huntCampaigns)),
+    "/games/fellowship": fellowshipPage,
+  });
+  expect(await fetchAll(impl)).toHaveLength(3);
+});
+
+test("fails the whole sweep when a game page stays broken", async () => {
+  // A catalogue missing one game's campaigns would read downstream as
+  // those campaigns ending.
+  const impl = site({ "/games": index, "/": home, "/games/fellowship": fellowshipPage });
+  await expect(fetchAll(impl)).rejects.toThrow(/404/);
+});
+
+test("throws rather than reporting that no campaigns are running", async () => {
+  // An empty list ends every subscription downstream as "gone", and it
+  // is what a parse matching the wrong array looks like.
+  const impl = site({
+    "/games": rsc(`{"games":[{"id":"1","urlSlug":"quiet-game","campaigns":[]}]}`),
+    "/": home.replace('"urlSlug":"fellowship"', '"urlSlug":"elsewhere"'),
+  });
+  await expect(fetchAll(impl)).rejects.toThrow(/no campaigns/);
+});
+
+test("throws on a non-ok index rather than returning nothing", async () => {
+  const impl = site({ "/": home });
+  await expect(fetchAll(impl)).rejects.toThrow(/404/);
 });

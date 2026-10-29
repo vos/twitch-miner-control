@@ -60,17 +60,14 @@ export interface ResolvedCampaign extends Omit<Campaign, "drops"> {
  * Three signals make a drop unobtainable, because no one of them is
  * enough on its own:
  *
- *   - `requiredSubs > 0`, Twitch's own field. Authoritative when set,
- *     but the public tracker the catalogue comes from never populates
- *     it -- `requiresSub` is false on every drop in the live feed,
- *     including campaigns literally named "Sub Drops" -- so in practice
- *     this catches nothing. Kept because the field is right when a
- *     source does fill it.
- *   - `requiredMinutes <= 0`. What actually catches these today. A drop
- *     earnable by watching must cost some watching, so zero required
- *     minutes means the gate is something else: a sub, a gift sub, an
- *     external hunt. Available for every drop, including ones with no
- *     inventory entry, which is why it carries the catalogue-only case.
+ *   - `requiredSubs > 0`, Twitch's own field, from the tracker's
+ *     `requiresSub`. Authoritative when set, but a drop can be gated
+ *     behind something other than a sub.
+ *   - `requiredMinutes <= 0`. A drop earnable by watching must cost some
+ *     watching, so zero required minutes means the gate is something
+ *     else: a sub, a gift sub, an external hunt. Available for every
+ *     drop, including ones with no inventory entry, which is why it
+ *     carries the catalogue-only case alongside the field above.
  *   - `preconditionsMet === false`, from the Inventory self edge. The
  *     authoritative signal, and the only one that knows about a drop
  *     gated behind something the catalogue does not describe -- but it

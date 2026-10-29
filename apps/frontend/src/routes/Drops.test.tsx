@@ -216,6 +216,35 @@ test("refreshing campaigns asks only for the catalogue", async () => {
   expect(calls.some((c) => c.url.includes("what=progress"))).toBe(false);
 });
 
+test("a failed refresh says so above the campaigns it kept", async () => {
+  // The list already on screen stays -- it is still the best answer --
+  // but the spinner stopping with nothing else changed reads as a
+  // refresh that worked and found nothing new.
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: false, status: 502, json: async () => ({}),
+  })));
+  await userEvent.click(screen.getByTestId("refresh-catalogue"));
+  const alert = await screen.findByTestId("action-error");
+  expect(alert.textContent).toMatch(/refresh.*HTTP 502/i);
+  expect(screen.getByText("Alpha Campaign")).toBeTruthy();
+});
+
+test("a successful refresh clears the error from a failed one", async () => {
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  const ok = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: false, status: 502, json: async () => ({}),
+  })));
+  await userEvent.click(screen.getByTestId("refresh-catalogue"));
+  await screen.findByTestId("action-error");
+  vi.stubGlobal("fetch", ok);
+  await userEvent.click(screen.getByTestId("refresh-catalogue"));
+  await waitFor(() => expect(screen.queryByTestId("action-error")).toBeNull());
+});
+
 test("a refresh in flight locks both buttons", async () => {
   // They share one payload, so letting the second fire mid-flight races
   // two responses into the same setData. The refresh has to be held
