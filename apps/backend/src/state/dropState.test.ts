@@ -41,6 +41,25 @@ test("a drop Twitch marks sub-gated is unobtainable", () => {
   );
 });
 
+test("a sub-gated drop says that a sub is the gate", () => {
+  // The one gate the catalogue names: the tracker's requiresSub. The
+  // page can say "sub-only" rather than only "not by watching".
+  expect(resolveDrop(drop({ requiredSubs: 1 }), undefined, true).subOnly).toBe(true);
+});
+
+test("a drop gated by anything else does not claim to need a sub", () => {
+  // Zero minutes and an unmet precondition say the gate is not watch
+  // time, but not what it is -- a gift sub, an account link, a hunt.
+  expect(resolveDrop(drop({ requiredMinutes: 0 }), undefined, true).subOnly).toBe(false);
+  const blocked = resolveDrop(
+    drop(),
+    { minutes: 10, claimed: false, instanceId: null, preconditionsMet: false },
+    true,
+  );
+  expect(blocked.status).toBe("unobtainable");
+  expect(blocked.subOnly).toBe(false);
+});
+
 test("unobtainable wins even over recorded progress", () => {
   const out = resolveDrop(
     drop({ requiredSubs: 1 }),

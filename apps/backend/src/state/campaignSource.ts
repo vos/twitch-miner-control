@@ -1,5 +1,5 @@
 import type {
-  Campaign, CampaignBenefit, CampaignDrop,
+  Campaign, CampaignBenefit, CampaignDrop, CampaignOwner,
 } from "./campaignCatalogue.js";
 
 /**
@@ -97,7 +97,10 @@ interface SourceGame {
   urlSlug?: string;
   displayName?: string;
   boxArtUrl?: string;
-  /** The studio behind the game's campaigns, shown on the card. */
+  /**
+   * The tracker's guess at the studio behind the game's campaigns; the
+   * last resort for a campaign's owner -- see extractFeatured.
+   */
   publisher?: string;
   campaigns?: { id?: string }[];
 }
@@ -228,26 +231,59 @@ export function extractGames(body: string): SourceGame[] {
   return games as SourceGame[];
 }
 
+/** What the home page adds: games the index omits, and real owners. */
+export interface Featured {
+  /** Tracker slugs of the featured games, scheduled ones included. */
+  slugs: string[];
+  /** Each featured campaign's own owner, by campaign id. */
+  owners: Map<string, CampaignOwner>;
+  /** The owner featured for each game, by tracker slug. */
+  gameOwners: Map<string, CampaignOwner>;
+}
+
+const NOTHING_FEATURED: Featured = {
+  slugs: [], owners: new Map(), gameOwners: new Map(),
+};
+
+interface FeaturedCampaign {
+  id?: string;
+  game?: { urlSlug?: string } | null;
+  owner?: { name?: string; type?: string } | null;
+}
+
 /**
- * Tracker slugs of the games the home page features, scheduled ones
- * included.
+ * The games and owners the home page features.
  *
  * The index lists a game's campaigns only once one is running, so a game
  * whose next campaign has not opened yet shows there with none. The home
  * page's "Scheduled campaigns" section is the only place those appear.
- * Read from the arrays carrying timeBasedDrops -- the home page alone
- * still uses Twitch's own shape.
+ *
+ * It is also the only place naming a campaign's owner: read from the
+ * arrays carrying timeBasedDrops, as the home page alone still uses
+ * Twitch's own shape. The game pages name none, and the index's
+ * game-level publisher is the tracker's guess -- right for all but one
+ * of 31 featured campaigns checked, but that one, Hunt: Showdown, reads
+ * "Twitch Gaming" for a campaign Crytek runs.
  */
-export function extractFeaturedSlugs(body: string): string[] {
+export function extractFeatured(body: string): Featured {
   const lists = arraysAt(body, "campaigns").filter((list) =>
     list.some((c) => typeof c === "object" && c !== null && "timeBasedDrops" in c),
   );
   if (lists.length === 0) {
     throw new Error("no campaigns on the home page; the source format changed");
   }
-  const slugs = lists.flat().map((c) =>
-    (c as { game?: { urlSlug?: string } | null }).game?.urlSlug);
-  return [...new Set(slugs.filter(nonEmpty))];
+  const slugs = new Set<string>();
+  const owners = new Map<string, CampaignOwner>();
+  const gameOwners = new Map<string, CampaignOwner>();
+  for (const c of lists.flat() as FeaturedCampaign[]) {
+    const slug = c.game?.urlSlug;
+    if (nonEmpty(slug)) slugs.add(slug);
+    if (!nonEmpty(c.owner?.name)) continue;
+    const owner = { name: c.owner.name, type: c.owner.type ?? "" };
+    if (nonEmpty(c.id)) owners.set(c.id, owner);
+    if (nonEmpty(slug) && !gameOwners.has(slug)) gameOwners.set(slug, owner);
+  }
+  return { slugs: [...slugs], owners, gameOwners };
 }
 
 /**
@@ -277,7 +313,12 @@ export function extractGamePage(body: string): GamePage {
  * ones are kept -- the page lists them days further ahead than the
  * index does, which is notice the subscription queue can use.
  */
-export function toCampaigns(game: SourceGame, page: GamePage, now: number): Campaign[] {
+export function toCampaigns(
+  game: SourceGame,
+  page: GamePage,
+  now: number,
+  featured: Featured = NOTHING_FEATURED,
+): Campaign[] {
   const gameRef = game.id === undefined
     ? null
     : {
@@ -286,9 +327,11 @@ export function toCampaigns(game: SourceGame, page: GamePage, now: number): Camp
         displayName: game.displayName ?? "",
         boxArtUrl: nonEmpty(game.boxArtUrl) ? game.boxArtUrl : null,
       };
-  // The game's publisher, not the campaign's own owner -- the game pages
-  // no longer name one. The same studio in all but the odd co-promotion.
-  const owner = nonEmpty(game.publisher) ? { name: game.publisher, type: "" } : null;
+  // Best evidence first: the campaign's own owner, then the owner of
+  // another campaign of this game -- the same studio in all but the odd
+  // co-promotion -- and only then the tracker's publisher guess.
+  const gameOwner = (nonEmpty(game.urlSlug) ? featured.gameOwners.get(game.urlSlug) : undefined)
+    ?? (nonEmpty(game.publisher) ? { name: game.publisher, type: "" } : null);
   return page.campaigns
     .filter((c) => {
       const endsAt = epochMs(c.endAt);
@@ -298,7 +341,7 @@ export function toCampaigns(game: SourceGame, page: GamePage, now: number): Camp
       id: c.id ?? "",
       name: c.name ?? "Campaign",
       game: gameRef,
-      owner,
+      owner: featured.owners.get(c.id ?? "") ?? gameOwner,
       startsAt: epochMs(c.startAt),
       endsAt: epochMs(c.endAt),
       drops: (c.drops ?? []).map(toDrop),
@@ -339,10 +382,11 @@ export async function fetchCampaigns(
     fetchRsc(fetchImpl, `${origin}/games`),
     fetchRsc(fetchImpl, `${origin}/`),
   ]);
-  const featured = new Set(extractFeaturedSlugs(home));
+  const featured = extractFeatured(home);
+  const featuredSlugs = new Set(featured.slugs);
   const games = extractGames(index).filter((g) =>
     nonEmpty(g.urlSlug)
-    && ((g.campaigns?.length ?? 0) > 0 || featured.has(g.urlSlug)));
+    && ((g.campaigns?.length ?? 0) > 0 || featuredSlugs.has(g.urlSlug)));
 
   const perGame: Campaign[][] = new Array(games.length);
   let next = 0;
@@ -356,7 +400,7 @@ export async function fetchCampaigns(
       // One retry: across ~90 pages the odd one comes back without its
       // data, once in a few sweeps, and one bad page fails the sweep.
       const page = await read().catch(read);
-      perGame[i] = toCampaigns(game, page, now());
+      perGame[i] = toCampaigns(game, page, now(), featured);
     }
   };
   await Promise.all(

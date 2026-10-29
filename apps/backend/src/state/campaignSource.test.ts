@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import {
-  extractFeaturedSlugs, extractGamePage, extractGames, fetchCampaigns,
+  extractFeatured, extractGamePage, extractGames, fetchCampaigns,
   toCampaigns, type GamePage,
 } from "./campaignSource.js";
 
@@ -19,7 +19,7 @@ const NOW = Date.parse("2026-10-29T12:00:00.000Z");
 /** The /games index: every game, campaigns summarised without drop ids. */
 const index = rsc(`["$","$L26",null,{"games":[
   {"id":"500188","urlSlug":"hunt-showdown","displayName":"Hunt: Showdown 1896",
-   "boxArtUrl":"https://cdn/ttv-boxart/500188.jpg","publisher":"Crytek",
+   "boxArtUrl":"https://cdn/ttv-boxart/500188.jpg","publisher":"Twitch Gaming",
    "lastEndedAt":"$D2026-10-16T16:59:59.999Z",
    "campaigns":[{"id":"c1","name":"Halloween","startAt":"$D2026-10-26T15:00:00.000Z",
      "endAt":"$D2026-11-09T13:59:59.999Z",
@@ -29,11 +29,20 @@ const index = rsc(`["$","$L26",null,{"games":[
   {"id":"1","urlSlug":"quiet-game","displayName":"Quiet","campaigns":[]}
 ]}]`);
 
-/** The home page: featured campaigns, the only place in Twitch's shape. */
+/**
+ * The home page: featured campaigns, the only place in Twitch's shape
+ * and so the only place naming each campaign's owner.
+ */
 const home = rsc(`["$","$L2b",null,{"campaigns":[
   {"id":"c9","name":"Scheduled","startAt":"$D2026-10-30T15:00:00.000Z",
    "endAt":"$D2026-11-01T14:59:59.999Z",
    "game":{"id":"177579460","slug":"fellowship-1","urlSlug":"fellowship"},
+   "owner":{"id":"o1","name":"Chief Rebel","type":"Organization"},
+   "timeBasedDrops":[]},
+  {"id":"c2","name":"Week 1 [Pt. 2]","startAt":"$D2026-10-30T15:00:00.000Z",
+   "endAt":"$D2026-11-02T14:59:59.999Z",
+   "game":{"id":"500188","slug":"hunt-showdown","urlSlug":"hunt-showdown"},
+   "owner":{"id":"o2","name":"Crytek GmbH","type":"Organization"},
    "timeBasedDrops":[]}
 ]}]`);
 
@@ -83,11 +92,11 @@ test("throws when the index carries no games array", () => {
 });
 
 test("reads the featured games' slugs off the home page", () => {
-  expect(extractFeaturedSlugs(home)).toEqual(["fellowship"]);
+  expect(extractFeatured(home).slugs).toEqual(["fellowship", "hunt-showdown"]);
 });
 
 test("throws when the home page carries no campaigns", () => {
-  expect(() => extractFeaturedSlugs(rsc(`{"campaigns":[{"startAt":"x"}]}`)))
+  expect(() => extractFeatured(rsc(`{"campaigns":[{"startAt":"x"}]}`)))
     .toThrow(/home page/);
 });
 
@@ -163,9 +172,24 @@ test("falls back to the tracker's slug when the page omits Twitch's", () => {
   expect(toCampaigns(huntGame, page, NOW)[0]?.game?.slug).toBe("hunt-showdown");
 });
 
-test("names the game's publisher as the campaign owner", () => {
+test("names a featured campaign's own owner", () => {
+  const out = toCampaigns(huntGame, huntPage(), NOW, extractFeatured(home));
+  expect(out.find((c) => c.id === "c2")?.owner)
+    .toEqual({ name: "Crytek GmbH", type: "Organization" });
+});
+
+test("gives a game's other campaigns the owner featured for that game", () => {
+  // The game's publisher field is the tracker's own guess, and wrong
+  // for some -- Hunt's reads "Twitch Gaming". A campaign of the same game
+  // is near enough always run by the same studio.
+  const out = toCampaigns(huntGame, huntPage(), NOW, extractFeatured(home));
+  expect(out.find((c) => c.id === "c1")?.owner)
+    .toEqual({ name: "Crytek GmbH", type: "Organization" });
+});
+
+test("falls back to the game's publisher when nothing is featured", () => {
   const [out] = toCampaigns(huntGame, huntPage(), NOW);
-  expect(out?.owner).toEqual({ name: "Crytek", type: "" });
+  expect(out?.owner).toEqual({ name: "Twitch Gaming", type: "" });
 });
 
 test("survives a game with no box art or publisher", () => {
@@ -211,6 +235,9 @@ test("sweeps the game pages of running and featured games only", async () => {
   const out = await fetchAll(impl);
   // c1 sits under both games; the first one keeps it.
   expect(out.map((c) => c.id)).toEqual(["c1", "c2", "c9"]);
+  // Owners come from the home page, not the publisher field.
+  expect(out.map((c) => c.owner?.name))
+    .toEqual(["Crytek GmbH", "Crytek GmbH", "Chief Rebel"]);
   expect(impl.mock.calls.map(([url]) => url)).not.toContain(
     "https://twitch-drops.fenrisapps.com/games/quiet-game",
   );

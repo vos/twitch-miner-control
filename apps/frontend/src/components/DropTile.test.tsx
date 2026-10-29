@@ -40,15 +40,38 @@ test("an unobtainable drop says watching cannot earn it", () => {
   // all drops" will never complete for this one and the user needs to
   // know that is by design.
   //
-  // Phrased about watching rather than about subs: the gate is a gift
-  // sub on some, an account link or an external hunt on others, and the
-  // signals that detect them (zero required minutes, an unmet
-  // precondition) do not say which. "Needs sub" was a guess that read
-  // as fact.
+  // Phrased about watching rather than about subs unless Twitch says a
+  // sub is the gate: otherwise it may be a gift sub, an account link or
+  // an external hunt, and the signals that detect those (zero required
+  // minutes, an unmet precondition) do not say which.
   renderApp(<DropTile drop={drop({ status: "unobtainable" })} />);
   expect(screen.getByTestId("drop-state").textContent)
     .toMatch(/not earned by watching/i);
   expect(screen.queryByTestId("drop-bar")).toBeNull();
+});
+
+test("a sub-only drop says a sub is what earns it", () => {
+  // Named only when Twitch's own requiresSub says so; every other gate
+  // keeps the wording above.
+  renderApp(<DropTile drop={drop({ status: "unobtainable", subOnly: true })} />);
+  expect(screen.getByTestId("drop-state").textContent).toMatch(/^sub-only$/i);
+  expect(screen.queryByTestId("drop-bar")).toBeNull();
+});
+
+test("a drop that costs no watch time shows no cost", () => {
+  // "0m" beside "sub-only" reads as a drop that is free, or already done.
+  renderApp(<DropTile drop={drop({
+    status: "unobtainable", subOnly: true, requiredMinutes: 0, minutes: 0,
+  })} />);
+  expect(screen.queryByTestId("drop-progress")).toBeNull();
+  expect(screen.getByTestId("drop-state").textContent).toMatch(/sub-only/i);
+});
+
+test("a sub-only drop that also costs watch time still shows it", () => {
+  renderApp(<DropTile drop={drop({
+    status: "unobtainable", subOnly: true, requiredMinutes: 60, minutes: 0,
+  })} />);
+  expect(screen.getByTestId("drop-progress").textContent).toBe("60m");
 });
 
 test("an unknown drop shows an em-dash, never a zero bar", () => {

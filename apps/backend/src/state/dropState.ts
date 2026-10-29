@@ -29,6 +29,15 @@ export interface ResolvedDrop {
   minutes: number;
   status: DropStatus;
   /**
+   * Twitch marks the drop as earned by a sub, not by watching.
+   *
+   * Says what the gate is, which `unobtainable` alone cannot: the other
+   * two signals behind that status say only that the gate is not watch
+   * time. Kept beside the status rather than as a status of its own, so
+   * every rule excluding unobtainable drops covers these unchanged.
+   */
+  subOnly: boolean;
+  /**
    * The drop's own window, null when the source did not report one.
    *
    * Normalised from the optional field on CampaignDrop so the API shape
@@ -99,6 +108,7 @@ export function resolveDrop(
     name: drop.name,
     benefits: drop.benefits ?? [],
     requiredMinutes: drop.requiredMinutes,
+    subOnly: drop.requiredSubs > 0,
     startsAt: drop.startsAt ?? null,
     endsAt: drop.endsAt ?? null,
   };

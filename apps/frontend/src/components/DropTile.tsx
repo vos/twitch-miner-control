@@ -28,6 +28,11 @@ export interface ResolvedDrop {
   requiredMinutes: number;
   minutes: number;
   status: DropStatus;
+  /**
+   * Twitch marks it as earned by a sub. Absent from a backend that
+   * predates the field, which reads as the generic wording.
+   */
+  subOnly?: boolean;
   /** The drop's own window, narrower than its campaign's on some. */
   startsAt?: number | null;
   endsAt?: number | null;
@@ -39,11 +44,10 @@ const STATE: Record<DropStatus, { label: string; colour: string }> = {
   // reads as a bug when "collect all drops" never completes.
   //
   // Phrased about watching rather than about subs, because that is the
-  // most the signals actually support: a zero-minute requirement and an
-  // unmet precondition both mean "the gate is something other than
-  // watch time" without saying which, and the gate is a gift sub on
-  // some drops, an account link or an external hunt on others. The
-  // older "needs sub" stated a reason the app had not established.
+  // most a zero-minute requirement or an unmet precondition supports:
+  // the gate is not watch time, but it may be a gift sub, an account
+  // link or an external hunt. A drop Twitch itself marks as needing a
+  // sub says so instead -- see SUB_ONLY.
   unobtainable: { label: "not earned by watching", colour: "gray" },
   claimed: { label: "claimed", colour: "gray" },
   // Filled orange below: the one state that wants acting on, matching
@@ -53,6 +57,9 @@ const STATE: Record<DropStatus, { label: string; colour: string }> = {
   "not-started": { label: "not started", colour: "gray" },
   unknown: { label: "progress unknown", colour: "gray" },
 };
+
+/** An unobtainable drop whose gate Twitch names: a sub. */
+const SUB_ONLY = { label: "sub-only", colour: "gray" };
 
 /**
  * What this drop awards, as rows to render.
@@ -107,7 +114,9 @@ export function DropTile({ drop, campaignStartsAt = null, campaignEndsAt = null 
   campaignStartsAt?: number | null;
   campaignEndsAt?: number | null;
 }) {
-  const state = STATE[drop.status];
+  const state = drop.status === "unobtainable" && drop.subOnly === true
+    ? SUB_ONLY
+    : STATE[drop.status];
   const showBar = drop.status === "in-progress";
   const unknown = drop.status === "unknown";
   const muted = drop.status === "claimed" || drop.status === "unobtainable";
@@ -141,19 +150,24 @@ export function DropTile({ drop, campaignStartsAt = null, campaignEndsAt = null 
        leaves it no width at all -- it collapses to nothing and the
        minutes wrap one character per line. */
     <Group gap={6} wrap="nowrap" justify="space-between" mt={2}>
-      <Text
-        size="xs"
-        c="dimmed"
-        style={{ whiteSpace: "nowrap" }}
-        data-testid="drop-progress"
-      >
-        {unknown
-          ? `— / ${drop.requiredMinutes}m`
-          : drop.status === "in-progress"
-            ? `${drop.minutes}/${drop.requiredMinutes}m`
-            : `${drop.requiredMinutes}m`}
-      </Text>
-      <Group gap={6} wrap="nowrap">
+      {/* No cost on a drop that has none: watch time is not its gate,
+          and "0m" beside "sub-only" reads as free or already done. */}
+      {drop.requiredMinutes > 0 && (
+        <Text
+          size="xs"
+          c="dimmed"
+          style={{ whiteSpace: "nowrap" }}
+          data-testid="drop-progress"
+        >
+          {unknown
+            ? `— / ${drop.requiredMinutes}m`
+            : drop.status === "in-progress"
+              ? `${drop.minutes}/${drop.requiredMinutes}m`
+              : `${drop.requiredMinutes}m`}
+        </Text>
+      )}
+      {/* Pinned right whether or not the cost is there to push it. */}
+      <Group gap={6} wrap="nowrap" ml="auto">
         {/* Only when this drop runs for a slice of its campaign rather
             than the whole of it. Every drop in the current catalogue
             repeats its campaign's window, so this stays hidden -- but
