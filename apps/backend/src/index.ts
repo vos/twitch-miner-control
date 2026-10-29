@@ -13,7 +13,10 @@ import { resolveEnvFlag } from "./config/envFlag.js";
 import { resolveMinerLogLevel } from "./config/logLevel.js";
 import { resolveRetentionDays } from "./config/retention.js";
 import { loadConfig, saveConfig } from "./config/store.js";
+import { fetchCampaigns } from "./state/campaignSource.js";
 import { DailyPoints } from "./db/dailyPoints.js";
+import { CampaignHistory } from "./db/campaignHistory.js";
+import { CampaignRecorder } from "./state/campaignRecorder.js";
 import { History } from "./db/history.js";
 import { rollupDays } from "./insights/rollup.js";
 import { openDb } from "./db/schema.js";
@@ -398,6 +401,11 @@ const trustProxy = resolveEnvFlag(process.env.TRUST_PROXY);
 // stays true across one; progress does not, and lives only in memory.
 const catalogue = new CampaignCatalogue({
   path: join(dataDir, "campaigns.json"),
+  // Followed games are swept even between campaigns, which is when their
+  // history -- how often they run drops -- is worth showing.
+  source: () => fetchCampaigns({
+    alsoGameIds: loadConfig(configPath).followedGames.map((g) => g.id),
+  }),
   log: appLog.log,
 });
 const inventoryCache = new InventoryCache({
@@ -462,6 +470,12 @@ const campaignWatcher = new CampaignWatcher({
   catalogue,
   inventory: inventoryCache,
 });
+const campaignHistory = new CampaignHistory(db);
+const campaignRecorder = new CampaignRecorder({
+  catalogue,
+  inventory: inventoryCache,
+  store: campaignHistory,
+});
 const digest = new DigestScheduler({
   notifier,
   store: notifyStore,
@@ -474,7 +488,7 @@ const app: AppServer = buildServer({
   configPath, password, doorbellToken, supervisor, stateService, history,
   streamers, dailyPoints,
   helper, loginRunner, loginStatus, cookiesDir, staticRoot, secureCookie, trustProxy,
-  catalogue, inventory: inventoryCache, giftSubs,
+  catalogue, inventory: inventoryCache, campaignHistory, giftSubs,
   engine, pendingRestart, games: twitchGames(),
   notify: {
     store: notifyStore,
@@ -519,6 +533,7 @@ void (async () => {
   if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
   engine.start();
   campaignWatcher.start();
+  campaignRecorder.start();
 })().catch((cause: unknown) => {
   const err = cause instanceof Error ? cause.message : String(cause);
   bootLog.error({
@@ -540,6 +555,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       stateService.stop();
       engine.stop();
       campaignWatcher.stop();
+      campaignRecorder.stop();
       digest.stop();
       notifier.stop();
       // cancel() itself is synchronous (it only sends signals and arms its

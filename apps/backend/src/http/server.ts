@@ -27,6 +27,8 @@ import type { TwitchGame, TwitchGames } from "../twitch/categories.js";
 import type { PendingRestart } from "../drops/pendingRestart.js";
 import type { Campaign, CampaignCatalogue } from "../state/campaignCatalogue.js";
 import { resolveCampaign } from "../state/dropState.js";
+import { dropRhythm } from "../state/dropRhythm.js";
+import type { CampaignHistory } from "../db/campaignHistory.js";
 import { campaignQueue } from "../drops/queue.js";
 import { buildCalendar } from "../insights/calendar.js";
 import { buildRecap } from "../insights/recap.js";
@@ -235,6 +237,8 @@ export interface ServerDeps {
   catalogue: CampaignCatalogue;
   /** Viewer drop progress, on the ten-minute clock. */
   inventory: InventoryCache;
+  /** Campaigns this account made progress on, kept after they end. */
+  campaignHistory: Pick<CampaignHistory, "all">;
   /** The account's gift subs; refetched on demand, never on a timer. */
   giftSubs: Pick<GiftSubsCache, "refresh">;
   /** Resolves subscriptions into channels; driven on its own timer. */
@@ -625,6 +629,16 @@ export function buildServer(deps: ServerDeps): AppServer {
       campaignPayload({ catalogue: false, progress: false }));
 
     /**
+     * Every campaign this account made progress on, newest first.
+     *
+     * Its own route rather than part of the payload above: it only
+     * grows, and only the History view reads it.
+     */
+    instance.get("/api/campaigns/history", async () => ({
+      campaigns: deps.campaignHistory.all(),
+    }));
+
+    /**
      * Bypasses the TTL, on the half the caller asks for.
      *
      * The two halves cost wildly different amounts. Progress is one
@@ -695,9 +709,19 @@ export function buildServer(deps: ServerDeps): AppServer {
           })
           .map((sub) => sub.id)))
         : null;
+      const activity = deps.catalogue.peek()?.games ?? {};
       return {
         campaignQueue: config.campaignQueue,
-        followedGames: config.followedGames,
+        // Each with how often it runs drops: between campaigns, what
+        // says whether a followed game is still worth following.
+        followedGames: config.followedGames.map((game) => ({
+          ...game,
+          rhythm: dropRhythm(
+            activity[game.id],
+            campaigns.filter((c) => c.game?.id === game.id),
+            now,
+          ),
+        })),
         subscriptions: ordered
           .map((sub) => ({
             ...sub,
@@ -920,7 +944,15 @@ export function buildServer(deps: ServerDeps): AppServer {
     instance.get("/api/games/search", async (request, reply) => {
       const q = (request.query as { q?: unknown }).q;
       try {
-        return { games: await deps.games.find(typeof q === "string" ? q : "") };
+        const found = await deps.games.find(typeof q === "string" ? q : "");
+        // When each last ran drops, from the tracker's index -- known for
+        // games with nothing running, which the campaign list is not.
+        const activity = deps.catalogue.peek()?.games ?? {};
+        return {
+          games: found.map((game) => ({
+            ...game, lastEndedAt: activity[game.id]?.lastEndedAt ?? null,
+          })),
+        };
       } catch (cause) {
         return reply.code(502).send({
           error: `Twitch search is unavailable: ${messageOf(cause)}`,

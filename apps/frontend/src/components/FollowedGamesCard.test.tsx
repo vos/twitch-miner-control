@@ -35,6 +35,20 @@ test("a game with nothing running says so", () => {
   expect(screen.getByTestId("followed-game").textContent).toMatch(/No campaigns right now/);
 });
 
+test("a game between campaigns says when it last ran and how often", () => {
+  // What tells a followed game that is still active from one gone quiet.
+  const game = { ...elden, rhythm: { lastEndedAt: Date.now() - 21 * 86_400_000, everyDays: 14 } };
+  renderApp(<FollowedGamesCard {...props({ games: [game], campaigns: [] })} />);
+  expect(screen.getByTestId("followed-game").textContent)
+    .toMatch(/No campaigns right now · last ran 21d ago · usually every ~2 weeks/);
+});
+
+test("a game with a campaign running does not dwell on its history", () => {
+  const game = { ...elden, rhythm: { lastEndedAt: Date.now() - 21 * 86_400_000, everyDays: 14 } };
+  renderApp(<FollowedGamesCard {...props({ games: [game] })} />);
+  expect(screen.getByTestId("followed-game").textContent).not.toMatch(/last ran/);
+});
+
 test("remove and pool size report the game", async () => {
   const p = props();
   renderApp(<FollowedGamesCard {...p} />);

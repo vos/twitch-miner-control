@@ -64,7 +64,7 @@ function make(over: {
     configPath: "/tmp/config.json",
     catalogue: {
       get: async (): Promise<Catalogue> => over.catalogueFails ? Promise.reject(new Error("down")) : ({
-        campaigns: [campaign()], fetchedAt: 1, stale: false,
+        campaigns: [campaign()], games: {}, fetchedAt: 1, stale: false,
         available: true, error: null, ...over.catalogue,
       }),
     } as never,

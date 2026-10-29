@@ -5,7 +5,9 @@ import { useDebouncedValue } from "@mantine/hooks";
 import { IconSearch } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { api } from "../api/client.js";
-import { type FollowedGame, type TwitchGame, runningCampaigns } from "../lib/followedGames.js";
+import {
+  type FollowedGame, type TwitchGame, dropsLastRan, runningCampaigns,
+} from "../lib/followedGames.js";
 import { CampaignBoxArt } from "./CampaignBoxArt.js";
 import type { ResolvedCampaign } from "./CampaignCard.js";
 
@@ -120,6 +122,9 @@ export function FollowGamesDialog({ opened, onClose, followed, campaigns, onConf
           {search.state === "done" && search.games.map((game) => {
             const already = following.has(game.id);
             const count = runningCampaigns(game.id, campaigns);
+            // Only with nothing running: a running campaign already
+            // says the game is active.
+            const lastRan = count === 0 ? dropsLastRan(game.lastEndedAt) : null;
             return (
               <Group key={game.id} gap="sm" wrap="nowrap" py={4} data-testid="follow-result">
                 <Checkbox
@@ -133,6 +138,9 @@ export function FollowGamesDialog({ opened, onClose, followed, campaigns, onConf
                   <Text size="sm" lineClamp={1}>{game.name}</Text>
                   <Text size="xs" c="dimmed" ff="monospace">{game.id}</Text>
                 </div>
+                {lastRan !== null && (
+                  <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>{lastRan}</Text>
+                )}
                 {count > 0 && (
                   <Badge size="xs" variant="light" color="teal">
                     {count === 1 ? "1 campaign" : `${count} campaigns`}

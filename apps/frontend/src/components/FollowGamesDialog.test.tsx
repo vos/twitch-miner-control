@@ -111,3 +111,15 @@ test("a failed follow keeps the dialog open with the reason", async () => {
   expect(await screen.findByText(/Twitch could not be reached/)).toBeTruthy();
   expect(onClose).not.toHaveBeenCalled();
 });
+
+test("a result with nothing running says when its drops last ran", async () => {
+  // Tells a game worth following from one that has not run drops in a
+  // year, before following it.
+  const ago = Date.now() - 21 * 86_400_000;
+  stubSearch(() => [{ ...elden, lastEndedAt: ago }, { ...rust, lastEndedAt: null }]);
+  open();
+  await userEvent.type(box(), "el");
+  const [first, second] = await screen.findAllByTestId("follow-result");
+  expect(first!.textContent).toMatch(/drops last ran 21d ago/);
+  expect(second!.textContent).not.toMatch(/last ran/);
+});

@@ -8,10 +8,13 @@ import { loadConfig, saveConfig } from "../config/store.js";
 import { History } from "../db/history.js";
 import { openDb } from "../db/schema.js";
 import { DailyPoints } from "../db/dailyPoints.js";
+import { CampaignHistory } from "../db/campaignHistory.js";
 import { Streamers } from "../db/streamers.js";
 import { LoginStatus } from "../helpers/loginStatus.js";
 import { NdjsonClient, NdjsonError } from "../helpers/ndjsonClient.js";
-import { CampaignCatalogue, type Campaign } from "../state/campaignCatalogue.js";
+import {
+  CampaignCatalogue, type Campaign, type GameActivity,
+} from "../state/campaignCatalogue.js";
 import { InventoryCache } from "../state/inventory.js";
 import { GiftSubsCache } from "../state/giftSubs.js";
 import { StateService } from "../state/service.js";
@@ -53,6 +56,7 @@ async function make(options: {
   const history = new History(db);
   const streamers = new Streamers(db);
   const dailyPoints = new DailyPoints(db);
+  const campaignHistory = new CampaignHistory(db);
   // A real emitter: a test drives its "state" event to check the status push.
   const supervisor = Object.assign(new EventEmitter(), {
     state: "RUNNING" as const, restart: vi.fn(async () => {}),
@@ -75,6 +79,9 @@ async function make(options: {
   // throw to exercise the unavailable path.
   let campaignSource: () => Campaign[] = () => [];
   const setCampaigns = (next: () => Campaign[]) => { campaignSource = next; };
+  // Each game's activity as the source reports it beside the campaigns.
+  let gameActivity: Record<string, GameActivity> = {};
+  const setGames = (next: Record<string, GameActivity>) => { gameActivity = next; };
   const client = {
     request: vi.fn(async (op: string) => {
       const canned = helperResponses[op];
@@ -97,7 +104,7 @@ async function make(options: {
   // Campaigns come from a public tracker over plain HTTPS; progress
   // still comes from Twitch through the helper below.
   const catalogue = new CampaignCatalogue({
-    source: async () => campaignSource(),
+    source: async () => ({ campaigns: campaignSource(), games: gameActivity }),
     path: join(dir, "campaigns.json"),
   });
   const inventory = new InventoryCache({ client: client as never });
@@ -127,6 +134,7 @@ async function make(options: {
     cookiesDir,
     catalogue,
     inventory,
+    campaignHistory,
     giftSubs,
     engine: engine as never,
     games,
@@ -143,7 +151,7 @@ async function make(options: {
   });
   return {
     app, supervisor, client, history, streamers, dailyPoints, state, loginRunner, loginStatus, configPath,
-    cookiesDir, helperResponses, setCampaigns, catalogue, engine, pending, held, games,
+    cookiesDir, helperResponses, setCampaigns, setGames, catalogue, campaignHistory, engine, pending, held, games,
     giftSubs, cookie: login.cookies[0].value,
   };
 }
@@ -950,9 +958,10 @@ async function makeLive() {
     // This server never exercises the campaign routes; the caches are
     // here only to satisfy the deps contract.
     catalogue: new CampaignCatalogue({
-      source: async () => [], path: join(dir, "campaigns.json"),
+      source: async () => ({ campaigns: [], games: {} }), path: join(dir, "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: helper as never }),
+    campaignHistory: { all: () => [] },
     giftSubs: new GiftSubsCache({ client: helper as never }),
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
@@ -1342,10 +1351,11 @@ test("GET /api/streamers derives first when the backend has been idle", async ()
     loginRunner: ctx.loginRunner as never,
     loginStatus: ctx.loginStatus,
     catalogue: new CampaignCatalogue({
-      source: async () => [],
+      source: async () => ({ campaigns: [], games: {} }),
       path: join(mkdtempSync(join(tmpdir(), "srv-")), "campaigns.json"),
     }),
     inventory: new InventoryCache({ client: ctx.client as never }),
+    campaignHistory: { all: () => [] },
     giftSubs: new GiftSubsCache({ client: ctx.client as never }),
     // These servers never exercise the subscription routes; the stubs
     // are here only to satisfy the deps contract.
@@ -1529,6 +1539,25 @@ test("POST /api/campaigns/refresh requires a session", async () => {
     method: "POST", url: "/api/campaigns/refresh",
   });
   expect(res.statusCode).toBe(401);
+});
+
+test("GET /api/campaigns/history lists the campaigns watched, newest first", async () => {
+  // Kept after a campaign leaves the catalogue: the only record of it.
+  const watched = (id: string, endsAt: number) => ({
+    id, name: id, game: null, owner: null, startsAt: 1, endsAt, drops: [],
+    status: "collected" as const, complete: true, accountLink: null,
+  });
+  ctx.campaignHistory.record(watched("older", 1_000));
+  ctx.campaignHistory.record(watched("newer", 2_000));
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/campaigns/history", cookies: auth(),
+  });
+  expect(res.statusCode).toBe(200);
+  expect(res.json().campaigns.map((c: { id: string }) => c.id)).toEqual(["newer", "older"]);
+});
+
+test("GET /api/campaigns/history needs a session", async () => {
+  expect((await ctx.app.inject({ url: "/api/campaigns/history" })).statusCode).toBe(401);
 });
 
 test("GET /api/campaigns reports a dead source as unavailable, not as none", async () => {
@@ -2150,8 +2179,20 @@ test("GET /api/games/search returns what Twitch found", async () => {
     method: "GET", url: "/api/games/search?q=elden", cookies: auth(),
   });
   expect(res.statusCode).toBe(200);
-  expect(res.json()).toEqual({ games: [elden] });
+  expect(res.json()).toEqual({ games: [{ ...elden, lastEndedAt: null }] });
   expect(ctx.games.find).toHaveBeenCalledWith("elden");
+});
+
+test("GET /api/games/search says when each game last ran drops", async () => {
+  // From the tracker's index, which covers games with nothing running --
+  // what tells a game worth following from one that never runs drops.
+  ctx.setGames({ "512953": { lastEndedAt: 1_790_000_000_000 } });
+  await ctx.catalogue.refresh();
+  ctx.games.find.mockResolvedValueOnce([elden]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/games/search?q=elden", cookies: auth(),
+  });
+  expect(res.json().games[0].lastEndedAt).toBe(1_790_000_000_000);
 });
 
 test("GET /api/games/search answers 502 when Twitch fails, never an empty list", async () => {
@@ -2284,8 +2325,26 @@ test("GET /api/subscriptions includes the followed games", async () => {
   const res = await ctx.app.inject({
     method: "GET", url: "/api/subscriptions", cookies: auth(),
   });
-  expect(res.json().followedGames).toEqual([asFollowed()]);
+  expect(res.json().followedGames).toEqual([
+    { ...asFollowed(), rhythm: { lastEndedAt: null, everyDays: null } },
+  ]);
   expect(res.json().subscriptions[0].viaGame).toBe("512953");
+});
+
+test("GET /api/subscriptions says how often each followed game runs drops", async () => {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const weekly = [3, 10, 17, 24, 31].map((d) => ({
+    startsAt: now - d * DAY, endsAt: now - d * DAY + DAY,
+  }));
+  ctx.setGames({ "512953": { lastEndedAt: now - 2 * DAY, past: weekly } });
+  await ctx.catalogue.refresh();
+  withFollowed([asFollowed()]);
+  const res = await ctx.app.inject({
+    method: "GET", url: "/api/subscriptions", cookies: auth(),
+  });
+  expect(res.json().followedGames[0].rhythm)
+    .toEqual({ lastEndedAt: now - 2 * DAY, everyDays: 7 });
 });
 
 test("unskipping a campaign lets its followed game subscribe to it again", async () => {

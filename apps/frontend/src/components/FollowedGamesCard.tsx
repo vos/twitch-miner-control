@@ -1,6 +1,8 @@
 import { Anchor, Button, Card, Group, Stack, Text } from "@mantine/core";
 import { IconPlus } from "@tabler/icons-react";
-import { type FollowedGame, type SkippedCampaign, runningCampaigns } from "../lib/followedGames.js";
+import {
+  type FollowedGame, type SkippedCampaign, idleActivity, runningCampaigns,
+} from "../lib/followedGames.js";
 import { CampaignBoxArt } from "./CampaignBoxArt.js";
 import type { ResolvedCampaign } from "./CampaignCard.js";
 import { PoolSizeInput } from "./PoolSizeInput.js";
@@ -80,7 +82,8 @@ export function FollowedGamesCard({
                       )}
                       <Text size="xs" c="dimmed">
                         {count === 0
-                          ? "No campaigns right now"
+                          ? ["No campaigns right now", idleActivity(game.rhythm)]
+                            .filter((part) => part !== null).join(" · ")
                           : count === 1 ? "1 campaign running" : `${count} campaigns running`}
                         {skips > 0 && ` · ${skips} skipped`}
                       </Text>

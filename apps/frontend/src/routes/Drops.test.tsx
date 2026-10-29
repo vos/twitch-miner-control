@@ -1617,3 +1617,55 @@ test("the followed game says how many campaigns it skipped", async () => {
   const game = await screen.findByTestId("followed-game");
   expect(game.textContent).toMatch(/1 campaign running · 1 skipped/);
 });
+
+// --- history ---
+
+/** Serves the recorded history beside the usual payload. */
+function withHistory(recorded: unknown[]) {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    if (url === "/api/campaigns/history") {
+      return { ok: true, status: 200, json: async () => ({ campaigns: recorded }) };
+    }
+    return { ok: true, status: 200, json: async () => body };
+  }));
+}
+
+const gone = {
+  id: "gone", name: "Gone Campaign",
+  game: { id: "g9", slug: "gone-game", displayName: "Gone Game" },
+  startsAt: 1, endsAt: Date.now() - 7 * 86_400_000,
+  drops: [{ ...aDrop, status: "claimed", minutes: 60 }],
+  status: "collected", complete: true,
+};
+
+test("the History view lists the campaigns watched, ended ones included", async () => {
+  // The ended one has left the campaign list: only the history has it.
+  withHistory([gone]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: "History" }));
+  await waitFor(() => expect(screen.getByText("Gone Campaign")).toBeTruthy());
+  // Beta has progress and is still running; Alpha was never watched.
+  expect(screen.getByText("Beta Campaign")).toBeTruthy();
+  expect(screen.queryByText("Alpha Campaign")).toBeNull();
+});
+
+test("a campaign that has left the list cannot be subscribed from History", async () => {
+  withHistory([gone]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: "History" }));
+  const card = (await screen.findByText("Gone Campaign")).closest("[data-testid='campaign-card']");
+  expect(within(card as HTMLElement).queryByRole("button", { name: /subscribe/i })).toBeNull();
+});
+
+test("an empty history says what it will hold", async () => {
+  body = { ...payload, campaigns: [payload.campaigns[0]] };
+  withHistory([]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByText("Alpha Campaign")).toBeTruthy());
+  await userEvent.click(screen.getByRole("button", { name: "History" }));
+  expect((await screen.findByTestId("campaigns-empty")).textContent)
+    .toMatch(/kept here, even after they end/);
+});

@@ -1,5 +1,6 @@
 import type {
-  Campaign, CampaignBenefit, CampaignDrop, CampaignOwner,
+  Campaign, CampaignBenefit, CampaignDrop, CampaignOwner, GameActivity,
+  PastWindow, SourceSnapshot,
 } from "./campaignCatalogue.js";
 
 /**
@@ -102,6 +103,8 @@ interface SourceGame {
    * last resort for a campaign's owner -- see extractFeatured.
    */
   publisher?: string;
+  /** When the game's most recent finished campaign ended. */
+  lastEndedAt?: string;
   campaigns?: { id?: string }[];
 }
 
@@ -116,6 +119,8 @@ export interface GamePage {
    */
   twitchSlug: string | null;
   campaigns: SourceCampaign[];
+  /** Past campaigns' windows, newest first, as the page lists them. */
+  history: PastWindow[];
 }
 
 /**
@@ -287,21 +292,39 @@ export function extractFeatured(body: string): Featured {
 }
 
 /**
- * Parses a game page for its full campaigns and its Twitch slug.
+ * Parses a game page for its full campaigns, Twitch slug and history.
  *
  * The full campaigns are the one "campaigns" array whose entries carry
  * drops; the others on the page are window-only stubs for badges, and
  * "history" holds past campaigns in the index's summary shape.
+ *
+ * A game with nothing running has an empty full list, which no shape
+ * test can pick out from the stubs. Its history is what proves the page
+ * is a game page at all, so an empty list beside a history reads as "no
+ * campaigns"; with neither, the format changed and this throws.
  */
 export function extractGamePage(body: string): GamePage {
-  const campaigns = arraysAt(body, "campaigns").find((list) =>
+  const [history] = arraysAt(body, "history") as (SourceCampaign[] | undefined)[];
+  let campaigns = arraysAt(body, "campaigns").find((list) =>
     list.some((c) => typeof c === "object" && c !== null && "drops" in c),
-  );
+  ) as SourceCampaign[] | undefined;
+  if (campaigns === undefined && history !== undefined
+      && body.includes('"campaigns":[]')) {
+    campaigns = [];
+  }
   if (campaigns === undefined) {
     throw new Error("no campaigns with drops on a game page; the source format changed");
   }
   const slug = /"twitchSlug":"([^"]+)"/.exec(body)?.[1];
-  return { twitchSlug: slug ?? null, campaigns: campaigns as SourceCampaign[] };
+  return {
+    twitchSlug: slug ?? null,
+    campaigns,
+    history: (history ?? []).flatMap((c) => {
+      const startsAt = epochMs(c.startAt);
+      const endsAt = epochMs(c.endAt);
+      return startsAt === null || endsAt === null ? [] : [{ startsAt, endsAt }];
+    }),
+  };
 }
 
 /**
@@ -352,6 +375,11 @@ export interface FetchCampaignsOptions {
   fetchImpl?: typeof fetch;
   origin?: string;
   now?: () => number;
+  /**
+   * Twitch game ids to sweep even with nothing running -- the followed
+   * games, whose history is wanted most when they are between campaigns.
+   */
+  alsoGameIds?: readonly string[];
 }
 
 async function fetchRsc(fetchImpl: typeof fetch, url: string): Promise<string> {
@@ -376,17 +404,29 @@ async function fetchRsc(fetchImpl: typeof fetch, url: string): Promise<string> {
  * serving its previous list.
  */
 export async function fetchCampaigns(
-  { fetchImpl = fetch, origin = SOURCE_ORIGIN, now = Date.now }: FetchCampaignsOptions = {},
-): Promise<Campaign[]> {
+  {
+    fetchImpl = fetch, origin = SOURCE_ORIGIN, now = Date.now, alsoGameIds = [],
+  }: FetchCampaignsOptions = {},
+): Promise<SourceSnapshot> {
   const [index, home] = await Promise.all([
     fetchRsc(fetchImpl, `${origin}/games`),
     fetchRsc(fetchImpl, `${origin}/`),
   ]);
   const featured = extractFeatured(home);
   const featuredSlugs = new Set(featured.slugs);
-  const games = extractGames(index).filter((g) =>
+  const also = new Set(alsoGameIds);
+  const listed = extractGames(index);
+  const games = listed.filter((g) =>
     nonEmpty(g.urlSlug)
-    && ((g.campaigns?.length ?? 0) > 0 || featuredSlugs.has(g.urlSlug)));
+    && ((g.campaigns?.length ?? 0) > 0 || featuredSlugs.has(g.urlSlug)
+      || (g.id !== undefined && also.has(g.id))));
+
+  // Every game gets its last end date, which the index has for all of
+  // them; only swept games get their past windows.
+  const activity: Record<string, GameActivity> = {};
+  for (const g of listed) {
+    if (g.id !== undefined) activity[g.id] = { lastEndedAt: epochMs(g.lastEndedAt) };
+  }
 
   const perGame: Campaign[][] = new Array(games.length);
   let next = 0;
@@ -401,6 +441,9 @@ export async function fetchCampaigns(
       // data, once in a few sweeps, and one bad page fails the sweep.
       const page = await read().catch(read);
       perGame[i] = toCampaigns(game, page, now(), featured);
+      if (game.id !== undefined) {
+        activity[game.id] = { lastEndedAt: epochMs(game.lastEndedAt), past: page.history };
+      }
     }
   };
   await Promise.all(
@@ -417,5 +460,5 @@ export async function fetchCampaigns(
   if (campaigns.length === 0) {
     throw new Error("the source listed no campaigns at all; its format probably changed");
   }
-  return campaigns;
+  return { campaigns, games: activity };
 }

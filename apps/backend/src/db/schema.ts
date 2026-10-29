@@ -131,6 +131,18 @@ export function openDb(path: string): Db {
       key TEXT PRIMARY KEY,
       ts  INTEGER NOT NULL
     );
+
+    -- Campaigns this account made progress on, as each last looked; see
+    -- db/campaignHistory.ts. Kept after the campaign leaves the catalogue.
+    CREATE TABLE IF NOT EXISTS campaign_history (
+      campaign_id   TEXT PRIMARY KEY,
+      first_seen_ts INTEGER NOT NULL,
+      -- When the snapshot last changed: the last progress we saw.
+      updated_ts    INTEGER NOT NULL,
+      ends_at       INTEGER,
+      -- The resolved campaign as JSON: game, drops, rewards and status.
+      snapshot      TEXT    NOT NULL
+    );
   `);
   addEventColumns(db);
   return db;

@@ -22,6 +22,7 @@ import { FollowedGamesCard } from "../components/FollowedGamesCard.js";
 import { FollowGamesDialog } from "../components/FollowGamesDialog.js";
 import { PoolSizeInput } from "../components/PoolSizeInput.js";
 import { SkippedCampaignRow } from "../components/SkippedCampaignRow.js";
+import { watchedCampaigns } from "../lib/campaignHistory.js";
 import { matchesCampaign, matchesDrop, matchesHeader } from "../lib/campaignMatch.js";
 import { formatDateHour } from "../lib/formatClock.js";
 import {
@@ -95,7 +96,7 @@ const SOURCE_HREF = "https://twitch-drops.fenrisapps.com/";
  * `unclaimed` is the one the tracker has no equivalent for: it needs
  * this viewer's inventory, which a public site does not have.
  */
-type View = "all" | "running" | "scheduled" | "unclaimed" | "collected";
+type View = "all" | "running" | "scheduled" | "unclaimed" | "collected" | "history";
 
 const VIEWS: { value: View; label: string }[] = [
   { value: "all", label: "All" },
@@ -106,6 +107,9 @@ const VIEWS: { value: View; label: string }[] = [
   // actually been earned: every other pill either buries it at the
   // bottom or leaves it out.
   { value: "collected", label: "Collected" },
+  // Not a slice of the list like the rest: every campaign this account
+  // made progress on, including those that have since left it.
+  { value: "history", label: "History" },
 ];
 
 /** What the empty grid says, per view -- each a claim about that view. */
@@ -115,6 +119,7 @@ const EMPTY: Record<View, string> = {
   scheduled: "No campaigns are scheduled.",
   unclaimed: "Nothing left to claim -- every campaign here is done.",
   collected: "Nothing collected yet.",
+  history: "Nothing watched yet. Campaigns you make progress on are kept here, even after they end.",
 };
 
 /** Whether a campaign's window has yet to open. */
@@ -149,6 +154,9 @@ function inView(c: ResolvedCampaign, view: View, now: number): boolean {
     // what was earned rather than what is left to do.
     case "collected":
       return c.status === "collected";
+    // Assembled from the history instead; see watchedCampaigns.
+    case "history":
+      return true;
     case "all":
       return true;
   }
@@ -552,6 +560,8 @@ export function Drops({ jump = null }: {
   const [refreshing, setRefreshing] = useState<"progress" | "catalogue" | null>(null);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<View>("all");
+  /** The recorded history, read when the History view is opened. */
+  const [recorded, setRecorded] = useState<ResolvedCampaign[] | null>(null);
   const [subs, setSubs] = useState<SubscriptionRow[]>([]);
   const [followed, setFollowed] = useState<FollowedGame[]>([]);
   const [followOpen, setFollowOpen] = useState(false);
@@ -770,14 +780,19 @@ export function Drops({ jump = null }: {
     const needle = filter.trim().toLowerCase();
     const now = Date.now();
     // The pills and the box narrow the same list, in that order: the
-    // view picks the slice, the needle searches within it.
-    const inScope = (data?.campaigns ?? []).filter((c) => inView(c, view, now));
+    // view picks the slice, the needle searches within it. History is
+    // its own list, already in order: newest first is the point of it.
+    const history = view === "history";
+    const inScope = history
+      ? watchedCampaigns(data?.campaigns ?? [], recorded ?? [])
+      : (data?.campaigns ?? []).filter((c) => inView(c, view, now));
     const matched =
       needle === "" || data === null
         ? inScope
         // One box for all three fields: a separate box per field would not
         // earn its width.
         : inScope.filter((c) => matchesCampaign(c, needle));
+    if (history) return matched;
 
     // Five tiers, then soonest deadline within each.
     //
@@ -825,7 +840,20 @@ export function Drops({ jump = null }: {
       const byDate = key(a) - key(b);
       return byDate !== 0 ? byDate : a.name.localeCompare(b.name);
     });
-  }, [data, filter, view]);
+  }, [data, filter, view, recorded]);
+
+  // Read each time the view opens: it changes only on the recorder's
+  // fifteen-minute tick, and nothing else on the page needs it.
+  useEffect(() => {
+    if (view !== "history") return;
+    let live = true;
+    api.get<{ campaigns: ResolvedCampaign[] }>("/api/campaigns/history")
+      .then((res) => { if (live) setRecorded(res.campaigns); })
+      .catch((cause: unknown) => {
+        if (live) setError(cause instanceof Error ? cause.message : "could not load the history");
+      });
+    return () => { live = false; };
+  }, [view]);
 
   if (error !== null && data === null) {
     return (
@@ -1184,6 +1212,9 @@ export function Drops({ jump = null }: {
             const sub = subs.find(
               (x) => x.targetId === campaign.id,
             );
+            // Gone from the list, so known only from the history: there
+            // is nothing left to subscribe to.
+            const listed = data.campaigns.some((c) => c.id === campaign.id);
             return (
               <CampaignCard
                 key={campaign.id}
@@ -1202,7 +1233,7 @@ export function Drops({ jump = null }: {
                   || matchedByDropOnly(campaign, filter)
                 }
                 busy={busy?.key === campaign.id ? busy.label : undefined}
-                onSubscribe={() => void mutate(
+                onSubscribe={!listed ? undefined : () => void mutate(
                   campaign.id,
                   "Finding channels to watch…",
                   () => api.post("/api/subscriptions", {
@@ -1210,7 +1241,7 @@ export function Drops({ jump = null }: {
                     label: campaign.name,
                   }),
                 )}
-                onUnsubscribe={() => {
+                onUnsubscribe={!listed ? undefined : () => {
                   if (sub !== undefined) {
                     void mutate(campaign.id, "Unsubscribing…", () => api.post(
                       `/api/subscriptions/${sub.id}/remove`,

@@ -7,6 +7,7 @@ import {
   CATALOGUE_TTL_MS,
   REFRESH_MIN_INTERVAL_MS,
   type Campaign,
+  type SourceSnapshot,
 } from "./campaignCatalogue.js";
 
 const campaign = (over: Partial<Campaign> = {}): Campaign => ({
@@ -27,10 +28,10 @@ function make(responses: unknown[], path?: string) {
   const queue = [...responses];
   // The source throws on failure rather than returning [] -- an empty
   // list must never be mistaken for "no campaigns are running".
-  const request = vi.fn(async (): Promise<Campaign[]> => {
+  const request = vi.fn(async (): Promise<SourceSnapshot> => {
     const next = queue.shift();
     if (next instanceof Error) throw next;
-    return (next ?? []) as Campaign[];
+    return { campaigns: (next ?? []) as Campaign[], games: {} };
   });
   const cache = new CampaignCatalogue({
     source: request,
@@ -134,7 +135,7 @@ test("survives a restart by reloading from disk", async () => {
   const { cache, path } = make([[campaign()]]);
   await cache.get();
   const revived = new CampaignCatalogue({
-    source: vi.fn(async () => []),
+    source: vi.fn(async () => ({ campaigns: [], games: {} })),
     path,
     now: () => clock,
   });
@@ -181,7 +182,7 @@ test("a reloaded catalogue still expires on its original age", async () => {
   const { cache, path } = make([[campaign()]]);
   await cache.get();
   clock += CATALOGUE_TTL_MS + 1;
-  const request = vi.fn(async () => [campaign({ id: "c2" })]);
+  const request = vi.fn(async () => ({ campaigns: [campaign({ id: "c2" })], games: {} }));
   const revived = new CampaignCatalogue({
     source: request,
     path,
@@ -244,11 +245,30 @@ test("a corrupt cache file is ignored rather than fatal", async () => {
   expect(out.campaigns).toEqual([campaign()]);
 });
 
+test("keeps each game's activity, across a restart too", async () => {
+  // A followed game's rhythm reads from this; losing it on restart would
+  // blank the line until the next day's sweep.
+  const file = join(mkdtempSync(join(tmpdir(), "cat-")), "c.json");
+  const games = { g1: { lastEndedAt: 5_000, past: [{ startsAt: 1_000, endsAt: 2_000 }] } };
+  const first = new CampaignCatalogue({
+    source: vi.fn(async () => ({ campaigns: [campaign()], games })),
+    path: file,
+    now: () => clock,
+  });
+  expect((await first.get()).games).toEqual(games);
+  const revived = new CampaignCatalogue({
+    source: vi.fn(async () => ({ campaigns: [], games: {} })),
+    path: file,
+    now: () => clock,
+  });
+  expect(revived.peek()?.games).toEqual(games);
+});
+
 test("peek reads what is held without fetching", async () => {
   // The owner lookup on a streamer card is synchronous and runs on every
   // derivation, so it cannot await a fetch. It reads whatever the
   // catalogue already has -- which after construction is the disk copy.
-  const source = vi.fn(async () => [campaign()]);
+  const source = vi.fn(async () => ({ campaigns: [campaign()], games: {} }));
   const cat = new CampaignCatalogue({
     source,
     path: join(mkdtempSync(join(tmpdir(), "cat-")), "c.json"),

@@ -188,7 +188,16 @@ campaign queue like any other. **Skip** on an Auto subscription stops
 that campaign only: it stays listed as skipped, **Unskip** brings it back,
 and the game's future campaigns are still added. Unfollowing a game keeps
 the subscriptions it already made. The search asks Twitch directly
-and needs no login.
+and needs no login. Between campaigns, each followed game says when its
+drops last ran and, where its campaigns come at regular intervals, about
+how often ("usually every ~2 weeks"), from the tracker's campaign
+history; the search shows when each result last ran drops.
+
+**History.** The **History** view lists every campaign your account made
+progress on, whether through this app or watching elsewhere, with what
+you earned. The app keeps its own record, updated every 15 minutes while
+a campaign runs, so a campaign stays listed after it ends and leaves the
+campaign list.
 
 **How a subscribed campaign is watched.** Each subscription gets a small
 pool of live channels for its game, preferring ones Twitch says are

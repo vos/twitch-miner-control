@@ -83,8 +83,41 @@ export interface Campaign {
   drops: CampaignDrop[];
 }
 
+/** A past campaign's window, from the tracker's per-game history. */
+export interface PastWindow {
+  startsAt: number;
+  endsAt: number;
+}
+
+/**
+ * How a game has run drops before, from the tracker.
+ *
+ * What says whether a followed game between campaigns is still active,
+ * and roughly when to expect its next one.
+ */
+export interface GameActivity {
+  /** When its most recent finished campaign ended; null if none known. */
+  lastEndedAt: number | null;
+  /**
+   * Its past campaigns, newest first -- at most the tracker's 40.
+   *
+   * Absent for a game whose page the sweep did not read: only games with
+   * campaigns running, scheduled or followed are swept.
+   */
+  past?: PastWindow[];
+}
+
+/** One sweep of the source: the campaigns, and each game's activity. */
+export interface SourceSnapshot {
+  campaigns: Campaign[];
+  /** By Twitch game id. */
+  games: Record<string, GameActivity>;
+}
+
 export interface Catalogue {
   campaigns: Campaign[];
+  /** By Twitch game id; empty on a catalogue fetched before this existed. */
+  games: Record<string, GameActivity>;
   /** Epoch ms of the fetch these campaigns came from. */
   fetchedAt: number;
   /** True when the data on hand could not be refreshed. */
@@ -110,7 +143,7 @@ export interface CatalogueDeps {
    * tests drive it without a network, and so the source can be swapped
    * without touching the caching around it.
    */
-  source?: () => Promise<Campaign[]>;
+  source?: () => Promise<SourceSnapshot>;
   /** Where the catalogue is persisted across restarts. */
   path: string;
   now?: () => number;
@@ -140,6 +173,8 @@ type PersistedCampaign = Omit<Campaign, "drops"> & {
 
 interface Persisted {
   campaigns: PersistedCampaign[];
+  /** Absent on a file written before game activity was kept. */
+  games?: Record<string, GameActivity>;
   fetchedAt: number;
 }
 
@@ -186,12 +221,13 @@ function migrate(campaign: PersistedCampaign): Campaign {
  */
 export class CampaignCatalogue {
   private campaigns: Campaign[] | null = null;
+  private games: Record<string, GameActivity> = {};
   private fetchedAt = 0;
   private lastRefreshAt = 0;
   private stale = false;
   private error: string | null = null;
   private inflight: Promise<void> | null = null;
-  private readonly source: () => Promise<Campaign[]>;
+  private readonly source: () => Promise<SourceSnapshot>;
   private readonly log: AppLog;
 
   constructor(private readonly deps: CatalogueDeps) {
@@ -209,6 +245,7 @@ export class CampaignCatalogue {
       const raw = JSON.parse(readFileSync(this.deps.path, "utf8")) as Persisted;
       if (Array.isArray(raw.campaigns)) {
         this.campaigns = raw.campaigns.map(migrate);
+        this.games = raw.games ?? {};
         this.fetchedAt = raw.fetchedAt ?? 0;
       }
     } catch {
@@ -222,6 +259,7 @@ export class CampaignCatalogue {
     try {
       const body: Persisted = {
         campaigns: this.campaigns ?? [],
+        games: this.games,
         fetchedAt: this.fetchedAt,
       };
       writeFileSync(this.deps.path, JSON.stringify(body));
@@ -234,6 +272,7 @@ export class CampaignCatalogue {
   private snapshot(): Catalogue {
     return {
       campaigns: this.campaigns ?? [],
+      games: this.games,
       fetchedAt: this.fetchedAt,
       stale: this.stale,
       // Campaigns loaded from disk count: they were fetched successfully
@@ -249,7 +288,9 @@ export class CampaignCatalogue {
     if (this.inflight !== null) return this.inflight;
     this.inflight = (async () => {
       try {
-        this.campaigns = await this.source();
+        const fetched = await this.source();
+        this.campaigns = fetched.campaigns;
+        this.games = fetched.games;
         this.fetchedAt = this.now();
         this.stale = false;
         this.error = null;

@@ -1,5 +1,8 @@
 import { expect, test } from "vitest";
-import { followSummary, runningCampaigns, skippedCampaigns, viaGameName } from "./followedGames.js";
+import {
+  dropsLastRan, followSummary, idleActivity, rhythmLabel, runningCampaigns, skippedCampaigns,
+  viaGameName,
+} from "./followedGames.js";
 
 const NOW = 10_000;
 const c = (id: string, gameId: string | null, endsAt: number | null = NOW + 1) => ({
@@ -54,4 +57,34 @@ test("skippedCampaigns lists what a followed game skipped and could still collec
   // Ended and complete campaigns are skipped for good, a subscribed one is
   // already being collected, and one gone from the catalogue has no name.
   expect(out.map((s) => [s.game.id, s.campaign.id])).toEqual([["g1", "live"]]);
+});
+
+const DAY = 86_400_000;
+
+test("rhythmLabel says how often in the unit that reads best", () => {
+  expect(rhythmLabel(1)).toBe("almost daily");
+  expect(rhythmLabel(3)).toBe("usually every ~3 days");
+  expect(rhythmLabel(7)).toBe("usually weekly");
+  expect(rhythmLabel(14)).toBe("usually every ~2 weeks");
+  expect(rhythmLabel(60)).toBe("usually every ~2 months");
+});
+
+test("idleActivity says when a game between campaigns last ran, and how often", () => {
+  expect(idleActivity({ lastEndedAt: NOW - 21 * DAY, everyDays: 14 }, NOW))
+    .toBe("last ran 21d ago · usually every ~2 weeks");
+});
+
+test("idleActivity leaves out what the tracker does not know", () => {
+  // No rhythm is the honest answer for an irregular game, and a game the
+  // tracker never saw has nothing to say at all.
+  expect(idleActivity({ lastEndedAt: NOW - 21 * DAY, everyDays: null }, NOW))
+    .toBe("last ran 21d ago");
+  expect(idleActivity({ lastEndedAt: null, everyDays: null }, NOW)).toBeNull();
+  expect(idleActivity(undefined, NOW)).toBeNull();
+});
+
+test("dropsLastRan labels a search result's last campaign", () => {
+  expect(dropsLastRan(NOW - 3 * DAY, NOW)).toBe("drops last ran 3d ago");
+  expect(dropsLastRan(null, NOW)).toBeNull();
+  expect(dropsLastRan(undefined, NOW)).toBeNull();
 });

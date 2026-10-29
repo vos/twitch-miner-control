@@ -54,8 +54,9 @@ const gamePage = (campaigns: string, slug = `"twitchSlug":"hunt-showdown",`) =>
   `1:["$","$L2b",null,{"campaigns":[{"startAt":"$D2026-10-26T15:00:00.000Z","endAt":"$D2026-11-09T13:59:59.999Z"}]}]
 2:["$","$L44",null,{"gameName":"Hunt",${slug}"windows":"$26:props"}]
 3:["$","$L3e",null,{"campaigns":${campaigns}}]
-4:["$","$L43",null,{"history":[{"id":"old","name":"Week 2","dropCount":1,
-  "rewards":[{"name":"Crate","imageUrl":"x","minutes":30,"sub":false}]}]}]`;
+4:["$","$L43",null,{"history":[{"id":"old","name":"Week 2",
+  "startAt":"$D2026-10-01T15:00:00.000Z","endAt":"$D2026-10-08T14:59:59.999Z","dropCount":1,
+  "rewards":[{"name":"Crate","imageUrl":"x","minutes":30,"sub":false}]}],"totalCampaigns":4}]`;
 
 const huntCampaigns = `[
   {"id":"c1","name":"HS 1896 Halloween 2026",
@@ -107,6 +108,14 @@ test("picks the campaigns with drops out of a game page", () => {
 
 test("reads Twitch's slug off a game page", () => {
   expect(huntPage().twitchSlug).toBe("hunt-showdown");
+});
+
+test("reads a game with nothing running as no campaigns, not a broken page", () => {
+  // Its full list is empty, and only the history beside it shows this is
+  // still a game page.
+  const page = extractGamePage(gamePage("[]"));
+  expect(page.campaigns).toEqual([]);
+  expect(page.history).toHaveLength(1);
 });
 
 test("throws when a game page has no campaigns with drops", () => {
@@ -221,8 +230,10 @@ const fellowshipPage = gamePage(`[
   {"id":"c1","name":"Shared","startAt":"$D2026-10-26T15:00:00.000Z",
    "endAt":"$D2026-11-09T13:59:59.999Z","drops":[]}]`, `"twitchSlug":"fellowship-1",`);
 
-const fetchAll = (impl: ReturnType<typeof site>) =>
-  fetchCampaigns({ fetchImpl: impl as unknown as typeof fetch, now: () => NOW });
+const fetchAll = (impl: ReturnType<typeof site>, alsoGameIds: string[] = []) =>
+  fetchCampaigns({
+    fetchImpl: impl as unknown as typeof fetch, now: () => NOW, alsoGameIds,
+  });
 
 test("sweeps the game pages of running and featured games only", async () => {
   // fellowship has nothing running, so only the home page reveals its
@@ -232,7 +243,7 @@ test("sweeps the game pages of running and featured games only", async () => {
     "/games/hunt-showdown": gamePage(huntCampaigns),
     "/games/fellowship": fellowshipPage,
   });
-  const out = await fetchAll(impl);
+  const { campaigns: out } = await fetchAll(impl);
   // c1 sits under both games; the first one keeps it.
   expect(out.map((c) => c.id)).toEqual(["c1", "c2", "c9"]);
   // Owners come from the home page, not the publisher field.
@@ -264,7 +275,7 @@ test("retries a game page that comes back without its data", async () => {
     "/games/hunt-showdown": () => (served++ === 0 ? "<html></html>" : gamePage(huntCampaigns)),
     "/games/fellowship": fellowshipPage,
   });
-  expect(await fetchAll(impl)).toHaveLength(3);
+  expect((await fetchAll(impl)).campaigns).toHaveLength(3);
 });
 
 test("fails the whole sweep when a game page stays broken", async () => {
@@ -282,6 +293,46 @@ test("throws rather than reporting that no campaigns are running", async () => {
     "/": home.replace('"urlSlug":"fellowship"', '"urlSlug":"elsewhere"'),
   });
   await expect(fetchAll(impl)).rejects.toThrow(/no campaigns/);
+});
+
+test("reports when each game's last campaign ended, swept or not", async () => {
+  // From the index, which covers every game -- what the follow search
+  // shows for a game with nothing running.
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": gamePage(huntCampaigns),
+    "/games/fellowship": fellowshipPage,
+  });
+  const { games } = await fetchAll(impl);
+  expect(games["500188"]?.lastEndedAt).toBe(Date.parse("2026-10-16T16:59:59.999Z"));
+  expect(games["1"]).toEqual({ lastEndedAt: null });
+});
+
+test("keeps the past campaign windows of every swept game", async () => {
+  // What a followed game's rhythm is estimated from.
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": gamePage(huntCampaigns),
+    "/games/fellowship": fellowshipPage,
+  });
+  const { games } = await fetchAll(impl);
+  expect(games["500188"]?.past).toEqual([{
+    startsAt: Date.parse("2026-10-01T15:00:00.000Z"),
+    endsAt: Date.parse("2026-10-08T14:59:59.999Z"),
+  }]);
+});
+
+test("also sweeps a followed game with nothing running", async () => {
+  // Otherwise a followed game between campaigns -- the case the rhythm
+  // is for -- would never have its history read.
+  const impl = site({
+    "/games": index, "/": home,
+    "/games/hunt-showdown": gamePage(huntCampaigns),
+    "/games/fellowship": fellowshipPage,
+    "/games/quiet-game": gamePage("[]"),
+  });
+  const { games } = await fetchAll(impl, ["1"]);
+  expect(games["1"]?.past).toHaveLength(1);
 });
 
 test("throws on a non-ok index rather than returning nothing", async () => {

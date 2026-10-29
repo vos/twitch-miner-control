@@ -32,7 +32,7 @@ function harness() {
   let campaigns: Campaign[] = [];
   let progress: InventorySnapshot["progress"] = {};
   const catalogueGet = vi.fn(async (): Promise<Catalogue> => ({
-    campaigns, fetchedAt: 1, stale: false, available: true, error: null,
+    campaigns, games: {}, fetchedAt: 1, stale: false, available: true, error: null,
   }));
   const watcher = new CampaignWatcher({
     notifier: { publish, markSeen },

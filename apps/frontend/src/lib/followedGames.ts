@@ -1,4 +1,5 @@
 import type { ResolvedCampaign } from "../components/CampaignCard.js";
+import { formatSpan } from "./formatSpan.js";
 
 /** A Twitch category, as the search and the follow route report it. */
 export interface TwitchGame {
@@ -6,12 +7,24 @@ export interface TwitchGame {
   name: string;
   slug: string;
   boxArtUrl: string | null;
+  /** From the search only: when its last drop campaign ended. */
+  lastEndedAt?: number | null;
+}
+
+/** How a game runs drops, from the tracker's history. */
+export interface DropRhythm {
+  /** When its most recent finished campaign ended; null if none known. */
+  lastEndedAt: number | null;
+  /** Its usual days between campaigns; null when it has no rhythm. */
+  everyDays: number | null;
 }
 
 /** A followed game, as GET /api/subscriptions reports it. */
 export interface FollowedGame extends TwitchGame {
   poolSize: number;
   skipped: string[];
+  /** Absent from a backend that predates it. */
+  rhythm?: DropRhythm;
 }
 
 export interface FollowResponse {
@@ -106,4 +119,42 @@ export function skippedCampaigns(
     if (campaign.endsAt !== null && campaign.endsAt <= now) return [];
     return [{ game, campaign }];
   }));
+}
+
+/**
+ * How often, in the unit that reads best.
+ *
+ * Words rather than formatSpan's "14d": this is a habit, not a readout,
+ * and "every ~14d" reads as a timer.
+ */
+export function rhythmLabel(everyDays: number): string {
+  if (everyDays <= 1) return "almost daily";
+  if (everyDays < 7) return `usually every ~${everyDays} days`;
+  if (everyDays < 50) {
+    const weeks = Math.round(everyDays / 7);
+    return weeks === 1 ? "usually weekly" : `usually every ~${weeks} weeks`;
+  }
+  return `usually every ~${Math.round(everyDays / 30)} months`;
+}
+
+/**
+ * When a followed game between campaigns last ran, and how often.
+ *
+ * Null when the tracker knows neither -- no line beats "last ran never".
+ */
+export function idleActivity(rhythm: DropRhythm | undefined, now = Date.now()): string | null {
+  const parts: string[] = [];
+  if (rhythm?.lastEndedAt != null) {
+    parts.push(`last ran ${formatSpan(now - rhythm.lastEndedAt)} ago`);
+  }
+  if (rhythm?.everyDays != null) parts.push(rhythmLabel(rhythm.everyDays));
+  return parts.length === 0 ? null : parts.join(" · ");
+}
+
+/** A search result's last campaign, or null when the tracker never saw one. */
+export function dropsLastRan(
+  lastEndedAt: number | null | undefined,
+  now = Date.now(),
+): string | null {
+  return lastEndedAt == null ? null : `drops last ran ${formatSpan(now - lastEndedAt)} ago`;
 }
