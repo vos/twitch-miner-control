@@ -8,22 +8,22 @@ const config = (over: object = {}) => ({
 } as never);
 
 test("a streamer inherits claimDrops from the defaults", () => {
-  expect(dropsEligible(config({ defaults: { claimDrops: true } }), "alpha")).toBe(true);
-  expect(dropsEligible(config({ defaults: { claimDrops: false } }), "alpha")).toBe(false);
+  expect(dropsEligible(config({ defaults: { claimDrops: "LINKED" } }), "alpha")).toBe(true);
+  expect(dropsEligible(config({ defaults: { claimDrops: "NONE" } }), "alpha")).toBe(false);
 });
 
 test("a streamer's own setting overrides the default", () => {
   const cfg = config({
-    defaults: { claimDrops: false },
-    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: true } }],
+    defaults: { claimDrops: "NONE" },
+    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: "LINKED" } }],
   });
   expect(dropsEligible(cfg, "alpha")).toBe(true);
 });
 
 test("a streamer can opt out of a default that is on", () => {
   const cfg = config({
-    defaults: { claimDrops: true },
-    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: false } }],
+    defaults: { claimDrops: "LINKED" },
+    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: "NONE" } }],
   });
   expect(dropsEligible(cfg, "alpha")).toBe(false);
 });
@@ -32,7 +32,7 @@ test("matches the roster's normalisation rather than the raw spelling", () => {
   // A config entry spelled "Alpha" and a live-state row spelled "alpha"
   // are one channel; missing the match would silently disable drops.
   const cfg = config({
-    defaults: { claimDrops: true },
+    defaults: { claimDrops: "LINKED" },
     streamers: [{ username: "Alpha", enabled: true, settings: {} }],
   });
   expect(dropsEligible(cfg, "alpha")).toBe(true);
@@ -41,7 +41,7 @@ test("matches the roster's normalisation rather than the raw spelling", () => {
 test("a followed channel with no config entry falls back to the defaults", () => {
   // "Mine my followed channels" adds logins that were never configured;
   // the miner applies the defaults to them, so this must agree.
-  expect(dropsEligible(config({ defaults: { claimDrops: true } }), "ghost")).toBe(true);
+  expect(dropsEligible(config({ defaults: { claimDrops: "LINKED" } }), "ghost")).toBe(true);
 });
 
 test("claimDrops unset anywhere follows the miner and defaults on", () => {
@@ -54,11 +54,16 @@ test("claimDrops unset anywhere follows the miner and defaults on", () => {
 
 test("an explicit false still wins over the default-on", () => {
   const cfg = config({
-    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: false } }],
+    streamers: [{ username: "alpha", enabled: true, settings: { claimDrops: "NONE" } }],
   });
   expect(dropsEligible(cfg, "alpha")).toBe(false);
 });
 
 test("a default of false applies to a streamer that sets nothing", () => {
-  expect(dropsEligible(config({ defaults: { claimDrops: false } }), "alpha")).toBe(false);
+  expect(dropsEligible(config({ defaults: { claimDrops: "NONE" } }), "alpha")).toBe(false);
+});
+
+test("every mode but NONE syncs drops, since LINKED only narrows which progress", () => {
+  expect(dropsEligible(config({ defaults: { claimDrops: "ALL" } }), "alpha")).toBe(true);
+  expect(dropsEligible(config({ defaults: { claimDrops: "LINKED" } }), "alpha")).toBe(true);
 });

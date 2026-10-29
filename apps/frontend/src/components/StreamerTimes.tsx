@@ -2,7 +2,7 @@ import { Group, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import { formatSpan } from "../lib/formatSpan.js";
 import { formatWorked } from "../lib/formatWorked.js";
-import { parseActivity } from "../lib/parseActivity.js";
+import { activityLabel } from "../lib/activityLabel.js";
 import classes from "./StreamerCard.module.css";
 import type { StreamerState } from "../api/useLiveState.js";
 
@@ -88,21 +88,13 @@ export function StreamerTimes({ streamer: s }: { streamer: StreamerState }) {
         >
           <span className={classes.eventDot} />
           <span className={classes.eventTag}>LAST</span>
-          {(() => {
-            // The amount is the one genuinely new fact the message carries;
-            // the label alone never said how much arrived.
-            const { earned, label } = parseActivity(lastActivity.type, lastActivity.message);
-            return (
-              <>
-                {earned !== null && (
-                  <span className={classes.eventGain} data-testid="last-activity-gain">
-                    +{nf.format(earned)}
-                  </span>
-                )}
-                <span className={classes.eventName}>{label}</span>
-              </>
-            );
-          })()}
+          {/* The amount is the one fact the label alone cannot say. */}
+          {typeof lastActivity.earned === "number" && (
+            <span className={classes.eventGain} data-testid="last-activity-gain">
+              +{nf.format(lastActivity.earned)}
+            </span>
+          )}
+          <span className={classes.eventName}>{activityLabel(lastActivity.type)}</span>
           <span className={classes.eventAge}>{ago(lastActivity.ts, now)}</span>
         </div>
       )}

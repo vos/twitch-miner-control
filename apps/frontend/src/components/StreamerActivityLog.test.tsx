@@ -27,16 +27,14 @@ test("shows the amount the miner reported", () => {
     <StreamerActivityLog
       events={[{
         ts: NOW, type: "GAIN_FOR_CLAIM",
-        message: "🚀  +50 → Streamer(username=alpha, channel_points=12.3k) - Reason: CLAIM.",
+        message: "🚀  +50 → Streamer(username=alpha, channel_points=12.3k)", earned: 50,
       }]}
     />,
   );
   expect(screen.getByTestId("activity-entry")).toHaveTextContent("+50");
 });
 
-test("falls back to the event label when the message carries no amount", () => {
-  // The miner is vendored and can reformat its logs; an unparseable line
-  // must lose the amount, never the entry.
+test("shows no amount for an event that earned none", () => {
   renderApp(
     <StreamerActivityLog
       events={[{ ts: NOW, type: "STREAMER_ONLINE", message: "something unexpected" }]}
@@ -98,7 +96,8 @@ test("a collapsed run reports the points the whole run earned", () => {
   const watch = (min: number) => ({
     ts: new Date(2026, 8, 17, 10, min).getTime(),
     type: "GAIN_FOR_WATCH",
-    message: "+10 → Streamer(username=a) - Reason: WATCH.",
+    message: "+10 → Streamer(username=a)",
+    earned: 10,
   });
   renderApp(<StreamerActivityLog events={[watch(30), watch(20), watch(10)]} />);
   expect(screen.getByTestId("activity-entry")).toHaveTextContent("+30");

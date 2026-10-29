@@ -391,13 +391,13 @@ test("GET /api/history returns a series", async () => {
 });
 
 test("GET /api/history scopes events to the streamer asked for", async () => {
-  ctx.history.recordEvent("GAIN_FOR_CLAIM", 1000, "+50", "alpha");
-  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, "+70", "beta");
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 1000, { message: "+50", streamer: "alpha" });
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, { message: "+70", streamer: "beta" });
   const res = await ctx.app.inject({
     method: "GET", url: "/api/history?streamer=alpha&from=0&to=99999", cookies: auth(),
   });
   expect(res.json().events).toEqual([
-    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50" },
+    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50", earned: null },
   ]);
 });
 
@@ -649,7 +649,7 @@ test("doorbell strips control characters from the message", async () => {
     method: "POST", url: "/internal/doorbell",
     headers: { "x-doorbell-token": "doorbell-token" },
     payload: {
-      event: "BET_WIN", ts: 1,
+      event: "PREDICTION_WIN", ts: 1,
       message: "\u001b[32m+50 forsen\u001b[0m\nrecap line",
     },
   });
@@ -660,7 +660,7 @@ test("doorbell truncates an over-long message", async () => {
   await ctx.app.inject({
     method: "POST", url: "/internal/doorbell",
     headers: { "x-doorbell-token": "doorbell-token" },
-    payload: { event: "BET_WIN", ts: 1, message: "x".repeat(5000) },
+    payload: { event: "PREDICTION_WIN", ts: 1, message: "x".repeat(5000) },
   });
   expect(ctx.history.recentEvents(1)[0].message).toHaveLength(500);
 });
@@ -678,6 +678,48 @@ test("doorbell keeps the event when the message is unusable", async () => {
     const [latest] = ctx.history.recentEvents(1);
     expect([latest.type, latest.message]).toEqual(["STREAMER_ONLINE", null]);
   }
+});
+
+const ring = (payload: object) => ctx.app.inject({
+  method: "POST", url: "/internal/doorbell",
+  headers: { "x-doorbell-token": "doorbell-token" },
+  payload: { event: "GAIN_FOR_WATCH", ts: 1, ...payload },
+});
+
+test("doorbell records the streamer and amount the miner's event carried", async () => {
+  const res = await ring({ message: "+10 -> forsen", streamer: "forsen", earned: 10 });
+  expect(res.statusCode).toBe(204);
+  expect(ctx.history.eventsFor("forsen", 1)).toEqual([
+    { ts: expect.any(Number), type: "GAIN_FOR_WATCH", message: "+10 -> forsen", earned: 10 },
+  ]);
+});
+
+test("doorbell degrades an unusable streamer or amount to null", async () => {
+  for (const [streamer, earned] of [
+    ["Not A Login", 1.5], [{ evil: true }, -5], ["x".repeat(40), "10"], [null, 0],
+  ]) {
+    const res = await ring({ streamer, earned });
+    expect(res.statusCode).toBe(204);
+    const [latest] = ctx.history.recentEvents(1);
+    expect([latest.type, latest.earned]).toEqual(["GAIN_FOR_WATCH", null]);
+  }
+  // None of those was taken as a streamer either.
+  expect(ctx.history.eventsFor("not a login", 10)).toEqual([]);
+});
+
+test("doorbell forwards the watch-slot set to the state service", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  await ring({ event: "CHANGING_WATCH_SLOTS", watching: ["forsen", "xqc"] });
+  expect(spy.mock.calls[0][1]?.watching).toEqual(["forsen", "xqc"]);
+});
+
+test("doorbell ignores a watch-slot set it cannot trust", async () => {
+  // Undefined, not empty: a bad set must not wipe the one already held.
+  const spy = vi.spyOn(ctx.state, "ring");
+  for (const watching of ["forsen", ["forsen", "No Way"], Array(17).fill("a")]) {
+    await ring({ event: "CHANGING_WATCH_SLOTS", watching });
+  }
+  expect(spy.mock.calls.map((c) => c[1]?.watching)).toEqual([undefined, undefined, undefined]);
 });
 
 test("doorbell rejects a non-string event", async () => {
@@ -745,7 +787,7 @@ test("a recorded event is pushed to SSE clients instead of waiting for a poll", 
   await reader.read(); // ": connected"
 
   const seen = reader.read();
-  ctx.state.emit("event", { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" });
+  ctx.state.emit("event", { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen", earned: null });
   const frame = new TextDecoder().decode((await seen).value);
   expect(frame).toContain("event: event");
   expect(frame).toContain('"message":"+50 -> forsen"');
@@ -1107,15 +1149,15 @@ test("POST /api/miner/stop answers with the state and start time", async () => {
 });
 
 test("GET /api/events returns recent events newest first", async () => {
-  ctx.history.recordEvent("STREAMER_ONLINE", 1000, "forsen is now streaming");
-  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen");
+  ctx.history.recordEvent("STREAMER_ONLINE", 1000, { message: "forsen is now streaming" });
+  ctx.history.recordEvent("GAIN_FOR_CLAIM", 2000, { message: "+50 -> forsen" });
   const response = await ctx.app.inject({
     method: "GET", url: "/api/events", cookies: auth(),
   });
   expect(response.statusCode).toBe(200);
   expect(response.json().events).toEqual([
-    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
-    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming" },
+    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen", earned: null },
+    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming", earned: null },
   ]);
 });
 

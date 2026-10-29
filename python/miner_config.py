@@ -7,7 +7,10 @@ mirrors it in Zod.
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
 from TwitchChannelPointsMiner.classes.Settings import Priority
-from TwitchChannelPointsMiner.classes.StreamerSelector import StreamerSelector
+from TwitchChannelPointsMiner.classes.StreamerSelector import (
+    StreamerSelector,
+    StreamerSelectorFactory,
+)
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     BetSettings,
     Condition,
@@ -16,6 +19,7 @@ from TwitchChannelPointsMiner.classes.entities.Bet import (
     Strategy,
 )
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    DropsMode,
     HLSSettings,
     Streamer,
     StreamerSettings,
@@ -26,15 +30,20 @@ from TwitchChannelPointsMiner.utils.Utils import normalise_username
 BOOL_SETTINGS = (
     "make_predictions",
     "follow_raid",
-    "claim_drops",
     "claim_moments",
     "watch_streak",
     "community_goals",
     "weekly_rewards",
 )
 ALLOWED_SETTINGS = frozenset(
-    BOOL_SETTINGS + ("points_limit", "chat", "bet", "simulate_hls_playback")
+    BOOL_SETTINGS
+    + ("claim_drops", "points_limit", "chat", "bet", "simulate_hls_playback")
 )
+
+# The playback modes the UI offers, onto HLSSettings.watch_all_segments.
+# refresh_before stays at upstream's default of two minutes.
+HLS_MODES = {"DROPS": "drops", "ALL_SEGMENTS": "enable", "LAST_SEGMENT": "disable"}
+HLS_REFRESH_BEFORE = 2 * 60
 
 BET_ENUMS = {"strategy": Strategy, "delay_mode": DelayMode}
 ALLOWED_BET = frozenset(
@@ -77,12 +86,18 @@ def _settings(defaults: dict, overrides: dict) -> StreamerSettings:
         merged["chat"] = ChatPresence[merged["chat"]]
     if merged.get("bet") is not None:
         merged["bet"] = _bet(merged["bet"])
-    # `False` disables HLS playback and must reach StreamerSettings as a
-    # bare False; only a dict describes a refresh window.
+    # A DropsMode name. Upstream also takes a bool, which it maps itself.
+    if isinstance(merged.get("claim_drops"), str):
+        merged["claim_drops"] = DropsMode[merged["claim_drops"]]
     hls = merged.get("simulate_hls_playback")
-    if isinstance(hls, dict):
-        _reject_unknown(hls, frozenset(("refresh_before",)), "simulate_hls_playback keys")
-        merged["simulate_hls_playback"] = HLSSettings(**hls)
+    if hls == "OFF":
+        merged["simulate_hls_playback"] = False
+    elif hls is not None:
+        if hls not in HLS_MODES:
+            raise ValueError(f"unknown simulate_hls_playback mode: {hls!r}")
+        merged["simulate_hls_playback"] = HLSSettings(
+            refresh_before=HLS_REFRESH_BEFORE, watch_all_segments=HLS_MODES[hls]
+        )
     return StreamerSettings(**merged)
 
 
@@ -136,10 +151,11 @@ def drop_pools(cfg: dict) -> list[list[str]]:
 class DropSlotSelector(StreamerSelector):
     """Holds one watch slot for a drop subscription's channel.
 
-    Upstream's DROPS priority only picks a channel with a drop already
-    earned and waiting to be claimed, so a channel still earning one is
-    watched by config order alone -- after every hand-added streamer, so
-    two of those live take both slots and the campaign makes no progress.
+    Upstream's DROPS priority picks whichever channel has the most drop
+    progress, across every campaign the roster happens to run -- it has no
+    notion of the campaigns the user subscribed to, or of their rank. So
+    with two hand-added streamers live, they can take both slots and the
+    subscribed campaign makes no progress.
 
     One slot only: the other stays with the configured priorities, which
     pick first so the slot they rank highest is the one kept.
@@ -150,28 +166,50 @@ class DropSlotSelector(StreamerSelector):
         self.pools = pools
         self.pooled = {login for pool in pools for login in pool}
 
-    def select(self, streamers, max_amount: int) -> list[str]:
-        chosen = self.inner.select(streamers, max_amount)
+    def select(self, campaigns, streamers, max_amount: int) -> list[str]:
+        chosen = self.inner.select(campaigns, streamers, max_amount)
         by_id = {s.channel_id: s for s in streamers}
         if any(
             normalise_username(by_id[c].username) in self.pooled
             for c in chosen if c in by_id
         ):
             return chosen
-        candidate = self._first_live(streamers)
+        candidate = self._candidate(campaigns, streamers)
         if candidate is None or max_amount <= 0:
             return chosen
         rest = [c for c in chosen if c != candidate.channel_id]
         return [candidate.channel_id, *rest][:max_amount]
 
-    def _first_live(self, streamers):
+    def _candidate(self, campaigns, streamers):
+        """The channel to hold the slot for, pools in rank order.
+
+        Within a pool, one the miner itself can progress a drop on comes
+        first: its campaign map knows when a channel's drops are done or
+        its account link is missing. That map fills in over the miner's
+        first minutes, and track-and-lane campaigns never enter it, so a
+        pool with no such channel still gets its first live one.
+        """
         by_login = {
             normalise_username(s.username): s
             for s in streamers
-            if s.settings.claim_drops is True
+            if s.settings.claim_drops != DropsMode.NONE
         }
         for pool in self.pools:
-            for login in pool:
-                if login in by_login:
-                    return by_login[login]
+            live = [by_login[login] for login in pool if login in by_login]
+            for streamer in live:
+                if streamer.any_campaign_has_progressable_drop(campaigns):
+                    return streamer
+            if live:
+                return live[0]
         return None
+
+
+class DropSlotSelectorFactory(StreamerSelectorFactory):
+    """Wraps whatever selector `priority` builds, configured or default."""
+
+    def __init__(self, pools: list[list[str]]):
+        self.pools = pools
+
+    def create(self, priority) -> StreamerSelector:
+        inner = super().create(priority)
+        return DropSlotSelector(inner, self.pools) if self.pools else inner

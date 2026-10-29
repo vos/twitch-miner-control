@@ -9,6 +9,7 @@ export interface ActivityEvent {
   ts: number;
   type: string;
   message: string | null;
+  earned?: number | null;
 }
 
 const dayKey = (ts: number) =>
@@ -17,12 +18,11 @@ const dayKey = (ts: number) =>
 /**
  * This channel's own event history.
  *
- * Every line goes through parseActivity (via collapseActivity), the same
- * reader the card's LAST line uses, so the wording matches between the
- * two. It is also the only safe reader: the balance inside a miner log
- * line went through millify() and reads "12.3k", while the *earned*
- * figure beside it is an exact integer from PubSub. Only those exact
- * figures are ever summed -- see collapseActivity.
+ * Labels come from activityLabel (via collapseActivity), as the card's
+ * LAST line's do, so the wording matches between the two. Amounts are
+ * the exact `earned` field the miner's event carried, never figures read
+ * out of the message, whose balance went through millify() and reads
+ * "12.3k" -- see collapseActivity, which sums them.
 
  * Consecutive repeats of one event fold into a single row with a count,
  * because a channel flapping offline writes one event per poll and a

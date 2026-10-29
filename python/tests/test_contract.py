@@ -14,21 +14,35 @@ import subprocess
 import sys
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.TwitchChannelPointsMiner import Factories
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
-from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
-from TwitchChannelPointsMiner.classes.EventHook import EventHook
-from TwitchChannelPointsMiner.classes.Settings import Events, Settings
+from TwitchChannelPointsMiner.classes.ClientSession import (
+    ClientSession,
+    client_session_factory,
+)
+from TwitchChannelPointsMiner.classes.Settings import Settings
+from TwitchChannelPointsMiner.classes.StreamerSelector import (
+    StreamerSelector,
+    StreamerSelectorFactory,
+)
+from TwitchChannelPointsMiner.classes.Translator import Translator
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    DropsMode,
+    HLSSettings,
     Streamer,
     StreamerSettings,
 )
+from TwitchChannelPointsMiner.classes.events import Event
+from TwitchChannelPointsMiner.classes.events.Events import Events
+from TwitchChannelPointsMiner.classes.events.Handler import EventHandler
+from TwitchChannelPointsMiner.logger import LoggerSettings
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError, RetryError
 from TwitchChannelPointsMiner.classes.gql import Integration
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
 from TwitchChannelPointsMiner.classes.gql.data.Parser import Parser
-from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, USER_AGENTS
+from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -37,10 +51,52 @@ def params(fn):
     return list(inspect.signature(fn).parameters)
 
 
-def test_event_hook_surface():
-    assert params(EventHook.send) == ["self", "message", "event"]
-    assert params(EventHook.validate_record) == ["self", "record"]
-    assert params(EventHook.validate_and_send) == ["self", "record"]
+def test_event_handler_surface():
+    """helpers/doorbell.py is an EventHandler, built by an
+    EventHandlerFactory that the constructor calls with these four."""
+    assert params(EventHandler.handles) == ["self"]
+    assert params(EventHandler.handle) == ["self", "event"]
+    assert params(EventHandler.shutdown) == ["self"]
+    assert "handlers" in params(TwitchChannelPointsMiner.__init__)
+    source = inspect.getsource(TwitchChannelPointsMiner.__init__)
+    assert "isinstance(handler, EventHandlerFactory)" in source
+
+
+def test_event_fields_the_doorbell_reads():
+    """Every field the doorbell sends instead of parsing display text."""
+    fields = lambda cls: set(cls.__dataclass_fields__)
+    assert {"type", "timestamp"} <= fields(Event.Event)
+    assert "streamer" in fields(Event.ChannelEvent)
+    assert {"amount", "balance", "reason"} <= fields(Event.GainPoints)
+    assert issubclass(Event.GainForWatch, Event.GainPoints)
+    assert {"adding", "dropping"} <= fields(Event.ChangingWatchSlots)
+
+
+def test_miner_takes_a_translator_and_a_selector_factory():
+    """run.py passes both; see helpers/vendor.py for why the translator
+    cannot be left to its default."""
+    assert "translator" in params(LoggerSettings.__init__)
+    assert params(Translator.__init__)[:2] == ["self", "locales_directory"]
+    assert "factories" in params(TwitchChannelPointsMiner.__init__)
+    assert "streamer_selector" in params(Factories.__init__)
+    assert params(StreamerSelectorFactory.create) == ["self", "priority"]
+    assert params(StreamerSelector.select) == [
+        "self", "campaigns", "streamers", "max_amount",
+    ]
+
+
+def test_drop_and_playback_settings_we_map():
+    """miner_config.py writes DropsMode members by name and the three
+    HLS playback modes."""
+    assert {m.name for m in DropsMode} == {"NONE", "LINKED", "ALL"}
+    assert StreamerSettings(claim_drops=True).claim_drops == DropsMode.LINKED
+    assert params(HLSSettings.__init__) == [
+        "self", "refresh_before", "watch_all_segments",
+    ]
+    source = inspect.getsource(Streamer.watch_all_segments)
+    for mode in ('"disable"', '"enable"', '"drops"'):
+        assert mode in source
+    assert params(Streamer.any_campaign_has_progressable_drop) == ["self", "campaigns"]
 
 
 def test_weekly_rewards_basic_configuration_field_names():
@@ -56,17 +112,25 @@ def test_weekly_rewards_basic_configuration_field_names():
 
 
 def test_events_we_rely_on_exist():
+    """The backend reads these by name: history queries, the recap, and
+    the notification map in notify/sources/doorbell.ts."""
     for name in [
         "STREAMER_ONLINE",
         "STREAMER_OFFLINE",
         "GAIN_FOR_WATCH",
         "GAIN_FOR_CLAIM",
         "GAIN_FOR_RAID",
+        "GAIN_FOR_WATCH_STREAK",
         "BONUS_CLAIM",
         "JOIN_RAID",
         "DROP_CLAIM",
+        "PREDICTION_WIN",
+        "PREDICTION_LOSE",
+        "CHAT_MENTION",
+        "GIFT_SUB_RECEIVED",
+        "CHANGING_WATCH_SLOTS",
     ]:
-        assert Events.get(name) is not None, name
+        assert Events.has_name(name), name
 
 
 def test_twitch_login_surface():
@@ -81,8 +145,11 @@ def test_twitch_login_surface():
 
 def test_client_session_and_gql_construction():
     assert "login" in params(ClientSession.__init__)
-    assert "user_agent" in params(ClientSession.__init__)
-    assert params(GQLFactory.create) == ["self", "client_session"]
+    assert "session" in params(ClientSession.__init__)
+    assert params(client_session_factory) == ["username", "password", "config"]
+    assert params(GQLFactory.create) == [
+        "self", "client_session", "strategy", "request_timeout",
+    ]
     assert params(GQL.get_channel_points_context) == ["self", "username"]
     assert params(GQL.with_is_stream_live_query) == ["self", "channel_id"]
     assert params(GQL.get_id_from_login) == ["self", "streamer_username"]
@@ -109,7 +176,6 @@ def test_streamer_settings_fields_we_expose():
 def test_constants_used_by_the_session_bootstrap():
     assert isinstance(CLIENT_ID, str) and CLIENT_ID
     assert isinstance(CLIENT_VERSION, str) and CLIENT_VERSION
-    assert "FIREFOX" in USER_AGENTS["Linux"]
 
 
 def test_gql_error_surface_used_by_auth_detection():
@@ -140,6 +206,9 @@ def test_settings_logger_is_not_populated_by_merely_importing_the_miner():
          "print(type(Settings.__dict__['logger']).__name__)"],
         capture_output=True, text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "vendor" / "miner")},
+        # Importing any submodule runs the package __init__, which needs
+        # ./locales; see helpers/vendor.py.
+        cwd=REPO_ROOT / "vendor" / "miner",
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "member_descriptor"

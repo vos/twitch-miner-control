@@ -7,7 +7,7 @@ import type { Span } from "../lib/coverageRows.js";
 
 export interface StreamerDetail {
   series: PointSample[];
-  events: { ts: number; type: string; message: string | null }[];
+  events: { ts: number; type: string; message: string | null; earned?: number | null }[];
   sessions: DetailSession[];
   coverage: { live: Span[]; mined: Span[] };
   /**

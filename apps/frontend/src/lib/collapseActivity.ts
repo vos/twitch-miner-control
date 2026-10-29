@@ -1,9 +1,14 @@
-import { parseActivity } from "./parseActivity.js";
+import { activityLabel } from "./activityLabel.js";
 
 export interface ActivityInput {
   ts: number;
   type: string;
   message: string | null;
+  /**
+   * Points the event earned, as the miner's event reported them; null on
+   * anything but a point gain. Optional for a row from an older backend.
+   */
+  earned?: number | null;
 }
 
 export interface ActivityRow {
@@ -51,7 +56,8 @@ export interface ActivityRow {
 export function collapseActivity(events: ActivityInput[]): ActivityRow[] {
   const rows: ActivityRow[] = [];
   for (const event of events) {
-    const { earned, label } = parseActivity(event.type, event.message);
+    const earned = event.earned ?? null;
+    const label = activityLabel(event.type);
     const open = rows[rows.length - 1];
     if (open !== undefined && open.type === event.type) {
       open.count += 1;

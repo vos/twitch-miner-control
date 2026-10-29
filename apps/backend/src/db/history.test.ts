@@ -49,18 +49,18 @@ test("latest returns null for an unknown streamer", () => {
 });
 
 test("stores the event type alongside the miner's own message", () => {
-  history.recordEvent("STREAMER_ONLINE", 1000, "forsen is now streaming");
-  history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen");
+  history.recordEvent("STREAMER_ONLINE", 1000, { message: "forsen is now streaming" });
+  history.recordEvent("GAIN_FOR_CLAIM", 2000, { message: "+50 -> forsen" });
   expect(history.recentEvents(10)).toEqual([
-    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen" },
-    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming" },
+    { ts: 2000, type: "GAIN_FOR_CLAIM", message: "+50 -> forsen", earned: null },
+    { ts: 1000, type: "STREAMER_ONLINE", message: "forsen is now streaming", earned: null },
   ]);
 });
 
 test("an event recorded without a message stores null", () => {
   history.recordEvent("BONUS_CLAIM", 1000);
   expect(history.recentEvents(10)).toEqual([
-    { ts: 1000, type: "BONUS_CLAIM", message: null },
+    { ts: 1000, type: "BONUS_CLAIM", message: null, earned: null },
   ]);
 });
 
@@ -83,10 +83,10 @@ test("adds the message column to a database created without it", () => {
     // and a new row writes against the widened table.
     const db = openDb(dbPath);
     const migrated = new History(db);
-    migrated.recordEvent("NEW_EVENT", 1500, "forsen is now streaming");
+    migrated.recordEvent("NEW_EVENT", 1500, { message: "forsen is now streaming" });
     expect(migrated.recentEvents(10)).toEqual([
-      { ts: 1500, type: "NEW_EVENT", message: "forsen is now streaming" },
-      { ts: 500, type: "OLD_EVENT", message: null },
+      { ts: 1500, type: "NEW_EVENT", message: "forsen is now streaming", earned: null },
+      { ts: 500, type: "OLD_EVENT", message: null, earned: null },
     ]);
     db.close();
   } finally {
@@ -95,28 +95,28 @@ test("adds the message column to a database created without it", () => {
 });
 
 test("lastWatchGain reports the newest watch gain for the streamer", () => {
-  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> forsen", "forsen");
-  history.recordEvent("GAIN_FOR_WATCH", 3000, "+10 -> forsen", "forsen");
+  history.recordEvent("GAIN_FOR_WATCH", 1000, { message: "+10 -> forsen", streamer: "forsen" });
+  history.recordEvent("GAIN_FOR_WATCH", 3000, { message: "+10 -> forsen", streamer: "forsen" });
   expect(history.lastWatchGain("forsen")).toBe(3000);
 });
 
 test("lastWatchGain ignores gains that are not for watching", () => {
   // A claim or a raid says points arrived, not that the miner holds a
   // watch slot -- which is the only thing this answers.
-  history.recordEvent("GAIN_FOR_CLAIM", 2000, "+50 -> forsen", "forsen");
-  history.recordEvent("GAIN_FOR_RAID", 2500, "+50 -> forsen", "forsen");
+  history.recordEvent("GAIN_FOR_CLAIM", 2000, { message: "+50 -> forsen", streamer: "forsen" });
+  history.recordEvent("GAIN_FOR_RAID", 2500, { message: "+50 -> forsen", streamer: "forsen" });
   expect(history.lastWatchGain("forsen")).toBeNull();
 });
 
 test("lastWatchGain does not read another streamer's watch gain", () => {
-  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> forsen", "forsen");
+  history.recordEvent("GAIN_FOR_WATCH", 1000, { message: "+10 -> forsen", streamer: "forsen" });
   expect(history.lastWatchGain("alpha")).toBeNull();
 });
 
 test("lastWatchGain is null when an event could not be attributed", () => {
   // An ambiguous line is stored with a null streamer; it must not count
   // toward any channel.
-  history.recordEvent("GAIN_FOR_WATCH", 1000, "+10 -> someone", null);
+  history.recordEvent("GAIN_FOR_WATCH", 1000, { message: "+10 -> someone", streamer: null });
   expect(history.lastWatchGain("someone")).toBeNull();
 });
 
@@ -143,7 +143,7 @@ test("reopening the same database keeps the data", () => {
     expect(second.latest("alpha")).toBe(42);
     expect(second.pointsSeries("alpha", 0, 9999)).toEqual([{ ts: 1000, balance: 42 }]);
     expect(second.recentEvents(10)).toEqual([
-      { ts: 500, type: "TEST_EVENT", message: null },
+      { ts: 500, type: "TEST_EVENT", message: null, earned: null },
     ]);
     db2.close();
   } finally {
@@ -344,30 +344,30 @@ test("leaves span tables alone when pruning", () => {
 // is minutes -- and on a cold start, seconds -- ahead of the Twitch pass.
 
 test("lastLiveness reports the newest online verdict", () => {
-  history.recordEvent("STREAMER_OFFLINE", 1000, "is Offline!", "forsen");
-  history.recordEvent("STREAMER_ONLINE", 3000, "is Online!", "forsen");
+  history.recordEvent("STREAMER_OFFLINE", 1000, { message: "is Offline!", streamer: "forsen" });
+  history.recordEvent("STREAMER_ONLINE", 3000, { message: "is Online!", streamer: "forsen" });
   expect(history.lastLiveness("forsen")).toEqual({ online: true, ts: 3000 });
 });
 
 test("lastLiveness reports the newest offline verdict", () => {
-  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", "forsen");
-  history.recordEvent("STREAMER_OFFLINE", 3000, "is Offline!", "forsen");
+  history.recordEvent("STREAMER_ONLINE", 1000, { message: "is Online!", streamer: "forsen" });
+  history.recordEvent("STREAMER_OFFLINE", 3000, { message: "is Offline!", streamer: "forsen" });
   expect(history.lastLiveness("forsen")).toEqual({ online: false, ts: 3000 });
 });
 
 test("lastLiveness ignores events that say nothing about liveness", () => {
-  history.recordEvent("GAIN_FOR_WATCH", 5000, "+10", "forsen");
-  history.recordEvent("BONUS_CLAIM", 6000, "claimed", "forsen");
+  history.recordEvent("GAIN_FOR_WATCH", 5000, { message: "+10", streamer: "forsen" });
+  history.recordEvent("BONUS_CLAIM", 6000, { message: "claimed", streamer: "forsen" });
   expect(history.lastLiveness("forsen")).toBeNull();
 });
 
 test("lastLiveness does not read another streamer's verdict", () => {
-  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", "forsen");
+  history.recordEvent("STREAMER_ONLINE", 1000, { message: "is Online!", streamer: "forsen" });
   expect(history.lastLiveness("alpha")).toBeNull();
 });
 
 test("lastLiveness is null when an event could not be attributed", () => {
-  history.recordEvent("STREAMER_ONLINE", 1000, "is Online!", null);
+  history.recordEvent("STREAMER_ONLINE", 1000, { message: "is Online!", streamer: null });
   expect(history.lastLiveness("someone")).toBeNull();
 });
 
@@ -383,25 +383,25 @@ test("openStreamerSessionStart is null once the session is closed", () => {
 });
 
 test("eventsFor returns only that streamer's events, newest first", () => {
-  history.recordEvent("GAIN_FOR_CLAIM", 1000, "+50 → x", "alpha");
-  history.recordEvent("GAIN_FOR_WATCH", 2000, "+10 → y", "beta");
-  history.recordEvent("GAIN_FOR_CLAIM", 3000, "+20 → z", "alpha");
+  history.recordEvent("GAIN_FOR_CLAIM", 1000, { message: "+50 → x", streamer: "alpha" });
+  history.recordEvent("GAIN_FOR_WATCH", 2000, { message: "+10 → y", streamer: "beta" });
+  history.recordEvent("GAIN_FOR_CLAIM", 3000, { message: "+20 → z", streamer: "alpha" });
   expect(history.eventsFor("alpha", 10)).toEqual([
-    { ts: 3000, type: "GAIN_FOR_CLAIM", message: "+20 → z" },
-    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50 → x" },
+    { ts: 3000, type: "GAIN_FOR_CLAIM", message: "+20 → z", earned: null },
+    { ts: 1000, type: "GAIN_FOR_CLAIM", message: "+50 → x", earned: null },
   ]);
 });
 
 test("eventsFor excludes unattributed events", () => {
-  history.recordEvent("STARTUP", 1000, "booted", null);
+  history.recordEvent("STARTUP", 1000, { message: "booted", streamer: null });
   expect(history.eventsFor("alpha", 10)).toEqual([]);
 });
 
 test("eventsFor honours the limit", () => {
-  history.recordEvent("A", 1000, null, "alpha");
-  history.recordEvent("B", 2000, null, "alpha");
+  history.recordEvent("A", 1000, { message: null, streamer: "alpha" });
+  history.recordEvent("B", 2000, { message: null, streamer: "alpha" });
   expect(history.eventsFor("alpha", 1)).toEqual([
-    { ts: 2000, type: "B", message: null },
+    { ts: 2000, type: "B", message: null, earned: null },
   ]);
 });
 

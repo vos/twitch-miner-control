@@ -39,10 +39,10 @@ function seed() {
   stream("gamma", "g1", at(9, 14, 8), at(9, 14, 11), 1);
   // Today, live: 1000 -> 1040.
   history.recordPoints("alpha", 1040, at(9, 17, 10));
-  history.recordEvent("BONUS_CLAIM", at(9, 15, 10), null, "alpha");
-  history.recordEvent("BONUS_CLAIM", at(9, 16, 10), null, "alpha");
-  history.recordEvent("JOIN_RAID", at(9, 16, 1), null, "beta");
-  history.recordEvent("BONUS_CLAIM", at(9, 10, 1), null, "alpha"); // last week
+  history.recordEvent("BONUS_CLAIM", at(9, 15, 10), { message: null, streamer: "alpha" });
+  history.recordEvent("BONUS_CLAIM", at(9, 16, 10), { message: null, streamer: "alpha" });
+  history.recordEvent("JOIN_RAID", at(9, 16, 1), { message: null, streamer: "beta" });
+  history.recordEvent("BONUS_CLAIM", at(9, 10, 1), { message: null, streamer: "alpha" }); // last week
   streamers.see("beta", 1, "Beta");
   streamers.putProfile("beta", "https://cdn/beta.png", 1);
 }
@@ -124,7 +124,7 @@ test("channels mined at the same time count once: mined is time spent mining", (
 
 test("a day's summary adds up that day alone", () => {
   seed();
-  history.recordEvent("DROP_CLAIM", at(9, 14, 9), "Claim X", "alpha");
+  history.recordEvent("DROP_CLAIM", at(9, 14, 9), { message: "Claim X", streamer: "alpha" });
   expect(buildDaySummary(deps(), "2026-09-14", NOW)).toEqual({
     day: "2026-09-14",
     earned: 400,

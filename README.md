@@ -193,10 +193,20 @@ and needs no login.
 **How a subscribed campaign is watched.** Each subscription gets a small
 pool of live channels for its game, preferring ones Twitch says are
 running that campaign. One of the miner's two watch slots always goes to
-a live channel from the highest-ranked pool; your own streamers share
-the other. A pool with a live channel is kept, unless its campaign stops
-progressing for 45 minutes, in which case those channels are swapped for
-others. **Re-resolve now** fetches a fresh pool straight away.
+a live channel from the highest-ranked pool, one the miner can progress a
+drop on where the pool has one; your own streamers share the other. A
+pool with a live channel is kept, unless its campaign stops progressing
+for 45 minutes, in which case those channels are swapped for others.
+**Re-resolve now** fetches a fresh pool straight away.
+
+**Linking your game account.** Most campaigns pay out only once your game
+account is linked to Twitch (the campaign's page on Twitch has the
+button). The per-streamer **Drops** setting decides what the miner does
+about it: **Linked accounts**, the default, progresses only campaigns
+whose account is linked; **All campaigns** progresses the rest too; **Off**
+leaves drops alone on that channel. A subscription to a campaign you have
+not linked therefore makes no progress under the default, and its pool is
+swapped out after 45 minutes like any other stalled one.
 
 ### Notifications
 
@@ -239,26 +249,27 @@ deliberately **not** configurable from the web UI: they carry bot tokens
 and webhook URLs, and this app serves a single shared password, over
 plain HTTP unless you add a proxy. Set them by hand instead.
 
-Edit the `LoggerSettings(...)` block in `python/run.py`:
+Add them to the `handlers=[...]` list in `python/run.py`:
 
-    logger_settings=LoggerSettings(
-        save=True,
-        console_level=20,
-        file_level=_file_level(),
-        hooks=[DoorbellHook(DOORBELL_URL, DOORBELL_TOKEN)],
-        telegram=Telegram(
+    handlers=[
+        doorbell(DOORBELL_URL, DOORBELL_TOKEN),
+        telegram(
             chat_id=123456789,
             token="123456789:your-bot-token",
-            events=[Events.STREAMER_ONLINE, Events.BET_LOSE],
+            events=[Events.STREAMER_ONLINE, Events.PREDICTION_LOSE],
         ),
-    ),
+    ],
 
 importing whichever integrations you use from
-`TwitchChannelPointsMiner.classes` (`Telegram`, `Discord`, `Webhook`,
-`Matrix`, `Pushover`, `Gotify`) and `Events` from
-`TwitchChannelPointsMiner.classes.Settings`. Keep the existing `hooks=[...]`
-entry: upstream appends the named integrations to that list rather than
-replacing it, so the app's own event feed keeps working alongside yours.
+`TwitchChannelPointsMiner.classes.events.handlers.hooks` (`telegram`,
+`discord`, `webhook`, `matrix`, `pushover`, `gotify`) and `Events` from
+`TwitchChannelPointsMiner.classes.events.Events`. Keep the `doorbell(...)`
+entry: it is how the app's own event feed, activity lines and watch badges
+hear from the miner. Upstream's
+[advanced configuration guide](https://github.com/mpforce1/Twitch-Channel-Points-Miner/blob/main/docs/guides/advanced-configuration.md#handlers)
+lists every option, and its
+[migration notes](https://github.com/mpforce1/Twitch-Channel-Points-Miner/discussions/57)
+cover an older run file: the `BET_*` events are now `PREDICTION_*`.
 
 Restart the miner from the dashboard to pick the change up.
 

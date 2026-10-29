@@ -1,14 +1,15 @@
-"""Doorbell: tells the backend that something happened, and how the miner
-said it.
+"""Doorbell: tells the backend that something happened, and what.
 
-Upstream hooks are dispatched synchronously from inside
-LoggerFormatter.format(), so send() must return immediately.
+An EventHandler on the miner's EventManager. Upstream hands every handler
+the typed Event itself, so the facts the backend needs -- which streamer,
+how many points -- cross the wire as fields rather than being recovered
+from display text. The message still rides along, worded by the miner's
+own translations, purely so the feed can show it.
 
-The payload carries the formatted message purely so the UI can show the
-miner's own wording -- which, unlike the bare Events name, includes the
-streamer. It is display text and nothing else: messages render balances
-through millify() ("12.3k"), so they remain lossy and must never be parsed
-back into numbers. Point history comes from the state pipeline instead.
+The EventManager runs handlers on its task runner's threads, so handle()
+does not block the miner itself. It still only enqueues: one worker posts
+in order, and a slow or absent backend costs dropped rings rather than a
+runner slot held for the whole HTTP timeout.
 """
 import logging
 import queue
@@ -18,34 +19,81 @@ import time
 
 import requests
 
-from TwitchChannelPointsMiner.classes.EventHook import EventHook
+from TwitchChannelPointsMiner.classes.events.Event import (
+    ChangingWatchSlots,
+    Event,
+    GainPoints,
+)
+from TwitchChannelPointsMiner.classes.events.Events import Events
+from TwitchChannelPointsMiner.classes.events.Handler import EventHandler
+from TwitchChannelPointsMiner.classes.events.Transformer import EventTransformer
+from TwitchChannelPointsMiner.classes.events.handlers.Factory import EventHandlerFactory
+from TwitchChannelPointsMiner.classes.events.transformers.Strings import (
+    EmojiTransformer,
+    MultiTransformer,
+    StaticStringTransformer,
+    TranslatorTransformer,
+)
+from TwitchChannelPointsMiner.utils.Utils import normalise_username
 
 logger = logging.getLogger(__name__)
 
-# Longest message kept. Bet recaps are the wordiest events and sit far
-# under this; the cap exists so a pathological message cannot bloat the
-# events table or the feed.
+# Longest message kept. Prediction recaps are the wordiest events and sit
+# far under this; the cap exists so a pathological message cannot bloat
+# the events table or the feed.
 MAX_MESSAGE = 500
 
-# Colorama wraps messages in ANSI escapes when the palette is enabled, and
-# recaps embed newlines. Feed rows are single-line, so both collapse away
-# rather than reaching storage.
+# Messages can embed newlines, and a coloured transformer would add ANSI
+# escapes. Feed rows are single-line, so both collapse away rather than
+# reaching storage.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
+# Every event, less the ones that repeat every few seconds or only
+# announce the claim event that follows them. Each ring is a feed row and
+# a state refresh, so these would be noise at a cost.
+DOORBELL_EVENTS = Events.all() & ~(
+    Events.STREAM_UP
+    | Events.STREAM_DOWN
+    | Events.STREAM_VIEW_COUNT
+    | Events.BONUS_POINTS_AVAILABLE
+    | Events.MOMENT_CLAIM_AVAILABLE
+    | Events.DROP_CLAIM_AVAILABLE
+    | Events.PREDICTION_EVENT_UPDATE
+)
+
 
 def _clean(message) -> str:
-    """Reduces a formatted log message to one bounded, printable line."""
+    """Reduces a formatted message to one bounded, printable line."""
     text = _ANSI.sub("", str(message))
     text = _CONTROL.sub(" ", text).strip()
     return text[:MAX_MESSAGE]
 
 
-class DoorbellHook(EventHook):
-    def __init__(self, url, token, queue_size=256, post=None):
+def _login(streamer) -> str | None:
+    return normalise_username(streamer.username) if streamer is not None else None
+
+
+class DoorbellHandler(EventHandler):
+    def __init__(
+        self,
+        url: str,
+        token: str,
+        transformer: EventTransformer[str],
+        events: Events = DOORBELL_EVENTS,
+        queue_size: int = 256,
+        post=None,
+    ):
         self.url = url
         self.token = token
+        self.transformer = transformer
+        self.events = events
         self.dropped = 0
+        # The channels holding the miner's watch slots. The event carries
+        # only what changed; the full set is sent so a missed ring is
+        # corrected by the next one instead of compounding.
+        self._watching: set[str] = set()
+        self._watching_lock = threading.Lock()
         self._queue = queue.Queue(maxsize=queue_size)
         self._post = post if post is not None else self._http_post
         self._stopping = threading.Event()
@@ -72,29 +120,73 @@ class DoorbellHook(EventHook):
             finally:
                 self._queue.task_done()
 
-    def validate_record(self, record) -> bool:
-        return hasattr(record, "event")
-
-    def send(self, message: str, event) -> None:
+    def _message(self, event: Event) -> str | None:
+        # The translation is display text; a template that cannot render
+        # this event (upstream raises for a gift sub it cannot find) must
+        # not cost the ring, which is what drives the refresh.
         try:
-            self._queue.put_nowait(
-                {
-                    "event": str(event),
-                    "ts": time.time(),
-                    "message": _clean(message),
-                }
-            )
+            return _clean(self.transformer.transform(event)) or None
+        except Exception:
+            logger.debug("doorbell could not render %s", event.type, exc_info=True)
+            return None
+
+    def handles(self) -> Events:
+        return self.events
+
+    def handle(self, event: Event) -> None:
+        payload = {
+            "event": event.type.name,
+            "ts": event.timestamp.timestamp(),
+            "message": self._message(event),
+            "streamer": _login(getattr(event, "streamer", None)),
+            "earned": event.amount if isinstance(event, GainPoints) else None,
+        }
+        if isinstance(event, ChangingWatchSlots):
+            with self._watching_lock:
+                self._watching -= {_login(s) for s in event.dropping}
+                self._watching |= {_login(s) for s in event.adding}
+                payload["watching"] = sorted(self._watching)
+        try:
+            self._queue.put_nowait(payload)
         except queue.Full:
             self.dropped += 1
 
     def flush(self, timeout=5):
         deadline = time.monotonic() + timeout
-        while not self._queue.empty() and time.monotonic() < deadline:
+        while self._queue.unfinished_tasks and time.monotonic() < deadline:
             time.sleep(0.01)
 
-    def stop(self):
+    def shutdown(self):
         if self._stopping.is_set():
             return
         self._stopping.set()
         self._queue.put(None)
         self._worker.join(timeout=2)
+
+
+def message_transformer(logger_settings, account_name: str) -> EventTransformer[str]:
+    """The miner's own wording for an event, emoji first when enabled.
+
+    The console's line minus its timestamp: the backend dates each row
+    itself, and the feed renders the time in its own column.
+    """
+    parts: list[EventTransformer[str]] = []
+    if logger_settings.emoji:
+        parts += [EmojiTransformer(), StaticStringTransformer("  ")]
+    parts.append(
+        TranslatorTransformer(
+            translator=logger_settings.translator, account_username=account_name
+        )
+    )
+    return MultiTransformer(*parts)
+
+
+def doorbell(url: str, token: str, **kwargs) -> EventHandlerFactory:
+    """A handler factory, in the shape upstream's `handlers=` list takes."""
+
+    def factory(logger_settings, background_tasks, default_transformer, account_name):
+        return DoorbellHandler(
+            url, token, message_transformer(logger_settings, account_name), **kwargs
+        )
+
+    return factory

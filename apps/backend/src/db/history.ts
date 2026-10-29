@@ -2,7 +2,20 @@ import type { Db } from "./schema.js";
 import type { Span } from "../state/spans.js";
 
 export interface PointSample { ts: number; balance: number }
-export interface EventSample { ts: number; type: string; message: string | null }
+export interface EventSample {
+  ts: number;
+  type: string;
+  message: string | null;
+  /** Points earned, for a point-gain event; null on every other kind. */
+  earned: number | null;
+}
+
+/** What the miner's event said besides its type; see recordEvent. */
+export interface EventFacts {
+  message?: string | null;
+  streamer?: string | null;
+  earned?: number | null;
+}
 
 export interface SessionRow {
   streamId: string;
@@ -79,23 +92,20 @@ export class History {
   }
 
   /**
-   * The type plus the miner's own formatted line, which is the only place
-   * the streamer's name survives -- the `Events` name alone is just
-   * `GAIN_FOR_CLAIM`, which is what made the activity feed nameless.
+   * One miner event, with the facts its typed Event carried.
    *
-   * The message is display text and nothing else: balances inside it are
-   * millified ("12.3k") and must never be parsed back into numbers. Point
-   * history is recorded by recordPoints() from the state pipeline.
+   * `streamer` and `earned` are fields the miner set, not values read out
+   * of the message. The message is display text and nothing else: balances
+   * inside it are millified ("12.3k") and must never be parsed back into
+   * numbers. Point history is recorded by recordPoints() from the state
+   * pipeline.
    */
-  recordEvent(
-    type: string,
-    ts = Date.now(),
-    message: string | null = null,
-    streamer: string | null = null,
-  ): void {
+  recordEvent(type: string, ts = Date.now(), facts: EventFacts = {}): void {
     this.db
-      .prepare("INSERT INTO events (ts, type, message, streamer) VALUES (?, ?, ?, ?)")
-      .run(ts, type, message, streamer);
+      .prepare(
+        "INSERT INTO events (ts, type, message, streamer, earned) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(ts, type, facts.message ?? null, facts.streamer ?? null, facts.earned ?? null);
   }
 
   /**
@@ -106,7 +116,7 @@ export class History {
   lastActivity(streamer: string): EventSample | null {
     const row = this.db
       .prepare(
-        "SELECT ts, type, message FROM events WHERE streamer = ? " +
+        "SELECT ts, type, message, earned FROM events WHERE streamer = ? " +
           "ORDER BY ts DESC, id DESC LIMIT 1",
       )
       .get(streamer) as EventSample | undefined;
@@ -123,7 +133,7 @@ export class History {
   eventsFor(streamer: string, limit: number): EventSample[] {
     return this.db
       .prepare(
-        "SELECT ts, type, message FROM events WHERE streamer = ? " +
+        "SELECT ts, type, message, earned FROM events WHERE streamer = ? " +
           "ORDER BY ts DESC, id DESC LIMIT ?",
       )
       .all(streamer, limit) as EventSample[];
@@ -152,13 +162,12 @@ export class History {
   /**
    * When this streamer last earned points *for watching*, or null.
    *
-   * The miner's watch loop lives in the `run.py` process and never
-   * publishes which channels hold its two watch slots, so this is the
-   * only evidence on this side that a channel is actually being mined:
-   * PubSub reports a `WATCH` reason code and the doorbell records it as
-   * `GAIN_FOR_WATCH` (see vendor Twitch PubSub.py). Distinct from
-   * lastActivity, which is any event -- a claim or a raid says nothing
-   * about whether the miner is watching *now*.
+   * Evidence that a channel is being mined for when the miner has not
+   * announced its watch slots to this process (see StateService's
+   * `watching`): Twitch sends a `WATCH` gain only for a channel we are
+   * actually watching. Distinct from lastActivity, which is any event --
+   * a claim or a raid says nothing about whether the miner is watching
+   * *now*.
    */
   lastWatchGain(streamer: string): number | null {
     const row = this.db
@@ -435,7 +444,7 @@ export class History {
 
   recentEvents(limit: number): EventSample[] {
     return this.db
-      .prepare("SELECT ts, type, message FROM events ORDER BY ts DESC, id DESC LIMIT ?")
+      .prepare("SELECT ts, type, message, earned FROM events ORDER BY ts DESC, id DESC LIMIT ?")
       .all(limit) as EventSample[];
   }
 }

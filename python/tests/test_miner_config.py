@@ -3,7 +3,7 @@ import pytest
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.entities.Bet import Condition, DelayMode, Strategy
-from TwitchChannelPointsMiner.classes.entities.Streamer import HLSSettings
+from TwitchChannelPointsMiner.classes.entities.Streamer import DropsMode, HLSSettings
 from miner_config import build_mine_kwargs, build_streamers
 
 BASE = {
@@ -43,7 +43,16 @@ def test_defaults_apply_and_per_streamer_settings_override():
     ])
     settings = build_streamers(c)[0].settings
     assert settings.make_predictions is True   # overridden
-    assert settings.claim_drops is True        # from defaults
+    # From defaults, as a bool: upstream maps True to its own default mode.
+    assert settings.claim_drops is DropsMode.LINKED
+
+
+@pytest.mark.parametrize("name", ["NONE", "LINKED", "ALL"])
+def test_claim_drops_mode_name_maps_to_enum(name):
+    c = cfg(streamers=[
+        {"username": "alpha", "enabled": True, "settings": {"claim_drops": name}},
+    ])
+    assert build_streamers(c)[0].settings.claim_drops is DropsMode[name]
 
 
 def test_chat_presence_string_maps_to_enum():
@@ -96,22 +105,38 @@ def test_bet_without_a_filter_condition_leaves_it_unset():
     assert bet.filter_condition is None
 
 
-def test_simulate_hls_playback_false_is_preserved_not_coerced():
+def _hls(mode):
     c = cfg(streamers=[
         {"username": "alpha", "enabled": True,
-         "settings": {"simulate_hls_playback": False}},
+         "settings": {"simulate_hls_playback": mode}},
     ])
-    assert build_streamers(c)[0].settings.simulate_hls_playback is False
+    return build_streamers(c)[0].settings.simulate_hls_playback
 
 
-def test_simulate_hls_playback_dict_becomes_hls_settings():
-    c = cfg(streamers=[
-        {"username": "alpha", "enabled": True,
-         "settings": {"simulate_hls_playback": {"refresh_before": 90}}},
-    ])
-    hls = build_streamers(c)[0].settings.simulate_hls_playback
+def test_simulate_hls_playback_off_reaches_the_miner_as_false():
+    assert _hls("OFF") is False
+
+
+@pytest.mark.parametrize("mode, upstream", [
+    ("DROPS", "drops"), ("ALL_SEGMENTS", "enable"), ("LAST_SEGMENT", "disable"),
+])
+def test_simulate_hls_playback_mode_becomes_hls_settings(mode, upstream):
+    hls = _hls(mode)
     assert isinstance(hls, HLSSettings)
-    assert hls.refresh_before == 90
+    assert hls.watch_all_segments == upstream
+    assert hls.refresh_before == 120
+
+
+def test_unset_simulate_hls_playback_is_left_to_upstream():
+    c = cfg(streamers=[{"username": "alpha", "enabled": True, "settings": {}}])
+    hls = build_streamers(c)[0].settings.simulate_hls_playback
+    # Filled in later by set_default_settings, from StreamerSettings.default().
+    assert hls is None
+
+
+def test_unknown_simulate_hls_playback_mode_is_rejected():
+    with pytest.raises(ValueError, match="simulate_hls_playback"):
+        _hls("SOMETIMES")
 
 
 def test_unknown_bet_key_is_rejected():
@@ -174,14 +199,22 @@ def test_weekly_rewards_dict_becomes_basic_configuration():
 
 from types import SimpleNamespace
 
-from miner_config import DropSlotSelector, drop_pools
+from miner_config import DropSlotSelector, DropSlotSelectorFactory, drop_pools
 
 
-def _streamer(login, claim_drops=True):
+CAMPAIGNS = {"campaign": object()}
+
+
+def _streamer(login, claim_drops=DropsMode.LINKED, progressable=False):
     return SimpleNamespace(
         username=login,
         channel_id=f"id-{login}",
         settings=SimpleNamespace(claim_drops=claim_drops),
+        # Upstream reads the miner's campaign map; the fake checks it was
+        # handed that map rather than something else.
+        any_campaign_has_progressable_drop=lambda campaigns: (
+            progressable and campaigns is CAMPAIGNS
+        ),
     )
 
 
@@ -190,10 +223,16 @@ class _Inner:
 
     def __init__(self, *logins):
         self.logins = logins
+        self.seen_campaigns = None
 
-    def select(self, streamers, max_amount):
+    def select(self, campaigns, streamers, max_amount):
+        self.seen_campaigns = campaigns
         online = {s.username for s in streamers}
         return [f"id-{l}" for l in self.logins if l in online][:max_amount]
+
+
+def _select(selector, online, max_amount=2):
+    return selector.select(CAMPAIGNS, online, max_amount)
 
 
 def _owned(login, sub):
@@ -217,34 +256,71 @@ def test_drop_pools_skip_disabled_channels():
 def test_a_live_pool_channel_takes_a_slot_from_manual_streamers():
     selector = DropSlotSelector(_Inner("house", "cohh"), [["a1", "a2"]])
     online = [_streamer("house"), _streamer("cohh"), _streamer("a2")]
-    assert selector.select(online, 2) == ["id-a2", "id-house"]
+    assert _select(selector, online) == ["id-a2", "id-house"]
 
 
 def test_the_inner_choice_stands_when_it_already_holds_a_pool_channel():
     selector = DropSlotSelector(_Inner("house", "a2"), [["a1", "a2"]])
     online = [_streamer("house"), _streamer("a1"), _streamer("a2")]
-    assert selector.select(online, 2) == ["id-house", "id-a2"]
+    assert _select(selector, online) == ["id-house", "id-a2"]
 
 
 def test_the_higher_ranked_pool_wins_the_slot():
     selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"], ["b1"]])
     online = [_streamer("house"), _streamer("cohh"), _streamer("b1"), _streamer("a1")]
-    assert selector.select(online, 2) == ["id-a1", "id-house"]
+    assert _select(selector, online) == ["id-a1", "id-house"]
 
 
 def test_only_one_slot_goes_to_drops():
     selector = DropSlotSelector(_Inner("house"), [["a1", "a2"]])
     online = [_streamer("house"), _streamer("a1"), _streamer("a2")]
-    assert selector.select(online, 2) == ["id-a1", "id-house"]
+    assert _select(selector, online) == ["id-a1", "id-house"]
 
 
 def test_a_pool_channel_with_drops_off_is_not_given_the_slot():
     selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"]])
-    online = [_streamer("house"), _streamer("cohh"), _streamer("a1", claim_drops=False)]
-    assert selector.select(online, 2) == ["id-house", "id-cohh"]
+    online = [_streamer("house"), _streamer("cohh"), _streamer("a1", claim_drops=DropsMode.NONE)]
+    assert _select(selector, online) == ["id-house", "id-cohh"]
 
 
 def test_nothing_changes_without_a_live_pool_channel():
     selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"]])
     online = [_streamer("house"), _streamer("cohh")]
-    assert selector.select(online, 2) == ["id-house", "id-cohh"]
+    assert _select(selector, online) == ["id-house", "id-cohh"]
+
+
+def test_within_a_pool_a_channel_the_miner_can_progress_comes_first():
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1", "a2"]])
+    online = [_streamer("house"), _streamer("cohh"),
+              _streamer("a1"), _streamer("a2", progressable=True)]
+    assert _select(selector, online) == ["id-a2", "id-house"]
+
+
+def test_rank_still_beats_progress_across_pools():
+    """The preference is within a pool: a lower-ranked pool's progressable
+    channel does not jump the subscription ranked above it."""
+    selector = DropSlotSelector(_Inner("house", "cohh"), [["a1"], ["b1"]])
+    online = [_streamer("house"), _streamer("cohh"),
+              _streamer("a1"), _streamer("b1", progressable=True)]
+    assert _select(selector, online) == ["id-a1", "id-house"]
+
+
+def test_the_inner_selector_sees_the_miners_campaigns():
+    inner = _Inner("house")
+    _select(DropSlotSelector(inner, [["a1"]]), [_streamer("house")])
+    assert inner.seen_campaigns is CAMPAIGNS
+
+
+def test_factory_wraps_the_selector_upstream_builds_from_priority():
+    from TwitchChannelPointsMiner.classes.Settings import Priority
+    from TwitchChannelPointsMiner.classes.StreamerSelector import PrioritySelector
+
+    selector = DropSlotSelectorFactory([["a1"]]).create([Priority.ORDER])
+    assert isinstance(selector, DropSlotSelector)
+    assert isinstance(selector.inner, PrioritySelector)
+
+
+def test_factory_without_pools_leaves_upstreams_selector_alone():
+    from TwitchChannelPointsMiner.classes.StreamerSelector import NestedSelector
+
+    assert isinstance(DropSlotSelectorFactory([]).create(None), NestedSelector)

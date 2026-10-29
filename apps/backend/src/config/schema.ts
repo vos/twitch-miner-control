@@ -2,9 +2,34 @@ import { z } from "zod";
 
 /** Mirrors miner_config.ALLOWED_SETTINGS. Keep both in sync. */
 export const BOOL_SETTINGS = [
-  "makePredictions", "followRaid", "claimDrops", "claimMoments",
+  "makePredictions", "followRaid", "claimMoments",
   "watchStreak", "communityGoals", "weeklyRewards",
 ] as const;
+
+/**
+ * Upstream's DropsMode, by name. LINKED is what the miner does with an
+ * unset value: only campaigns whose account link is in place progress.
+ */
+export const DROPS_MODES = ["NONE", "LINKED", "ALL"] as const;
+export type DropsMode = (typeof DROPS_MODES)[number];
+
+/**
+ * Upstream also takes a bool for claim_drops and maps it onto the enum
+ * itself (StreamerSettings.__init__); a config written before the enum
+ * existed holds one. Read the same way, written back as the name.
+ */
+const claimDropsSchema = z.union([
+  z.enum(DROPS_MODES),
+  z.boolean().transform((on): DropsMode => (on ? "LINKED" : "NONE")),
+]);
+
+/**
+ * How the miner simulates the player, onto HLSSettings.watch_all_segments
+ * (see miner_config.HLS_MODES). OFF skips HLS playback altogether; DROPS,
+ * upstream's default, fetches every segment only while a drop can be
+ * progressed there, since that costs about ten times the requests.
+ */
+export const HLS_MODES = ["OFF", "DROPS", "ALL_SEGMENTS", "LAST_SEGMENT"] as const;
 
 export const TO_PYTHON: Record<string, string> = {
   makePredictions: "make_predictions",
@@ -39,7 +64,6 @@ export const NESTED_TO_PYTHON: Record<string, Record<string, string>> = {
     filterCondition: "filter_condition",
   },
   filterCondition: { by: "by", where: "where", value: "value" },
-  simulateHlsPlayback: { refreshBefore: "refresh_before" },
 };
 
 /** Upstream marks DECISION_USERS/DECISION_POINTS as keys that do not exist. */
@@ -76,19 +100,14 @@ const betSchema = z
   })
   .strict();
 
-const hlsSchema = z
-  .union([
-    z.literal(false),
-    z.object({ refreshBefore: z.number().int().positive() }).strict(),
-  ]);
-
 const settingsSchema = z
   .object({
     ...Object.fromEntries(BOOL_SETTINGS.map((k) => [k, z.boolean().optional()])),
+    claimDrops: claimDropsSchema.optional(),
     pointsLimit: z.union([z.literal(false), z.number().int().positive()]).optional(),
     chat: z.enum(["ALWAYS", "NEVER", "ONLINE", "OFFLINE"]).optional(),
     bet: betSchema.optional(),
-    simulateHlsPlayback: hlsSchema.optional(),
+    simulateHlsPlayback: z.enum(HLS_MODES).optional(),
   })
   .strict();
 
@@ -294,9 +313,8 @@ export type StreamerSettingsInput = z.infer<typeof settingsSchema>;
 
 /**
  * Renames one level of keys, recursing into the nested settings objects
- * named in NESTED_TO_PYTHON. `false` is a legal value for
- * simulateHlsPlayback and must survive as a bare false rather than being
- * treated as an object to walk.
+ * named in NESTED_TO_PYTHON. Only an object is walked; any other value,
+ * `false` included, is carried across as it is.
  */
 function renameKeys(
   input: Record<string, unknown>,

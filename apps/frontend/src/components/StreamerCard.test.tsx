@@ -211,8 +211,8 @@ test("shows how many points the last event earned", () => {
     lastActivity: {
       ts: Date.now() - 4 * 60_000,
       type: "GAIN_FOR_CLAIM",
-      message: "+50 → Streamer(username=alpha, channel_id=1, channel_points=12.3k)"
-        + " - Reason: CLAIM.",
+      message: "+50 → Streamer(username=alpha, channel_id=1, channel_points=12.3k)",
+      earned: 50,
     },
   });
   const line = screen.getByTestId("last-activity");

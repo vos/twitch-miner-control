@@ -452,6 +452,7 @@ watchHealth({ notifier, supervisor, loginStatus, updates: updateChecker });
 watchStreams({ notifier, stateService });
 watchDoorbell({ notifier, stateService });
 watchGiftSubs({ giftSubs, supervisor, stateService });
+supervisor.on("state", () => stateService.resetWatchSlots(supervisor.state === "RUNNING"));
 const campaignWatcher = new CampaignWatcher({
   notifier,
   catalogue,

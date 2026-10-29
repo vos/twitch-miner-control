@@ -201,15 +201,32 @@ describe("schema", () => {
     expect(configSchema.safeParse(mk({ evil: 1 })).success).toBe(false);
   });
 
-  test("accepts simulateHlsPlayback as false or a refresh window", () => {
+  test("accepts simulateHlsPlayback as one of the playback modes", () => {
     const mk = (v: unknown) => ({
       ...valid,
       streamers: [{ username: "alpha", enabled: true, settings: { simulateHlsPlayback: v } }],
     });
-    expect(configSchema.safeParse(mk(false)).success).toBe(true);
-    expect(configSchema.safeParse(mk({ refreshBefore: 120 })).success).toBe(true);
-    expect(configSchema.safeParse(mk({ refreshBefore: 0 })).success).toBe(false);
-    expect(configSchema.safeParse(mk(true)).success).toBe(false);
+    for (const mode of ["OFF", "DROPS", "ALL_SEGMENTS", "LAST_SEGMENT"]) {
+      expect(configSchema.safeParse(mk(mode)).success).toBe(true);
+    }
+    // What the toggle-and-number control used to write, which the miner
+    // never accepted.
+    expect(configSchema.safeParse(mk(120)).success).toBe(false);
+    expect(configSchema.safeParse(mk(false)).success).toBe(false);
+  });
+
+  test("reads claimDrops as a DropsMode name", () => {
+    const mk = (v: unknown) => ({ ...valid, defaults: { claimDrops: v } });
+    for (const mode of ["NONE", "LINKED", "ALL"]) {
+      expect(configSchema.parse(mk(mode)).defaults.claimDrops).toBe(mode);
+    }
+    expect(configSchema.safeParse(mk("SOME")).success).toBe(false);
+  });
+
+  test("reads a boolean claimDrops the way the miner maps one", () => {
+    const mk = (v: unknown) => ({ ...valid, defaults: { claimDrops: v } });
+    expect(configSchema.parse(mk(true)).defaults.claimDrops).toBe("LINKED");
+    expect(configSchema.parse(mk(false)).defaults.claimDrops).toBe("NONE");
   });
 });
 
@@ -269,7 +286,7 @@ describe("store", () => {
 describe("nested snake_case mapping", () => {
   const camel = {
     makePredictions: true,
-    simulateHlsPlayback: { refreshBefore: 120 },
+    simulateHlsPlayback: "ALL_SEGMENTS",
     bet: {
       strategy: "SMART", percentageGap: 20, maxPoints: 50000,
       minimumPoints: 0, stealthMode: false, delayMode: "FROM_END",
@@ -278,7 +295,7 @@ describe("nested snake_case mapping", () => {
   };
   const snake = {
     make_predictions: true,
-    simulate_hls_playback: { refresh_before: 120 },
+    simulate_hls_playback: "ALL_SEGMENTS",
     bet: {
       strategy: "SMART", percentage_gap: 20, max_points: 50000,
       minimum_points: 0, stealth_mode: false, delay_mode: "FROM_END",
@@ -294,10 +311,10 @@ describe("nested snake_case mapping", () => {
     expect(settingsFromPython(snake)).toEqual(camel);
   });
 
-  test("leaves a false simulateHlsPlayback as a bare false", () => {
-    expect(settingsToPython({ simulateHlsPlayback: false }))
-      .toEqual({ simulate_hls_playback: false });
-    expect(settingsFromPython({ simulate_hls_playback: false }))
-      .toEqual({ simulateHlsPlayback: false });
+  test("leaves a false pointsLimit as a bare false", () => {
+    expect(settingsToPython({ pointsLimit: false }))
+      .toEqual({ points_limit: false });
+    expect(settingsFromPython({ points_limit: false }))
+      .toEqual({ pointsLimit: false });
   });
 });

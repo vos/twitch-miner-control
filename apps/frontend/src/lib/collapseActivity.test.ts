@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import { collapseActivity } from "./collapseActivity.js";
 
 const at = (min: number) => new Date(2026, 8, 17, 10, min).getTime();
-const ev = (type: string, min: number, message: string | null = null) =>
-  ({ ts: at(min), type, message });
+const ev = (type: string, min: number, earned: number | null = null) =>
+  ({ ts: at(min), type, message: null, earned });
 
 test("leaves a list with no repeats alone", () => {
   const rows = collapseActivity([
@@ -42,8 +42,7 @@ test("a run broken by a different event starts a new run", () => {
 test("sums the points a run earned", () => {
   // Three ten-point watch gains are thirty points. Reporting one of them
   // and hiding the rest would make the feed disagree with the balance.
-  const gain = (min: number) =>
-    ev("GAIN_FOR_WATCH", min, `+10 → Streamer(username=a) - Reason: WATCH.`);
+  const gain = (min: number) => ev("GAIN_FOR_WATCH", min, 10);
   const rows = collapseActivity([gain(30), gain(20), gain(10)]);
   expect(rows).toHaveLength(1);
   expect(rows[0].count).toBe(3);
@@ -61,11 +60,19 @@ test("events of one type with differing amounts still fold, and sum", () => {
   // The label is what the reader sees repeated, and it comes from the
   // type -- so two claims of different sizes are still "claim ×2".
   const rows = collapseActivity([
-    ev("GAIN_FOR_CLAIM", 30, "+50 → Streamer(username=a) - Reason: CLAIM."),
-    ev("GAIN_FOR_CLAIM", 20, "+10 → Streamer(username=a) - Reason: CLAIM."),
+    ev("GAIN_FOR_CLAIM", 30, 50),
+    ev("GAIN_FOR_CLAIM", 20, 10),
   ]);
   expect(rows[0].count).toBe(2);
   expect(rows[0].earned).toBe(60);
+});
+
+test("never reads an amount out of the message", () => {
+  // The wording is the miner's and can change; only the field is a figure.
+  const rows = collapseActivity([
+    { ts: at(30), type: "GAIN_FOR_CLAIM", message: "+50 → alpha", earned: null },
+  ]);
+  expect(rows[0].earned).toBeNull();
 });
 
 test("carries the label and the first message through", () => {

@@ -1,22 +1,26 @@
 """Builds a read-only Twitch session from the miner's own cookie pickle.
 
-Mirrors Twitch.__init__ (vendor/miner/.../classes/Twitch.py:84-123). We never
+The session comes from upstream's own client_session_factory, the one the
+miner itself calls, so headers and connection pooling match it. We never
 write cookies here; only helpers/login.py does.
 """
 import logging
 import os
-import string
 from dataclasses import dataclass
-from secrets import choice, token_hex
 
-from TwitchChannelPointsMiner.classes.ClientSession import ClientSession
+from helpers.vendor import import_miner
+
+LOCALES_DIR = import_miner()
+
+from TwitchChannelPointsMiner.classes.ClientSession import (
+    ClientSessionConfig,
+    client_session_factory,
+)
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
+from TwitchChannelPointsMiner.classes.Translator import Translator
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
-from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, USER_AGENTS
 from TwitchChannelPointsMiner.logger import LoggerSettings
-
-USER_AGENT = USER_AGENTS["Linux"]["FIREFOX"]
 
 
 def _configure_settings() -> None:
@@ -38,7 +42,11 @@ def _configure_settings() -> None:
     for the same reason state.py's protocol demands it: stdout carries the
     NDJSON responses, and a stray log line there would corrupt the stream.
     """
-    Settings.logger = LoggerSettings(save=False, console_level=logging.CRITICAL)
+    Settings.logger = LoggerSettings(
+        save=False,
+        console_level=logging.CRITICAL,
+        translator=Translator(LOCALES_DIR),
+    )
 
 
 @dataclass
@@ -63,18 +71,11 @@ class Session:
 
 def build_session(username: str, cookies_dir: str) -> Session:
     _configure_settings()
-    device_id = "".join(choice(string.ascii_letters + string.digits) for _ in range(32))
-    login = TwitchLogin(CLIENT_ID, device_id, username, USER_AGENT)
-    client_session = ClientSession(
-        login=login,
-        user_agent=USER_AGENT,
-        version=CLIENT_VERSION,
-        device_id=device_id,
-        session_id=token_hex(16),
-        version_outdated=True,
-    )
+    # No password: the helpers authenticate from the cookie pickle alone.
+    client_session = client_session_factory(username, None, ClientSessionConfig())
     return Session(
-        login=login,
-        gql=GQLFactory().create(client_session),
+        login=client_session.login,
+        # strategy=None takes GQL's own default of three attempts.
+        gql=GQLFactory().create(client_session, strategy=None),
         cookies_file=os.path.join(cookies_dir, f"{username}.pkl"),
     )

@@ -35,8 +35,20 @@ test("describes a default in words a person can read", () => {
   expect(describeDefault(by("pointsLimit"))).toBe("No limit");
   expect(describeDefault(by("chat"))).toBe("Online");
   // Upstream's StreamerSettings.default() fills an unset value with
-  // HLSSettings(refresh_before=2 * 60), so the default is 120s on, not off.
-  expect(describeDefault(by("simulateHlsPlayback"))).toBe("120");
+  // HLSSettings(watch_all_segments="drops"), so the default is on, not off.
+  expect(describeDefault(by("simulateHlsPlayback"))).toBe("Full when earning drops");
+  expect(describeDefault(by("claimDrops"))).toBe("Linked accounts");
+});
+
+test("offers exactly the modes the backend schema accepts", () => {
+  // Mirrors DROPS_MODES and HLS_MODES in apps/backend/src/config/schema.ts.
+  const options = (key: string) => {
+    const kind = SETTINGS_FIELDS.find((f) => f.key === key)!.kind;
+    return kind.kind === "enum" ? new Set(kind.options) : null;
+  };
+  expect(options("claimDrops")).toEqual(new Set(["NONE", "LINKED", "ALL"]));
+  expect(options("simulateHlsPlayback"))
+    .toEqual(new Set(["OFF", "DROPS", "ALL_SEGMENTS", "LAST_SEGMENT"]));
 });
 
 test("every field has help text, so no control ships unexplained", () => {

@@ -61,9 +61,9 @@ const APP_VERSION = resolveVersion(process.env.APP_VERSION);
 export const updateChecker = new UpdateChecker({ current: APP_VERSION });
 
 /**
- * Shape of a doorbell event name. `python/helpers/doorbell.py` posts
- * `str(event)` for an upstream `Events` member -- bare upper-snake-case
- * names like `STREAMER_ONLINE` or `GAIN_FOR_CLAIM`, pinned by
+ * Shape of a doorbell event name. `python/helpers/doorbell.py` posts the
+ * name of an upstream `Events` member -- bare upper-snake-case names like
+ * `STREAMER_ONLINE` or `GAIN_FOR_CLAIM`, pinned by
  * `python/tests/test_doorbell.py`. The value is written straight into the
  * `events` table and rendered by the UI, so it is bounded and shaped here
  * rather than trusted: the doorbell token authenticates the caller, not
@@ -99,6 +99,36 @@ function doorbellMessage(value: unknown): string | null {
     .trim()
     .slice(0, DOORBELL_MESSAGE_MAX);
   return text === "" ? null : text;
+}
+
+/** A Twitch login, as the doorbell sends one: already lower-cased. */
+const DOORBELL_LOGIN = /^[a-z0-9_]{1,25}$/;
+
+/** More watch slots than this is not a miner; it holds two. */
+const DOORBELL_WATCHING_MAX = 16;
+
+function doorbellLogin(value: unknown): string | null {
+  return typeof value === "string" && DOORBELL_LOGIN.test(value) ? value : null;
+}
+
+/**
+ * The points a gain event earned. A whole, positive figure; anything else
+ * is not an amount the card could show and degrades to null.
+ */
+function doorbellEarned(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value < 1e9
+    ? value : null;
+}
+
+/**
+ * The miner's whole watch-slot set, or undefined when the event carried
+ * none -- or carried one this route will not trust, which must not wipe
+ * the set it already holds.
+ */
+function doorbellWatching(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > DOORBELL_WATCHING_MAX) return undefined;
+  const logins = value.map(doorbellLogin);
+  return logins.every((l) => l !== null) ? (logins as string[]) : undefined;
 }
 
 /**
@@ -1339,14 +1369,20 @@ export function buildServer(deps: ServerDeps): AppServer {
     if (request.headers["x-doorbell-token"] !== deps.doorbellToken) {
       return reply.code(403).send({ error: "forbidden" });
     }
-    const body = request.body as { event?: unknown; message?: unknown } | undefined;
+    const body = request.body as Record<string, unknown> | undefined;
     const event = body?.event;
     if (typeof event !== "string" || !DOORBELL_EVENT.test(event)) {
       return reply.code(400).send({ error: "event must be an upper snake case name" });
     }
-    // A bad message must not cost us the event: the type is what drives the
-    // refresh, so an unusable message degrades to null rather than a 400.
-    deps.stateService.ring(event, doorbellMessage(body?.message));
+    // Nothing besides the type can cost us the event: the type is what
+    // drives the refresh, so an unusable field degrades to null rather
+    // than a 400.
+    deps.stateService.ring(event, {
+      message: doorbellMessage(body?.message),
+      streamer: doorbellLogin(body?.streamer),
+      earned: doorbellEarned(body?.earned),
+      watching: doorbellWatching(body?.watching),
+    });
     return reply.code(204).send();
   });
 

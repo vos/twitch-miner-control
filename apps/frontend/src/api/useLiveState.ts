@@ -54,11 +54,13 @@ export interface StreamerState {
   /** When this channel was last live; null while live or if never seen. */
   lastLive: number | null;
   /**
-   * The newest event attributed to this streamer. `message` is the miner's
-   * own log line, absent on rows stored before the doorbell forwarded one.
-   * Lossy display text -- see parseActivity, which reads only its exact parts.
+   * The newest event the miner reported about this streamer. `message` is
+   * its own wording, display text only; `earned` is the exact amount a
+   * point gain carried, null on every other kind.
    */
-  lastActivity: { ts: number; type: string; message?: string | null } | null;
+  lastActivity: {
+    ts: number; type: string; message?: string | null; earned?: number | null;
+  } | null;
   /**
    * Milliseconds live in the last 24h. Deliberately not rendered: the
    * uptime from `liveSince` already answers "how long has this channel

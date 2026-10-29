@@ -596,32 +596,36 @@ test("a stable avatar url does not emit a change frame on every tick", async () 
   expect(changes).not.toHaveBeenCalled();
 });
 
-test("attributes a doorbell event to a roster streamer", async () => {
+const gain = (streamer: string | null, earned: number) =>
+  ({ message: `+${earned} -> ${streamer}`, streamer, earned });
+
+test("records a doorbell event against the streamer the miner named", async () => {
   const { service } = make([alpha(100)], ["alpha"]);
   await service.refresh();
-  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  service.ring("GAIN_FOR_CLAIM", gain("alpha", 50));
   expect(history.lastActivity("alpha")).toEqual({
-    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha",
+    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha", earned: 50,
   });
 });
 
-test("leaves an unattributable event off every card", async () => {
+test("leaves an event about no one channel off every card", async () => {
   const { service } = make([alpha(100)], ["alpha"]);
   await service.refresh();
-  service.ring("GAIN_FOR_CLAIM", "+50 -> someone_else");
+  // The message naming alpha does not matter: the event said no streamer.
+  service.ring("DROP_CLAIM", { message: "Claiming drop for alpha", streamer: null });
   expect(history.lastActivity("alpha")).toBeNull();
   // Still recorded for the feed, which shows every event.
   expect(history.recentEvents(10)).toHaveLength(1);
 });
 
 test("marks a streamer watched after a watch gain lands", async () => {
-  // The miner never publishes which channels hold its two watch slots, so
-  // a GAIN_FOR_WATCH is the only evidence this side gets.
+  // Before the miner has announced its watch slots, a GAIN_FOR_WATCH is
+  // the evidence this side has.
   const { service } = make([alpha(100), alpha(100)], ["alpha"]);
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(false);
 
-  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(true);
 });
@@ -629,7 +633,7 @@ test("marks a streamer watched after a watch gain lands", async () => {
 test("stops calling a streamer watched once the gain goes stale", async () => {
   const { service } = make([alpha(100), alpha(100)], ["alpha"]);
   await service.refresh();
-  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
 
   // Past the ten-minute window: the miner has moved the slot elsewhere and
   // the badge must not keep claiming this channel is being mined.
@@ -643,7 +647,7 @@ test("an offline streamer is never watched, however recent the gain", async () =
   // the gain it produced says nothing about now.
   const { service } = make([alpha(100), alpha(100, false)], ["alpha"]);
   await service.refresh();
-  service.ring("GAIN_FOR_WATCH", "+10 -> alpha");
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(false);
 });
@@ -652,9 +656,45 @@ test("a claim alone does not mark a streamer watched", async () => {
   // Points can arrive from a claim on a channel the miner is not watching.
   const { service } = make([alpha(100), alpha(100)], ["alpha"]);
   await service.refresh();
-  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  service.ring("GAIN_FOR_CLAIM", gain("alpha", 50));
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(false);
+});
+
+test("the miner's announced watch slots decide who is watched", async () => {
+  const { service } = make([alpha(100), alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("CHANGING_WATCH_SLOTS", { watching: ["alpha"] });
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(true);
+
+  // Dropped from the slots: no lingering on the strength of a recent gain.
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
+  service.ring("CHANGING_WATCH_SLOTS", { watching: [] });
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+});
+
+test("announced slots are matched case-insensitively", async () => {
+  const { service } = make([alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("CHANGING_WATCH_SLOTS", { watching: ["ALPHA"] });
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(true);
+});
+
+test("a stopped miner watches nothing, a restarted one falls back to gains", async () => {
+  const { service } = make([alpha(100), alpha(100), alpha(100)], ["alpha"]);
+  await service.refresh();
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
+  service.resetWatchSlots(false);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(false);
+
+  // Running again, before it has announced anything.
+  service.resetWatchSlots(true);
+  await service.refresh();
+  expect(service.snapshot().streamers[0].watching).toBe(true);
 });
 
 test("reports the stream start from Twitch, not from when we looked", async () => {
@@ -804,11 +844,11 @@ test("emits the recorded row so the stream can push it to clients", async () => 
   await service.refresh();
   const events = vi.fn();
   service.on("event", events);
-  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
+  service.ring("GAIN_FOR_CLAIM", gain("alpha", 50));
   // The same shape /api/events serves, so a client can append a pushed row
   // to the list it fetched on mount without reconciling two formats.
   expect(events).toHaveBeenCalledWith({
-    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha",
+    ts: clock, type: "GAIN_FOR_CLAIM", message: "+50 -> alpha", earned: 50,
   });
 });
 
@@ -819,8 +859,8 @@ test("emits an event per ring, even while the refresh debounce coalesces", async
   service.on("event", events);
   // Bursts coalesce into one refresh -- but every event is a distinct feed
   // row, so none may be dropped along the way.
-  service.ring("GAIN_FOR_CLAIM", "+50 -> alpha");
-  service.ring("GAIN_FOR_CLAIM", "+60 -> alpha");
+  service.ring("GAIN_FOR_CLAIM", gain("alpha", 50));
+  service.ring("GAIN_FOR_CLAIM", gain("alpha", 60));
   expect(events).toHaveBeenCalledTimes(2);
 });
 
@@ -1333,7 +1373,7 @@ test("deriveLocal trusts a fresh liveness verdict from the miner", async () => {
   // miner starts, which beats the state pass by seconds on a cold start.
   clock = 100 * DAY;
   seedHistory("alpha", clock);
-  history.recordEvent("STREAMER_ONLINE", clock - 60_000, "is Online!", "alpha");
+  history.recordEvent("STREAMER_ONLINE", clock - 60_000, { message: "is Online!", streamer: "alpha" });
   history.openStreamerSession("alpha", "S2", clock - 120_000, 1500);
 
   const service = new StateService({
@@ -1348,7 +1388,7 @@ test("deriveLocal trusts a fresh liveness verdict from the miner", async () => {
 test("deriveLocal trusts a fresh offline verdict too", async () => {
   clock = 100 * DAY;
   seedHistory("alpha", clock);
-  history.recordEvent("STREAMER_OFFLINE", clock - 60_000, "is Offline!", "alpha");
+  history.recordEvent("STREAMER_OFFLINE", clock - 60_000, { message: "is Offline!", streamer: "alpha" });
 
   const service = new StateService({
     client: { request: vi.fn() } as never,
@@ -1365,7 +1405,7 @@ test("deriveLocal ignores a liveness verdict that has gone stale", async () => {
   // ten-day-old ones for channels that had left the roster entirely.
   clock = 100 * DAY;
   seedHistory("alpha", clock);
-  history.recordEvent("STREAMER_ONLINE", clock - 10 * DAY, "is Online!", "alpha");
+  history.recordEvent("STREAMER_ONLINE", clock - 10 * DAY, { message: "is Online!", streamer: "alpha" });
   history.openStreamerSession("alpha", "S2", clock - 10 * DAY, 1500);
 
   const service = new StateService({
@@ -1381,8 +1421,8 @@ test("deriveLocal ignores a liveness verdict that has gone stale", async () => {
 test("deriveLocal takes the newest verdict when a channel has flipped", async () => {
   clock = 100 * DAY;
   seedHistory("alpha", clock);
-  history.recordEvent("STREAMER_ONLINE", clock - 300_000, "is Online!", "alpha");
-  history.recordEvent("STREAMER_OFFLINE", clock - 30_000, "is Offline!", "alpha");
+  history.recordEvent("STREAMER_ONLINE", clock - 300_000, { message: "is Online!", streamer: "alpha" });
+  history.recordEvent("STREAMER_OFFLINE", clock - 30_000, { message: "is Offline!", streamer: "alpha" });
 
   const service = new StateService({
     client: { request: vi.fn() } as never,

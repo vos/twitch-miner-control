@@ -19,9 +19,9 @@ export function openDb(path: string): Db {
       id      INTEGER PRIMARY KEY AUTOINCREMENT,
       ts      INTEGER NOT NULL,
       type    TEXT    NOT NULL,
-      -- The miner's own formatted line, or NULL for rows written before
-      -- the doorbell carried one. Display text only: balances inside it
-      -- are millified and lossy (see python/helpers/doorbell.py).
+      -- The miner's own wording, or NULL when it sent none. Display
+      -- text only: balances inside it are millified and lossy (see
+      -- python/helpers/doorbell.py).
       message TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
@@ -150,8 +150,10 @@ function addEventColumns(db: Db): void {
       .map((column) => column.name),
   );
   if (!existing.has("message")) db.exec("ALTER TABLE events ADD COLUMN message TEXT");
-  // Which streamer an event is about, attributed from the roster at write
-  // time. NULL when no roster login could be identified in the message --
-  // the shape every row had before this column existed.
+  // Which streamer an event is about, as the miner's event named it. NULL
+  // for an event about no one channel: a drop claim, a shutdown.
   if (!existing.has("streamer")) db.exec("ALTER TABLE events ADD COLUMN streamer TEXT");
+  // Points the event earned, exactly, for the point-gain events; NULL on
+  // every other kind.
+  if (!existing.has("earned")) db.exec("ALTER TABLE events ADD COLUMN earned INTEGER");
 }

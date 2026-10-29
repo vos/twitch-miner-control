@@ -2,7 +2,9 @@
 import pathlib
 import re
 
-from miner_config import ALLOWED_BET, ALLOWED_FILTER, ALLOWED_SETTINGS
+from TwitchChannelPointsMiner.classes.entities.Streamer import DropsMode
+
+from miner_config import ALLOWED_BET, ALLOWED_FILTER, ALLOWED_SETTINGS, HLS_MODES
 
 SOURCE = pathlib.Path("apps/backend/src/config/schema.ts")
 
@@ -31,7 +33,9 @@ def test_zod_schema_maps_exactly_our_allowed_settings():
 
     # (a) TO_PYTHON's keys are exactly BOOL_SETTINGS plus the non-bool settings.
     # This is the assertion that catches a renamed TS key drifting from BOOL_SETTINGS.
-    assert keys == bool_settings | {"pointsLimit", "chat", "bet", "simulateHlsPlayback"}
+    assert keys == bool_settings | {
+        "claimDrops", "pointsLimit", "chat", "bet", "simulateHlsPlayback",
+    }
 
     # (b) No two TS keys may map to the same Python name. Comparing list length to set
     # length (rather than de-duplicating first) is what catches a colliding key.
@@ -55,5 +59,14 @@ def test_nested_maps_match_the_allowed_nested_keys():
     filt = _entries(_block(nested, r"filterCondition: \{(.*?)\},"))
     assert {v for _, v in filt} == set(ALLOWED_FILTER)
 
-    hls = _entries(_block(nested, r"simulateHlsPlayback: \{(.*?)\},"))
-    assert {v for _, v in hls} == {"refresh_before"}
+
+
+def _const_list(source: str, name: str) -> set[str]:
+    return set(re.findall(r'"([A-Z_]+)"', _block(source, rf"{name} = \[(.*?)\] as const")))
+
+
+def test_mode_lists_match_what_miner_config_maps():
+    """A mode the UI offers but Python cannot map is a miner dead at boot."""
+    source = SOURCE.read_text()
+    assert _const_list(source, "DROPS_MODES") == {m.name for m in DropsMode}
+    assert _const_list(source, "HLS_MODES") == {"OFF"} | set(HLS_MODES)

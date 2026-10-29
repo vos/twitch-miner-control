@@ -25,6 +25,10 @@ sys.path.insert(0, os.path.join(_HERE, "..", "..", "vendor", "miner"))
 
 import requests
 
+from helpers.vendor import import_miner
+
+import_miner()
+
 from TwitchChannelPointsMiner.JsonParser import InvalidJsonShapeError
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
 

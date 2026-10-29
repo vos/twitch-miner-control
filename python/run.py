@@ -12,13 +12,19 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "vendor", "miner"))
 
+from helpers.vendor import import_miner
+
+LOCALES_DIR = import_miner()
+
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.TwitchChannelPointsMiner import Factories
 from TwitchChannelPointsMiner.classes.Settings import FollowersOrder
+from TwitchChannelPointsMiner.classes.Translator import Translator
 from TwitchChannelPointsMiner.logger import LoggerSettings
 
-from helpers.doorbell import DoorbellHook
+from helpers.doorbell import doorbell
 from miner_config import (
-    DropSlotSelector,
+    DropSlotSelectorFactory,
     build_mine_kwargs,
     build_streamers,
     drop_pools,
@@ -91,17 +97,15 @@ twitch_miner = TwitchChannelPointsMiner(
         # TimedRotatingFileHandler keeps 7 days, so growth was bounded --
         # but bounded at ~1.9GB of keepalives and connection chatter.
         file_level=_file_level(),
-        hooks=[DoorbellHook(DOORBELL_URL, DOORBELL_TOKEN)],
+        # Upstream's default resolves "locales" against the cwd, which
+        # here is the data dir; see helpers/vendor.py.
+        translator=Translator(LOCALES_DIR),
     ),
+    handlers=[doorbell(DOORBELL_URL, DOORBELL_TOKEN)],
+    # Wraps whatever chain upstream builds from `priority`, configured or
+    # default, so the drop slot sits on top of it.
+    factories=Factories(streamer_selector=DropSlotSelectorFactory(drop_pools(cfg))),
 )
-
-# Wrapped after construction so it sits on top of whatever chain upstream
-# built from `priority`, configured or default; mine() reads it from here.
-pools = drop_pools(cfg)
-if pools:
-    twitch_miner.streamer_selector = DropSlotSelector(
-        twitch_miner.streamer_selector, pools
-    )
 
 twitch_miner.mine(
     streamers=build_streamers(cfg),

@@ -6,10 +6,10 @@ import { useStreamEvent } from "../api/useLiveState.js";
 interface MinerEvent { ts: number; type: string; message: string | null }
 
 /**
- * Rows render the miner's own formatted line, which already names the
- * streamer and reads the way its log does ("+50 -> forsen"). `message` is
- * null only for rows stored before the doorbell forwarded one, so those
- * fall back to the bare event name.
+ * Rows render the miner's own wording, which already names the streamer
+ * ("+50 → forsen"). `message` is null when the miner sent none -- an event
+ * its translations could not render -- so those fall back to the bare
+ * event name.
  */
 function label(event: MinerEvent): string {
   return event.message ?? event.type.toLowerCase().replace(/_/g, " ");

@@ -123,7 +123,7 @@ test("counts every staged setting, not just that something changed", async () =>
   await userEvent.click(screen.getByRole("switch", { name: "Community goals" }));
   expect(await screen.findByTestId("pending-bar")).toHaveTextContent("1 pending change");
 
-  await userEvent.click(screen.getByRole("switch", { name: "Claim drops" }));
+  await userEvent.click(screen.getByRole("switch", { name: "Follow raids" }));
   await userEvent.click(screen.getByLabelText(/mine my followed channels/i));
   await waitFor(() => {
     expect(screen.getByTestId("pending-bar")).toHaveTextContent("3 pending changes");

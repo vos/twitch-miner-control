@@ -5,8 +5,8 @@ import type { Notifier } from "../notifier.js";
 /** The miner's Events worth a notification, by doorbell type. */
 export const DOORBELL_KINDS: ReadonlyMap<string, { kind: NotifyKind; title: string; link: string }> = new Map([
   ["DROP_CLAIM", { kind: NOTIFY_KIND.DROP_CLAIMED, title: "Drop claimed", link: "/?open=drops" }],
-  ["BET_WIN", { kind: NOTIFY_KIND.PREDICTION_WON, title: "Prediction won", link: "/?open=dashboard" }],
-  ["BET_LOSE", { kind: NOTIFY_KIND.PREDICTION_LOST, title: "Prediction lost", link: "/?open=dashboard" }],
+  ["PREDICTION_WIN", { kind: NOTIFY_KIND.PREDICTION_WON, title: "Prediction won", link: "/?open=dashboard" }],
+  ["PREDICTION_LOSE", { kind: NOTIFY_KIND.PREDICTION_LOST, title: "Prediction lost", link: "/?open=dashboard" }],
   ["GAIN_FOR_WATCH_STREAK", { kind: NOTIFY_KIND.STREAK_EARNED, title: "Watch streak bonus", link: "/?open=dashboard" }],
   ["JOIN_RAID", { kind: NOTIFY_KIND.RAID_JOINED, title: "Raid joined", link: "/?open=dashboard" }],
   ["CHAT_MENTION", { kind: NOTIFY_KIND.CHAT_MENTION, title: "Mentioned in chat", link: "/?open=dashboard" }],
@@ -15,7 +15,7 @@ export const DOORBELL_KINDS: ReadonlyMap<string, { kind: NotifyKind; title: stri
 
 /**
  * Publishes from the feed rows the doorbell records. The body is the
- * miner's own formatted line, which names the streamer; see
+ * miner's own wording, which names the streamer; see
  * python/helpers/doorbell.py.
  */
 export function watchDoorbell(deps: {

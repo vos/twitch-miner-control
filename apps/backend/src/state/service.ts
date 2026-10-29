@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { History } from "../db/history.js";
+import type { EventFacts, History } from "../db/history.js";
 import type { Streamers } from "../db/streamers.js";
-import { attribute } from "./attribute.js";
 import { downsample, gainWindow } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
@@ -95,18 +94,18 @@ export interface StreamerState {
    * picks them itself -- filtering to live, points-enabled, un-banned
    * channels and then applying a priority chain in which the configured
    * order is only the last tiebreak, so a streamer with a pending watch
-   * streak or a claimable drop can take a slot ahead of the top two. None
-   * of that selection is published: it lives in the `run.py` process,
-   * while this service talks to a separate state helper.
+   * streak or a claimable drop can take a slot ahead of the top two.
    *
-   * So this is inferred from the one thing that does cross over: a
-   * `GAIN_FOR_WATCH` event, which Twitch sends only for a channel we are
-   * actually watching. True when one arrived within WATCH_GAIN_TTL_MS.
-   *
-   * The cost of inferring it is latency at both edges -- it lags the first
-   * gain of a new slot and lingers briefly after a slot is dropped -- which
-   * is the honest trade for never claiming a channel is being mined when
-   * it is not.
+   * The miner announces every change to that selection as a
+   * CHANGING_WATCH_SLOTS event, and the doorbell forwards the full set
+   * with it; that set is the answer whenever this process has one. It
+   * does not between the miner starting and its first change, or after
+   * this process restarts under a running miner. There it is inferred
+   * from a `GAIN_FOR_WATCH` event, which Twitch sends only for a channel
+   * we are actually watching: true when one arrived within
+   * WATCH_GAIN_TTL_MS. That lags a new slot's first gain and lingers
+   * briefly after a slot is dropped, which is the honest trade for never
+   * claiming a channel is being mined when it is not.
    */
   watching: boolean;
   /**
@@ -384,12 +383,13 @@ export class StateService extends EventEmitter {
   private ticker: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private dirty = false;
-  /**
-   * The roster from the last refresh, used to attribute doorbell events.
-   * Empty before the first refresh, so early events are unattributed
-   * rather than misattributed.
-   */
+  /** The roster from the last refresh, for a paint that has none. */
   private roster: string[] = [];
+  /**
+   * The channels holding the miner's watch slots, as it last announced
+   * them; null when it has not announced them to this process yet.
+   */
+  private watchSlots: ReadonlySet<string> | null = null;
   /**
    * Whether `this.streamers` is missing the fields a dashboard renders.
    *
@@ -795,6 +795,7 @@ export class StateService extends EventEmitter {
       // stream it came from when a channel drops inside the window.
       watching: (() => {
         if (s.isOnline !== true) return false;
+        if (this.watchSlots !== null) return this.watchSlots.has(normaliseUsername(s.username));
         const gained = this.deps.history.lastWatchGain(s.username);
         return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
       })(),
@@ -965,25 +966,38 @@ export class StateService extends EventEmitter {
     this.emit("change", this.snapshot());
   }
 
-  /** Doorbell: something happened, refresh soon. Bursts coalesce. */
-  ring(eventType: string, message: string | null = null): void {
-    // Attributed against the roster resolved by the last refresh, so the
-    // card can show "last: claim 4m ago" per streamer. An unattributable
-    // line is stored with a null streamer, exactly as before.
+  /**
+   * Doorbell: something happened, refresh soon. Bursts coalesce.
+   *
+   * `watching`, when present, is the miner's whole watch-slot set as of
+   * this event; see StreamerState.watching.
+   */
+  ring(eventType: string, facts: EventFacts & { watching?: string[] } = {}): void {
+    const { watching, ...recorded } = facts;
     const ts = this.now();
-    this.deps.history.recordEvent(
-      eventType, ts, message, attribute(message, this.roster),
-    );
+    this.deps.history.recordEvent(eventType, ts, recorded);
+    if (watching !== undefined) this.watchSlots = new Set(watching.map(normaliseUsername));
     // Pushed straight to connected clients, in the row shape /api/events
     // serves. Emitted per ring rather than alongside the debounced
     // "change": a burst coalesces into one refresh, but each ring is its
     // own feed row and dropping any would leave a hole in the log.
-    this.emit("event", { ts, type: eventType, message });
+    this.emit("event", {
+      ts, type: eventType, message: recorded.message ?? null, earned: recorded.earned ?? null,
+    });
     if (this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       void this.refresh();
     }, this.deps.debounceMs ?? 2000);
+  }
+
+  /**
+   * Resets the announced watch slots when the miner process changes state.
+   * A miner that is not running watches nothing; a newly running one has
+   * not announced its choice yet, so the inference applies until it does.
+   */
+  resetWatchSlots(minerRunning: boolean): void {
+    this.watchSlots = minerRunning ? null : new Set();
   }
 
   /**

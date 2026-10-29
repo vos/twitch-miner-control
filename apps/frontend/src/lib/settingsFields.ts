@@ -34,8 +34,19 @@ export const SETTINGS_FIELDS: SettingsField[] = [
     "Place channel-point bets on this streamer's predictions.", "general", true),
   bool("followRaid", "Follow raids",
     "Join raids from this channel to collect the raid bonus.", "general", true),
-  bool("claimDrops", "Claim drops",
-    "Count viewing time towards Twitch drop campaigns.", "general", true),
+  {
+    key: "claimDrops", label: "Drops", tab: "general",
+    help: "Which drop campaigns watching this channel counts towards. Most "
+      + "campaigns pay out only once your game account is linked on Twitch, "
+      + "so Linked passes over the rest.",
+    kind: {
+      kind: "enum",
+      options: ["LINKED", "ALL", "NONE"],
+      labels: { LINKED: "Linked accounts", ALL: "All campaigns", NONE: "Off" },
+    },
+    // StreamerSettings maps an unset claim_drops to DropsMode.LINKED.
+    defaultValue: "LINKED",
+  },
   bool("claimMoments", "Claim moments",
     "Claim Twitch Moments when this channel publishes one.", "general", true),
   bool("watchStreak", "Watch streaks",
@@ -63,13 +74,22 @@ export const SETTINGS_FIELDS: SettingsField[] = [
   },
   {
     key: "simulateHlsPlayback", label: "Simulate playback", tab: "points",
-    help: "Fetch the stream like a real player, refreshing the access token this "
-      + "many seconds before it expires. Off skips HLS simulation entirely.",
-    kind: { kind: "optionalNumber", offValue: false, min: 1, offLabel: "Off" },
+    help: "Request the stream's video segments the way a real player does, "
+      + "without downloading any video. Full playback requests every segment, "
+      + "about ten times the requests of the latest segment alone.",
+    kind: {
+      kind: "enum",
+      options: ["DROPS", "ALL_SEGMENTS", "LAST_SEGMENT", "OFF"],
+      labels: {
+        DROPS: "Full when earning drops",
+        ALL_SEGMENTS: "Full playback",
+        LAST_SEGMENT: "Latest segment only",
+        OFF: "Off",
+      },
+    },
     // StreamerSettings.default() fills an unset value with
-    // HLSSettings(refresh_before=2 * 60), so upstream's effective default is
-    // 120 seconds *on* -- not off. example.py and the upstream guide agree.
-    defaultValue: 120,
+    // HLSSettings(watch_all_segments="drops"): on, not off.
+    defaultValue: "DROPS",
   },
 ];
 

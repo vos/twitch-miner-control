@@ -1,4 +1,4 @@
-import type { AppConfig } from "../config/schema.js";
+import type { AppConfig, StreamerSettingsInput } from "../config/schema.js";
 import { normaliseUsername } from "./roster.js";
 
 /**
@@ -15,7 +15,7 @@ import { normaliseUsername } from "./roster.js";
  * with no config entry of its own gets its settings.
  *
  * Unset anywhere is ON, because that is what the miner does with it:
- * Streamer.default() sets claim_drops = True when it is None. Reading
+ * StreamerSettings maps an unset claim_drops to DropsMode.LINKED. Reading
  * absent as "off" here made the dashboard report no drops at all for a
  * default config -- every streamer inherits nothing -- while the miner
  * beside it was claiming drops for all of them.
@@ -26,22 +26,20 @@ export function dropsEligible(config: AppConfig, username: string): boolean {
     (s) => normaliseUsername(s.username) === login,
   );
   const own = claimDrops(entry?.settings);
-  // `?? true` last: an explicit false at either level still wins, but
+  // `?? true` last: an explicit NONE at either level still wins, but
   // absent at both follows the miner's own default.
   return own ?? claimDrops(config.defaults) ?? true;
 }
 
 /**
- * Reads `claimDrops` off a settings object.
+ * Reads `claimDrops` off a settings object: whether its mode syncs drops.
  *
- * The boolean settings are spread into settingsSchema from BOOL_SETTINGS
- * with Object.fromEntries, so Zod infers them as an index signature
- * rather than named keys -- the field is there at runtime but not on the
- * static type. This narrows in one place instead of casting at both call
- * sites, and returns undefined for "unset" so the caller can tell it
- * from an explicit false.
+ * Both LINKED and ALL do -- the miner syncs a channel's campaigns for
+ * anything but NONE (StreamSystem.update_campaigns), and LINKED only
+ * narrows which of them it then progresses. Undefined for "unset", so the
+ * caller can tell it from an explicit NONE.
  */
-function claimDrops(settings: object | undefined): boolean | undefined {
-  const value = (settings as { claimDrops?: unknown } | undefined)?.claimDrops;
-  return typeof value === "boolean" ? value : undefined;
+function claimDrops(settings: StreamerSettingsInput | undefined): boolean | undefined {
+  const mode = settings?.claimDrops;
+  return mode === undefined ? undefined : mode !== "NONE";
 }
