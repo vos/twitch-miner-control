@@ -405,8 +405,11 @@ class Handler:
                         "data": {"drops": self._drops(req["streamers"])}}
             if op == "inventory":
                 self._ensure_token()
+                inventory = self.session.gql.get_inventory()
                 return {"id": req_id, "ok": True,
-                        "data": {"inventory": self._inventory(),
+                        "data": {"inventory": self._inventory(inventory),
+                                 "links": self._links(
+                                     inventory, req.get("channelIds") or []),
                                  "earned": self._earned()}}
             if op == "gift_subs":
                 self._ensure_token()
@@ -606,7 +609,7 @@ class Handler:
                 out[channel_id] = None
         return out
 
-    def _inventory(self) -> dict:
+    def _inventory(self, inventory) -> dict:
         """Global drop progress, keyed campaign id -> drop id.
 
         One call, covering every campaign we have started across all
@@ -629,7 +632,6 @@ class Handler:
         it exists ONLY here -- the campaign catalogue's source never
         marks such a drop (see campaignSource.ts).
         """
-        inventory = self.session.gql.get_inventory()
         out: dict = {}
         for campaign in getattr(inventory, "campaigns", None) or []:
             drops: dict = {}
@@ -664,6 +666,53 @@ class Handler:
             campaign_id = getattr(campaign, "id", None)
             if campaign_id is not None:
                 out[campaign_id] = drops
+        return out
+
+    def _links(self, inventory, channel_ids: list) -> dict:
+        """Whether each campaign's game account is linked, by campaign id.
+
+        {"linked": bool, "url": str | None}. Upstream's default drops mode
+        (LINKED) progresses only linked campaigns, so an unlinked one makes
+        no progress however long its channel is watched.
+
+        The inventory says so for every campaign in progress. A campaign
+        never started is not in it -- and an unlinked campaign is exactly
+        the one that never starts -- so `channel_ids` are asked as well,
+        through the per-channel query upstream itself reads unstarted
+        campaigns from. That query reports it per reward; a campaign counts
+        as linked when any reward is, which is upstream's own rule
+        (Campaign.from_gql_stream). The inventory wins where both answer.
+
+        A failed channel is skipped: unknown is not "unlinked". An auth
+        failure still propagates.
+        """
+        out: dict = {}
+        for channel_id in channel_ids:
+            try:
+                response = self.session.gql.drop_channel_campaigns_progress(
+                    channel_id)
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    raise
+                continue
+            for campaign in getattr(response, "campaigns", None) or []:
+                rewards = [
+                    r for g in campaign.reward_groups for r in g.rewards
+                ]
+                urls = [r.account_link_url for r in rewards if r.account_link_url]
+                out[campaign.id] = {
+                    "linked": any(r.is_account_connected for r in rewards),
+                    "url": urls[0] if urls else None,
+                }
+        for campaign in getattr(inventory, "campaigns", None) or []:
+            campaign_id = getattr(campaign, "id", None)
+            linked = getattr(campaign, "is_account_connected", None)
+            if campaign_id is None or linked is None:
+                continue
+            out[campaign_id] = {
+                "linked": bool(linked),
+                "url": getattr(campaign, "account_link_url", None),
+            }
         return out
 
     def _earned(self) -> dict:

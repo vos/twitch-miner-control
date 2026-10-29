@@ -255,11 +255,13 @@ function opening(at: number, now: number): string {
  */
 function SubscriptionRow({
   sub, index, draggable, restartPending, busy, link, game, auto, skippable, opensAt,
-  onOpen, onRemove, onPoolSize,
+  unlinked, onOpen, onRemove, onPoolSize,
 }: {
   sub: SubscriptionRow;
   /** When its campaign opens, or null once open. */
   opensAt: number | null;
+  /** Whether Twitch says the campaign's game account is not linked. */
+  unlinked: boolean;
   index: number;
   draggable: boolean;
   restartPending: boolean;
@@ -373,6 +375,24 @@ function SubscriptionRow({
                 data-testid="subscription-auto"
               >
                 Auto
+              </Badge>
+            </Tooltip>
+          )}
+          {/* The card it links to says where to link the account. */}
+          {unlinked && (
+            <Tooltip
+              label="Your game account is not linked, so Twitch will not award these drops yet. The campaign card has the link."
+              multiline
+              w={260}
+            >
+              <Badge
+                size="xs"
+                variant="light"
+                color="yellow"
+                style={{ flexShrink: 0 }}
+                data-testid="subscription-unlinked"
+              >
+                not linked
               </Badge>
             </Tooltip>
           )}
@@ -1081,6 +1101,8 @@ export function Drops({ jump = null }: {
                         .find((c) => c.id === sub.targetId)?.game?.id,
                     )}
                     opensAt={subscriptionOpensAt(sub, data.campaigns, Date.now())}
+                    unlinked={data.campaigns.find((c) => c.id === sub.targetId)
+                      ?.accountLink?.linked === false}
                     onOpen={() => setJumpedTo(sub.targetId)}
                     // Keyed to the campaign, not "panel": the card for
                     // this same subscription must go inert too, or it

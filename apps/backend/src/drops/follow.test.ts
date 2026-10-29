@@ -75,7 +75,7 @@ test("a campaign not open yet is added, to wait like any other", () => {
 test("a campaign already complete is not added", () => {
   const inv = {
     progress: { c1: { "c1-d1": { minutes: 60, claimed: true, instanceId: null } } },
-    earned: {}, fetchedAt: 1, available: true,
+    earned: {}, links: {}, fetchedAt: 1, available: true,
   } as never as InventorySnapshot;
   const out = run(config(), catalogue([campaign("c1")]), inv);
   expect(out.added).toEqual([]);

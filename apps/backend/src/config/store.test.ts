@@ -197,6 +197,11 @@ describe("schema", () => {
                        maxFailuresPerStreamer: 1, failureCooldownSeconds: 3600 },
     })).success).toBe(true);
     expect(configSchema.safeParse(mk({ weeklyRewards: false })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ watchStreakRecovery: false })).success).toBe(true);
+    expect(configSchema.safeParse(mk({ watchStreakRecovery: { maxConcurrent: 1 } })).success)
+      .toBe(true);
+    expect(configSchema.safeParse(mk({ watchStreakRecovery: { maxConcurrent: 0 } })).success)
+      .toBe(false);
     expect(configSchema.safeParse(mk({ priority: ["NOPE"] })).success).toBe(false);
     expect(configSchema.safeParse(mk({ evil: 1 })).success).toBe(false);
   });
@@ -238,6 +243,14 @@ describe("store", () => {
   test("round-trips a saved config", () => {
     saveConfig(path, valid as AppConfig);
     expect(loadConfig(path)).toEqual(valid);
+  });
+
+  test("writes watch streak recovery in the miner's own field names", () => {
+    const config = { ...valid, miner: { watchStreakRecovery: { maxVodWatchSeconds: 120 } } };
+    saveConfig(path, config as AppConfig);
+    expect(JSON.parse(readFileSync(path, "utf8")).miner)
+      .toEqual({ watch_streak_recovery: { max_vod_watch_seconds: 120 } });
+    expect(loadConfig(path)).toEqual(config);
   });
 
   test("campaign subscriptions saved with a kind still load, without it", () => {

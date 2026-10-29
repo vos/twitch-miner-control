@@ -646,6 +646,19 @@ test("a queued campaign not open yet names its opening time", async () => {
     .toMatch(/waits for its campaign to open .*\(in \w+\), then takes its turn/);
 });
 
+test("a subscription to an unlinked campaign is marked, and its card warns", async () => {
+  body = {
+    ...payload,
+    campaigns: payload.campaigns.map((c, i) => (i === 0
+      ? { ...c, accountLink: { linked: false, url: "https://example.com/link" } }
+      : c)),
+  };
+  withSubs([asSub({ targetId: payload.campaigns[0].id })]);
+  renderApp(<Drops />);
+  await waitFor(() => expect(screen.getByTestId("subscription-unlinked")).toBeTruthy());
+  expect(screen.getAllByTestId("campaign-unlinked")).toHaveLength(1);
+});
+
 test("an open campaign's subscription is not marked scheduled", async () => {
   withSubs([asSub()]);
   renderApp(<Drops />);

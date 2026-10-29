@@ -4,7 +4,7 @@ import {
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useState } from "react";
-import { IconChevronDown, IconExternalLink } from "@tabler/icons-react";
+import { IconChevronDown, IconExternalLink, IconLinkOff } from "@tabler/icons-react";
 import { formatSpan } from "../lib/formatSpan.js";
 import { windowLines } from "../lib/campaignWindow.js";
 import { CampaignBoxArt } from "./CampaignBoxArt.js";
@@ -35,6 +35,8 @@ export interface ResolvedCampaign {
    * earned is claimed or claimable. Wider than status "collected".
    */
   complete: boolean;
+  /** Whether the game account is linked; null when Twitch has not said. */
+  accountLink?: { linked: boolean; url: string | null } | null;
 }
 
 const STATUS: Record<CampaignStatus, { label: string; colour: string }> = {
@@ -322,6 +324,10 @@ export function CampaignCard({
     : campaign.complete
       ? "Every drop here is already earned"
       : null;
+  // Only where linking would still earn something.
+  const unlinked = campaign.accountLink?.linked === false && finished === null
+    ? campaign.accountLink
+    : null;
   const elapsed = elapsedPercent(campaign.startsAt, campaign.endsAt, now);
   const { claimed, obtainable } = claimedCount(campaign.drops);
   const time = watchTime(campaign.drops);
@@ -551,6 +557,38 @@ export function CampaignCard({
           </Stack>
         </Stack>
       </Group>
+
+      {unlinked !== null && (
+        <Group gap="xs" wrap="nowrap" mt="xs" data-testid="campaign-unlinked">
+          <Tooltip
+            label={"Twitch awards these drops only to a linked game account. With "
+              + "Drops on Linked accounts, the default, the miner also skips the "
+              + "campaign until then."}
+            multiline
+            w={260}
+          >
+            <Group gap={6} wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+              <IconLinkOff size={14} color="var(--tw-warn)" aria-hidden />
+              <Text size="xs" c="var(--tw-warn)" lineClamp={1}>
+                Game account not linked
+              </Text>
+            </Group>
+          </Tooltip>
+          {unlinked.url !== null && (
+            <Button
+              component="a"
+              href={unlinked.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              size="compact-xs"
+              variant="default"
+              rightSection={<IconExternalLink size={12} aria-hidden />}
+            >
+              Link account
+            </Button>
+          )}
+        </Group>
+      )}
 
       {busy !== undefined && (
         <Group gap="xs" wrap="nowrap" mt="xs" data-testid="campaign-busy">

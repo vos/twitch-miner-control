@@ -19,7 +19,9 @@ test("the defaults match the spec", () => {
 });
 
 test("high-volume kinds stay out of the inbox", () => {
-  for (const kind of ["streamer.online", "streamer.offline", "prediction.won", "raid.joined"] as const) {
+  for (const kind of [
+    "streamer.online", "streamer.offline", "prediction.won", "raid.joined", "miner.error",
+  ] as const) {
     expect(kindInfo(kind).inbox).toBe(false);
   }
 });

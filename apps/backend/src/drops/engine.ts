@@ -453,7 +453,12 @@ export class SubscriptionEngine {
           reason = "manual";
         } else if (holdsSlot) {
           judged.add(sub.id);
-          if (this.stalledNow(sub, campaign, inventory, incumbents, now)) reason = "stalled";
+          // Owned channels carry no settings of their own, so the
+          // defaults decide whether the miner progresses an unlinked one.
+          const allowUnlinked = config.defaults.claimDrops === "ALL";
+          if (this.stalledNow(sub, campaign, inventory, incumbents, now, allowUnlinked)) {
+            reason = "stalled";
+          }
         }
       }
       if (result.decision === "rebuilt" || reason !== "empty") {
@@ -593,8 +598,9 @@ export class SubscriptionEngine {
    * Whether the drop-slot subscription's campaign has sat still too long.
    *
    * Judged only when it could have moved: the miner running, progress
-   * read, and a drop open that watching can earn. Anything else forgets
-   * the clock, so a pause is never counted as a stall.
+   * read, a drop open that watching can earn, and an account link if the
+   * miner needs one. Anything else forgets the clock, so a pause is never
+   * counted as a stall -- other channels would not link the account.
    */
   private stalledNow(
     sub: { id: string; label: string; targetId: string },
@@ -602,10 +608,11 @@ export class SubscriptionEngine {
     inventory: InventorySnapshot | null,
     incumbents: readonly string[],
     now: number,
+    allowUnlinked: boolean,
   ): boolean {
     const minutes = this.deps.minerRunning?.() === false
       ? null
-      : earnableMinutes(campaign, inventory, now);
+      : earnableMinutes(campaign, inventory, now, allowUnlinked);
     if (minutes === null) {
       this.progress.delete(sub.id);
       return false;
@@ -687,16 +694,20 @@ const REBUILD_WHY = {
 
 /**
  * Minutes watched across a campaign's drops, or null when watching
- * could not move them now: progress unread, or no drop open that is
- * earnable by watching and not yet earned.
+ * could not move them now: progress unread, the account unlinked while
+ * the miner skips unlinked campaigns, or no drop open that is earnable
+ * by watching and not yet earned.
  */
 function earnableMinutes(
   campaign: Campaign | undefined,
   inventory: InventorySnapshot | null,
   now: number,
+  allowUnlinked: boolean,
 ): number | null {
   if (campaign === undefined || inventory === null || !inventory.available) return null;
-  const drops = resolveCampaign(campaign, inventory).drops;
+  const resolved = resolveCampaign(campaign, inventory);
+  if (!allowUnlinked && resolved.accountLink?.linked === false) return null;
+  const drops = resolved.drops;
   const open = drops.some((d) =>
     (d.status === "in-progress" || d.status === "not-started")
     && (d.startsAt == null || d.startsAt <= now)

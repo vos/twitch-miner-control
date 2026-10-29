@@ -1,10 +1,10 @@
 import {
   Alert, Card, Divider, Radio, SegmentedControl, Stack, Switch, Text, Title,
 } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api } from "../api/client.js";
 import {
-  GQL_FIELDS, MinerNumberGroup, type NumberFieldSpec, WEEKLY_REWARDS_FIELDS,
+  CLIP_VOD_FIELDS, GQL_FIELDS, MinerNumberGroup, type NumberFieldSpec,
 } from "../components/MinerNumberGroup.js";
 import { PendingBar } from "../components/PendingBar.js";
 import { PriorityList } from "../components/PriorityList.js";
@@ -21,14 +21,76 @@ import { SETTINGS_FIELDS } from "../lib/settingsFields.js";
 const defaultSummary = (fields: NumberFieldSpec[]) =>
   fields.map((f) => `${f.label.toLowerCase()} ${f.defaultValue}`).join(", ");
 
-/** The three states upstream distinguishes for `weeklyRewards`. */
-type WeeklyMode = "default" | "off" | "custom";
+/**
+ * The three states upstream distinguishes for `weeklyRewards` and
+ * `watchStreakRecovery`.
+ */
+type WatcherMode = "default" | "off" | "custom";
 
-const weeklyModeOf = (value: unknown): WeeklyMode => {
+const watcherModeOf = (value: unknown): WatcherMode => {
   if (value === false) return "off";
   if (value !== null && typeof value === "object") return "custom";
   return "default";
 };
+
+/**
+ * A miner-wide option that watches a clip, then a VOD, for channels that
+ * are offline: weekly rewards and watch streak recovery, which upstream
+ * tunes with the same dataclass.
+ *
+ * Three states, not a switch: an absent key takes upstream's own
+ * BasicConfiguration, `false` disables the feature entirely, and an
+ * object tunes it. Collapsing "default" and "off" together would turn one
+ * into the other.
+ */
+function ClipVodWatcherCard({ title, description, testId, value, onChange }: {
+  title: string;
+  description: string;
+  /** Prefix for the built-in summary's test id. */
+  testId: string;
+  value: unknown;
+  onChange: (next: Record<string, unknown> | false | undefined) => void;
+}) {
+  const titleId = useId();
+  const mode = watcherModeOf(value);
+  return (
+    <Card withBorder padding="md" component="section" aria-labelledby={titleId}>
+      <Title order={4} mb="xs" id={titleId}>{title}</Title>
+      <Text size="sm" c="dimmed" mb="md">{description}</Text>
+      {mode === "default" && (
+        <Text size="sm" c="dimmed" mb="sm" data-testid={`${testId}-default`}>
+          Built-in: {defaultSummary(CLIP_VOD_FIELDS)}.
+        </Text>
+      )}
+      <SegmentedControl
+        data={[
+          { value: "default", label: "Built-in" },
+          { value: "custom", label: "Customise" },
+          { value: "off", label: "Disabled" },
+        ]}
+        value={mode}
+        onChange={(next) => onChange(
+          next === "off" ? false : next === "custom" ? {} : undefined)}
+      />
+      {mode === "custom" && (
+        <>
+          <Divider my="md" />
+          {/*
+            `dropWhenEmpty`: every field is individually optional, so an
+            emptied object means "nothing tuned" -- which is the built-in
+            configuration, not an empty override.
+          */}
+          <MinerNumberGroup
+            fields={CLIP_VOD_FIELDS}
+            value={value as Record<string, unknown>}
+            dropWhenEmpty
+            onChange={(next) => onChange(next ?? {})}
+          />
+        </>
+      )}
+    </Card>
+  );
+}
 
 interface Config {
   version: 1; username: string; followers: boolean; followersOrder: string;
@@ -55,15 +117,9 @@ export function Settings() {
   // real count, which the bar reports.
   const changes = countChanges(saved, draft);
 
-  // The two optional miner-wide objects, read once. `undefined` means the
-  // key is absent, which upstream reads as "use my own default" -- for
-  // weeklyRewards that is a third state distinct from `false` (disabled).
+  // `undefined` means the key is absent, which upstream reads as "use my
+  // own default".
   const gql = draft.miner.gql as Record<string, unknown> | undefined;
-  const weeklyRaw = draft.miner.weeklyRewards;
-  const weeklyMode = weeklyModeOf(weeklyRaw);
-  const weekly = weeklyMode === "custom"
-    ? (weeklyRaw as Record<string, unknown>)
-    : undefined;
 
   const apply = async () => {
     setBusy(true);
@@ -205,56 +261,24 @@ export function Settings() {
           </>
         )}
       </Card>
-      <Card withBorder padding="md">
-        <Title order={4} mb="xs">Weekly rewards</Title>
-        <Text size="sm" c="dimmed" mb="md">
-          How the miner earns Weekly Rewards progress, by watching a clip and
-          then a VOD when a channel is offline.
-        </Text>
-        {/*
-          Three states, not a switch: an absent key takes upstream's own
-          BasicConfiguration, `false` disables progression entirely, and an
-          object tunes it. Collapsing "default" and "off" together would
-          turn one into the other.
-        */}
-        {weeklyMode === "default" && (
-          <Text size="sm" c="dimmed" mb="sm" data-testid="weekly-default">
-            Built-in: {defaultSummary(WEEKLY_REWARDS_FIELDS)}.
-          </Text>
-        )}
-        <SegmentedControl
-          data={[
-            { value: "default", label: "Built-in" },
-            { value: "custom", label: "Customise" },
-            { value: "off", label: "Disabled" },
-          ]}
-          value={weeklyMode}
-          onChange={(mode) => setDraft({
-            ...draft,
-            miner: withKey(draft.miner, "weeklyRewards",
-              mode === "off" ? false : mode === "custom" ? {} : undefined),
-          })}
-        />
-        {weeklyMode === "custom" && (
-          <>
-            <Divider my="md" />
-            {/*
-              `dropWhenEmpty`: every field is individually optional, so an
-              emptied object means "nothing tuned" -- which is the built-in
-              configuration, not an empty override.
-            */}
-            <MinerNumberGroup
-              fields={WEEKLY_REWARDS_FIELDS}
-              value={weekly}
-              dropWhenEmpty
-              onChange={(next) => setDraft({
-                ...draft,
-                miner: withKey(draft.miner, "weeklyRewards", next ?? {}),
-              })}
-            />
-          </>
-        )}
-      </Card>
+      <ClipVodWatcherCard
+        title="Weekly rewards"
+        description="How the miner earns Weekly Rewards progress, by watching a clip and then a VOD when a channel is offline."
+        testId="weekly"
+        value={draft.miner.weeklyRewards}
+        onChange={(next) => setDraft({
+          ...draft, miner: withKey(draft.miner, "weeklyRewards", next),
+        })}
+      />
+      <ClipVodWatcherCard
+        title="Watch streak recovery"
+        description="How the miner keeps a watch streak alive after missing a stream, by watching a clip or the VOD from it. Only for streamers with watch streaks on."
+        testId="recovery"
+        value={draft.miner.watchStreakRecovery}
+        onChange={(next) => setDraft({
+          ...draft, miner: withKey(draft.miner, "watchStreakRecovery", next),
+        })}
+      />
       <PendingBar count={changes} onApply={() => void apply()} busy={busy} />
     </Stack>
   );

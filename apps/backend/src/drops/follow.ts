@@ -22,7 +22,9 @@ export interface FollowResult {
  * Progress we could not read. Completion is unknown then, so nothing is
  * held back as complete -- the engine removes it once progress says so.
  */
-const UNREAD: InventorySnapshot = { progress: {}, earned: {}, fetchedAt: 0, available: false };
+const UNREAD: InventorySnapshot = {
+  progress: {}, earned: {}, links: {}, fetchedAt: 0, available: false,
+};
 
 /**
  * Which catalogue campaigns the followed games subscribe to now.

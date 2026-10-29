@@ -723,3 +723,33 @@ test("a campaign with no game offers no follow", () => {
   renderApp(<CampaignCard campaign={campaign({ game: null })} onSubscribe={() => {}} onFollowGame={() => {}} />);
   expect(screen.queryByRole("button", { name: /follow/i })).toBeNull();
 });
+
+test("an unlinked campaign says so and links to where to link it", () => {
+  renderApp(<CampaignCard campaign={campaign({
+    accountLink: { linked: false, url: "https://example.com/link" },
+  })} />);
+  expect(screen.getByTestId("campaign-unlinked")).toHaveTextContent("Game account not linked");
+  expect(screen.getByRole("link", { name: /link account/i }))
+    .toHaveAttribute("href", "https://example.com/link");
+});
+
+test("an unlinked campaign with no link URL still warns, without a button", () => {
+  renderApp(<CampaignCard campaign={campaign({ accountLink: { linked: false, url: null } })} />);
+  expect(screen.getByTestId("campaign-unlinked")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: /link account/i })).not.toBeInTheDocument();
+});
+
+test("no link warning when linked, unknown, or nothing is left to earn", () => {
+  const { unmount } = renderApp(<CampaignCard campaign={campaign({
+    accountLink: { linked: true, url: null },
+  })} />);
+  expect(screen.queryByTestId("campaign-unlinked")).not.toBeInTheDocument();
+  unmount();
+  const second = renderApp(<CampaignCard campaign={campaign({ accountLink: null })} />);
+  expect(screen.queryByTestId("campaign-unlinked")).not.toBeInTheDocument();
+  second.unmount();
+  renderApp(<CampaignCard campaign={campaign({
+    complete: true, accountLink: { linked: false, url: null },
+  })} />);
+  expect(screen.queryByTestId("campaign-unlinked")).not.toBeInTheDocument();
+});

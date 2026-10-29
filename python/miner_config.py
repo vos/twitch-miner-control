@@ -114,12 +114,14 @@ def build_streamers(cfg: dict) -> list[Streamer]:
 def build_mine_kwargs(cfg: dict) -> dict:
     """Miner-wide options. `None` means "let upstream pick its default",
     which is not the same as False -- weekly_rewards=False disables the
-    feature, weekly_rewards=None takes upstream's BasicConfiguration."""
+    feature, weekly_rewards=None takes upstream's BasicConfiguration. The
+    same holds for watch_streak_recovery, which shares that dataclass."""
     miner = cfg.get("miner") or {}
 
     priority = miner.get("priority")
     gql = miner.get("gql")
     weekly = miner.get("weekly_rewards")
+    recovery = miner.get("watch_streak_recovery")
 
     return {
         "followers": bool(cfg.get("followers", False)),
@@ -129,6 +131,9 @@ def build_mine_kwargs(cfg: dict) -> dict:
         "gql": AttemptStrategy(**gql) if gql else None,
         "weekly_rewards": (
             BasicConfiguration(**weekly) if isinstance(weekly, dict) else weekly
+        ),
+        "watch_streak_recovery": (
+            BasicConfiguration(**recovery) if isinstance(recovery, dict) else recovery
         ),
     }
 

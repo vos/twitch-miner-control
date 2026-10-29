@@ -63,9 +63,23 @@ export type InventoryMap = Record<
  */
 export type EarnedMap = Record<string, string[] | undefined>;
 
+/** Whether a campaign's game account is linked, and where to link it. */
+export interface AccountLink {
+  linked: boolean;
+  url: string | null;
+}
+
+/**
+ * campaign id -> account link, for the campaigns Twitch told us about:
+ * every one in progress, plus those running on the probed channels. An
+ * absent campaign is unknown, never unlinked.
+ */
+export type LinkMap = Record<string, AccountLink | undefined>;
+
 export interface InventorySnapshot {
   progress: InventoryMap;
   earned: EarnedMap;
+  links: LinkMap;
   fetchedAt: number;
   /**
    * Whether the progress above can be trusted as complete.
@@ -78,8 +92,42 @@ export interface InventorySnapshot {
   available: boolean;
 }
 
+/** Enough to keep the link probe to a handful of calls. */
+export const LINK_PROBE_MAX = 10;
+
+/**
+ * One channel per drop subscription for the link probe, live ones first:
+ * a channel runs the campaign the subscription resolved it for, and the
+ * miner reads campaigns only off live channels, so an offline one may
+ * answer nothing.
+ */
+export function linkProbeChannels(
+  config: { streamers: ReadonlyArray<{ username: string; ownedBy?: string }> },
+  state: ReadonlyArray<{ username: string; channelId: string | null; isOnline: boolean | null }>,
+): string[] {
+  const byLogin = new Map(state.map((s) => [s.username.toLowerCase(), s]));
+  const best = new Map<string, { channelId: string; live: boolean }>();
+  for (const s of config.streamers) {
+    if (s.ownedBy === undefined) continue;
+    const known = byLogin.get(s.username.toLowerCase());
+    if (known?.channelId == null) continue;
+    const live = known.isOnline === true;
+    const held = best.get(s.ownedBy);
+    if (held === undefined || (live && !held.live)) {
+      best.set(s.ownedBy, { channelId: known.channelId, live });
+    }
+  }
+  return [...best.values()].map((b) => b.channelId).slice(0, LINK_PROBE_MAX);
+}
+
 export interface InventoryDeps {
   client: { request<T>(op: string, params?: object): Promise<T> };
+  /**
+   * Channel ids to ask about campaigns not yet started, read on every
+   * fetch. An unlinked campaign never starts, so the inventory alone
+   * cannot report it; see _links in python/helpers/state.py.
+   */
+  probeChannels?: () => string[];
   now?: () => number;
 }
 
@@ -98,6 +146,7 @@ export interface InventoryDeps {
 export class InventoryCache {
   private progress: InventoryMap = {};
   private earned: EarnedMap = {};
+  private links: LinkMap = {};
   private fetchedAt = 0;
   private available = false;
   private lastRefreshAt = 0;
@@ -116,7 +165,8 @@ export class InventoryCache {
         const res = await this.deps.client.request<{
           inventory: InventoryMap;
           earned?: EarnedMap;
-        }>("inventory");
+          links?: LinkMap;
+        }>("inventory", { channelIds: this.deps.probeChannels?.() ?? [] });
         this.progress = res.inventory ?? {};
         // Optional: the helper degrades this half to {} on its own
         // failure rather than losing the progress beside it, and a
@@ -124,6 +174,7 @@ export class InventoryCache {
         // empty map costs a finished campaign its "collected" badge --
         // the behaviour before this existed -- and nothing more.
         this.earned = res.earned ?? {};
+        this.links = res.links ?? {};
         this.fetchedAt = this.now();
         this.available = true;
       } catch {
@@ -145,6 +196,7 @@ export class InventoryCache {
     return {
       progress: this.progress,
       earned: this.earned,
+      links: this.links,
       fetchedAt: this.fetchedAt,
       available: this.available,
     };

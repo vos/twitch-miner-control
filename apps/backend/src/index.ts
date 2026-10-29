@@ -32,7 +32,7 @@ import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
 import { dropsEligible } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
-import { InventoryCache } from "./state/inventory.js";
+import { InventoryCache, linkProbeChannels } from "./state/inventory.js";
 import { GiftSubsCache, watchGiftSubs } from "./state/giftSubs.js";
 import type { OwnerLabel } from "./state/service.js";
 import { StateService } from "./state/service.js";
@@ -400,7 +400,11 @@ const catalogue = new CampaignCatalogue({
   path: join(dataDir, "campaigns.json"),
   log: appLog.log,
 });
-const inventoryCache = new InventoryCache({ client: helper });
+const inventoryCache = new InventoryCache({
+  client: helper,
+  probeChannels: () =>
+    linkProbeChannels(loadConfig(configPath), stateService.snapshot().streamers),
+});
 
 // The engine restarts the miner when a subscription resolves to
 // different channels, so the restart is deferred behind a cancellable

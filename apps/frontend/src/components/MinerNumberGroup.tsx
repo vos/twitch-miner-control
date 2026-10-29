@@ -20,8 +20,8 @@ interface Props {
   /**
    * Whether clearing the last field collapses the object away. `gql`
    * requires both of its fields, so it keeps the object; `weeklyRewards`
-   * takes any subset, so an emptied object is dropped back to "upstream
-   * default" rather than being sent as `{}`.
+   * and `watchStreakRecovery` take any subset, so an emptied object is
+   * dropped back to "upstream default" rather than being sent as `{}`.
    */
   dropWhenEmpty?: boolean;
   disabled?: boolean;
@@ -94,29 +94,29 @@ export const GQL_FIELDS: NumberFieldSpec[] = [
 ];
 
 /**
- * `weeklyRewards`: how the miner progresses Weekly Rewards. Field names and
- * defaults come from the BasicConfiguration dataclass
+ * `weeklyRewards` and `watchStreakRecovery`: how the miner watches a
+ * clip, then a VOD, for an offline channel. Field names and defaults come
+ * from the BasicConfiguration dataclass both share
  * (vendor/miner/.../classes/ClipVodWatcher.py), NOT from example.py or the
  * upstream guide -- both of those document stale names, and the guide also
  * says max_concurrent is 2 where the dataclass says 3.
  */
-export const WEEKLY_REWARDS_FIELDS: NumberFieldSpec[] = [
+export const CLIP_VOD_FIELDS: NumberFieldSpec[] = [
   {
     key: "maxConcurrent", label: "Concurrent channels", defaultValue: 3, min: 1,
-    help: "How many channels to progress at the same time.",
+    help: "How many channels to work on at the same time.",
   },
   {
     key: "maxClipWatchSeconds", label: "Clip watch seconds", defaultValue: 30, min: 1,
-    help: "Seconds of a clip to watch. Watching a clip usually earns the progress "
-      + "on its own.",
+    help: "Seconds of a clip to watch. A clip is usually enough on its own.",
   },
   {
     key: "maxVodWatchSeconds", label: "VOD watch seconds", defaultValue: 480, min: 1,
-    help: "Seconds of a VOD to watch, tried only when the clip did not earn progress.",
+    help: "Seconds of a VOD to watch, tried only when the clip was not enough.",
   },
   {
     key: "intervalSeconds", label: "Check interval", defaultValue: 20, min: 1,
-    help: "Seconds between checks for a channel needing progress.",
+    help: "Seconds between checks for a channel that needs it.",
   },
   {
     key: "maxFailuresPerStreamer", label: "Failures before cooldown",
@@ -126,6 +126,6 @@ export const WEEKLY_REWARDS_FIELDS: NumberFieldSpec[] = [
   {
     key: "failureCooldownSeconds", label: "Cooldown seconds",
     defaultValue: 3600, allowZero: true,
-    help: "Seconds a channel stays on cooldown, during which no progress is attempted.",
+    help: "Seconds a channel stays on cooldown, during which nothing is attempted.",
   },
 ];

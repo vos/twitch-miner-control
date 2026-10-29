@@ -1182,6 +1182,89 @@ def test_inventory_skips_a_drop_without_progress():
     assert list(out["data"]["inventory"]["c1"]) == ["d2"]
 
 
+def _reward(linked, url=None):
+    return SimpleNamespace(is_account_connected=linked, account_link_url=url)
+
+
+def _links_handler(inventory=None, channels=None):
+    """`channels` maps channel id -> campaigns ({id: [rewards]}) or an exception."""
+    h = _inventory_handler(inventory)
+    asked = []
+
+    def progress(channel_id):
+        asked.append(channel_id)
+        found = (channels or {})[channel_id]
+        if isinstance(found, Exception):
+            raise found
+        return SimpleNamespace(campaigns=[
+            SimpleNamespace(id=cid, reward_groups=[SimpleNamespace(rewards=rewards)])
+            for cid, rewards in found.items()
+        ])
+
+    h.session.gql.drop_channel_campaigns_progress = progress
+    h.asked = asked
+    return h
+
+
+def test_inventory_reports_account_links_of_campaigns_in_progress():
+    h = _links_handler([
+        SimpleNamespace(id="c1", time_based_drops=[], is_account_connected=False,
+                        account_link_url="https://example.com/link"),
+        SimpleNamespace(id="c2", time_based_drops=[], is_account_connected=True,
+                        account_link_url=None),
+    ])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["links"] == {
+        "c1": {"linked": False, "url": "https://example.com/link"},
+        "c2": {"linked": True, "url": None},
+    }
+    assert h.asked == []
+
+
+def test_inventory_asks_channels_about_campaigns_not_started():
+    h = _links_handler([], {
+        "42": {"c1": [_reward(False, "https://example.com/a"), _reward(False)]},
+        "43": {"c2": [_reward(False), _reward(True, "https://example.com/b")]},
+    })
+    out = h.handle({"id": 1, "op": "inventory", "channelIds": ["42", "43"]})
+    assert out["data"]["links"] == {
+        "c1": {"linked": False, "url": "https://example.com/a"},
+        # Linked when any reward is, as upstream counts it.
+        "c2": {"linked": True, "url": "https://example.com/b"},
+    }
+
+
+def test_inventory_link_status_wins_over_a_channel_answer():
+    h = _links_handler(
+        [SimpleNamespace(id="c1", time_based_drops=[], is_account_connected=True,
+                         account_link_url=None)],
+        {"42": {"c1": [_reward(False)]}},
+    )
+    out = h.handle({"id": 1, "op": "inventory", "channelIds": ["42"]})
+    assert out["data"]["links"]["c1"]["linked"] is True
+
+
+def test_inventory_skips_a_channel_whose_campaigns_failed():
+    # Unknown, not "unlinked": a failed lookup must not raise a warning.
+    h = _links_handler([], {
+        "42": RuntimeError("lookup failed"),
+        "43": {"c2": [_reward(False)]},
+    })
+    out = h.handle({"id": 1, "op": "inventory", "channelIds": ["42", "43"]})
+    assert out["ok"] is True
+    assert out["data"]["links"] == {"c2": {"linked": False, "url": None}}
+
+
+def test_inventory_link_probe_reports_auth_failure():
+    response = requests.Response()
+    response.status_code = 401
+    h = _links_handler([], {"42": requests.exceptions.HTTPError(response=response)})
+    h.session.is_logged_in = lambda: False
+    out = h.handle({"id": 1, "op": "inventory", "channelIds": ["42"]})
+    assert out["ok"] is False
+    assert out["code"] == "AUTH"
+
+
 def _directory_handler(edges=None, error=None):
     h = handler(balances={"alpha": 10}, live={"42": True})
     captured = {}

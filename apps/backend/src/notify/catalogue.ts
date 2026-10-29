@@ -11,6 +11,7 @@ export const NOTIFY_KIND = {
   TWITCH_SIGNED_OUT: "twitch.signedOut",
   RESTART_PENDING: "restart.pending",
   APP_UPDATE: "app.update",
+  MINER_ERROR: "miner.error",
   DROP_CLAIMED: "drop.claimed",
   CAMPAIGN_COMPLETED: "campaign.completed",
   CAMPAIGN_ENDING_SOON: "campaign.endingSoon",
@@ -83,6 +84,10 @@ export const CATALOGUE: readonly KindInfo[] = [
   { kind: NOTIFY_KIND.APP_UPDATE, group: "health", label: "Update available",
     description: "A newer release of this app is published.",
     defaultOn: true, inbox: true, urgency: "normal", ttlSeconds: DAY_S, batch: false },
+  { kind: NOTIFY_KIND.MINER_ERROR, group: "health", label: "Miner error",
+    description: "The miner reported an error, such as a failed Twitch request. "
+      + "At most one an hour; the activity feed lists them all.",
+    defaultOn: false, inbox: false, urgency: "low", ttlSeconds: HOUR_S, batch: false },
   { kind: NOTIFY_KIND.DROP_CLAIMED, group: "drops", label: "Drop claimed",
     description: "The miner claimed a drop.",
     defaultOn: true, inbox: true, urgency: "normal", ttlSeconds: DAY_S, batch: true },

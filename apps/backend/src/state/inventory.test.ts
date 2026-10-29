@@ -3,11 +3,13 @@ import {
   InventoryCache,
   INVENTORY_TTL_MS,
   INVENTORY_REFRESH_MIN_INTERVAL_MS,
+  LINK_PROBE_MAX,
+  linkProbeChannels,
 } from "./inventory.js";
 
 let clock = 1_000_000;
 
-function make(responses: unknown[]) {
+function make(responses: unknown[], probeChannels?: () => string[]) {
   clock = 1_000_000;
   const queue = [...responses];
   const request = vi.fn(async () => {
@@ -17,6 +19,7 @@ function make(responses: unknown[]) {
   });
   const cache = new InventoryCache({
     client: { request } as never,
+    probeChannels,
     now: () => clock,
   });
   return { cache, request };
@@ -186,4 +189,52 @@ test("a response with no earned rewards reports an empty map", async () => {
   const { cache } = make([{ inventory: { c1: { d1: progress } } }]);
   const out = await cache.get();
   expect(out.earned).toEqual({});
+});
+
+test("reports account links, empty from a helper that predates them", async () => {
+  const link = { linked: false, url: null };
+  const { cache } = make([{ inventory: {}, links: { c1: link } }, { inventory: {} }]);
+  expect((await cache.get()).links).toEqual({ c1: link });
+  clock += INVENTORY_TTL_MS + 1;
+  expect((await cache.get()).links).toEqual({});
+});
+
+test("asks the probe channels read at fetch time", async () => {
+  let channels = ["1"];
+  const { cache, request } = make([{ inventory: {} }, { inventory: {} }], () => channels);
+  await cache.get();
+  channels = ["1", "2"];
+  clock += INVENTORY_TTL_MS + 1;
+  await cache.get();
+  expect(request.mock.calls).toEqual([
+    ["inventory", { channelIds: ["1"] }],
+    ["inventory", { channelIds: ["1", "2"] }],
+  ]);
+});
+
+test("probes one channel per subscription, live first, skipping unknown ids", () => {
+  const config = {
+    streamers: [
+      { username: "manual" },
+      { username: "Off1", ownedBy: "s1" },
+      { username: "on1", ownedBy: "s1" },
+      { username: "nobody", ownedBy: "s2" },
+      { username: "off2", ownedBy: "s3" },
+    ],
+  };
+  const state = [
+    { username: "manual", channelId: "0", isOnline: true },
+    { username: "off1", channelId: "1", isOnline: false },
+    { username: "on1", channelId: "2", isOnline: true },
+    { username: "nobody", channelId: null, isOnline: true },
+    { username: "off2", channelId: "4", isOnline: null },
+  ];
+  expect(linkProbeChannels(config, state)).toEqual(["2", "4"]);
+});
+
+test("caps the probe", () => {
+  const streamers = Array.from({ length: LINK_PROBE_MAX + 5 }, (_, i) => (
+    { username: `c${i}`, ownedBy: `s${i}` }));
+  const state = streamers.map((s, i) => ({ username: s.username, channelId: `${i}`, isOnline: true }));
+  expect(linkProbeChannels({ streamers }, state)).toHaveLength(LINK_PROBE_MAX);
 });

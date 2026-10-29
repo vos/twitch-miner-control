@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Settings } from "./Settings.js";
@@ -9,6 +9,9 @@ const config = {
   defaults: {}, miner: {}, streamers: [],
 };
 let calls: Array<{ url: string; init?: RequestInit }>;
+
+const weekly = () => within(screen.getByRole("region", { name: "Weekly rewards" }));
+const recovery = () => within(screen.getByRole("region", { name: "Watch streak recovery" }));
 
 beforeEach(() => {
   calls = [];
@@ -301,7 +304,7 @@ test("the default summaries give way to the inputs once customised", async () =>
   await userEvent.click(screen.getByLabelText(/customise retries/i));
   expect(screen.queryByTestId("gql-default")).not.toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("radio", { name: "Customise" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Customise" }));
   expect(screen.queryByTestId("weekly-default")).not.toBeInTheDocument();
 });
 
@@ -310,7 +313,7 @@ test("disabling weekly rewards hides the built-in summary too", async () => {
   // configuration there would say the opposite of what happens.
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Disabled" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Disabled" }));
   expect(screen.queryByTestId("weekly-default")).not.toBeInTheDocument();
 });
 
@@ -368,9 +371,9 @@ test("turning retries back off removes the key entirely", async () => {
 test("weekly rewards starts on the built-in configuration", async () => {
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  expect(screen.getByRole("radio", { name: "Built-in" })).toBeChecked();
+  expect(weekly().getByRole("radio", { name: "Built-in" })).toBeChecked();
   // No number fields until it is actually being customised.
-  expect(screen.queryByLabelText("Concurrent channels")).not.toBeInTheDocument();
+  expect(weekly().queryByLabelText("Concurrent channels")).not.toBeInTheDocument();
 });
 
 test("disabling weekly rewards sends false, not an empty object", async () => {
@@ -378,7 +381,7 @@ test("disabling weekly rewards sends false, not an empty object", async () => {
   // an absent key or {} would instead run the built-in progression.
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Disabled" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Disabled" }));
   await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
 
   await waitFor(() => {
@@ -391,9 +394,9 @@ test("customising weekly rewards sends only the fields that were set", async () 
   // absent so upstream fills in its own default rather than a zero.
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Customise" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Customise" }));
 
-  const concurrent = screen.getByLabelText("Concurrent channels");
+  const concurrent = weekly().getByLabelText("Concurrent channels");
   await userEvent.clear(concurrent);
   await userEvent.type(concurrent, "10");
   await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
@@ -408,18 +411,18 @@ test("the weekly number fields show upstream's defaults as placeholders", async 
   // documents max_concurrent as 2 where BasicConfiguration says 3.
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Customise" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Customise" }));
 
-  expect(screen.getByLabelText("Concurrent channels")).toHaveAttribute("placeholder", "3");
-  expect(screen.getByLabelText("Cooldown seconds")).toHaveAttribute("placeholder", "3600");
+  expect(weekly().getByLabelText("Concurrent channels")).toHaveAttribute("placeholder", "3");
+  expect(weekly().getByLabelText("Cooldown seconds")).toHaveAttribute("placeholder", "3600");
 });
 
 test("clearing every weekly field falls back to the built-in configuration", async () => {
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Customise" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Customise" }));
 
-  const concurrent = screen.getByLabelText("Concurrent channels");
+  const concurrent = weekly().getByLabelText("Concurrent channels");
   await userEvent.clear(concurrent);
   await userEvent.type(concurrent, "4");
   await userEvent.clear(concurrent);
@@ -436,13 +439,46 @@ test("clearing every weekly field falls back to the built-in configuration", asy
 test("switching weekly rewards back to built-in removes the key", async () => {
   view();
   await screen.findByLabelText(/mine my followed channels/i);
-  await userEvent.click(screen.getByRole("radio", { name: "Disabled" }));
-  await userEvent.click(screen.getByRole("radio", { name: "Built-in" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Disabled" }));
+  await userEvent.click(weekly().getByRole("radio", { name: "Built-in" }));
 
   await userEvent.click(screen.getByLabelText(/mine my followed channels/i));
   await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
   await waitFor(() => {
     expect(sentConfig().miner).not.toHaveProperty("weeklyRewards");
+  });
+});
+
+// --- miner-wide watch streak recovery options ---
+
+test("watch streak recovery has its own three states beside weekly rewards", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+  expect(screen.getByTestId("recovery-default")).toHaveTextContent("concurrent channels 3");
+
+  await userEvent.click(recovery().getByRole("radio", { name: "Disabled" }));
+  expect(screen.queryByTestId("recovery-default")).not.toBeInTheDocument();
+  // The weekly card is untouched.
+  expect(weekly().getByRole("radio", { name: "Built-in" })).toBeChecked();
+  await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
+  await waitFor(() => {
+    expect(sentConfig().miner.watchStreakRecovery).toBe(false);
+  });
+  expect(sentConfig().miner).not.toHaveProperty("weeklyRewards");
+});
+
+test("customising watch streak recovery sends only its own fields", async () => {
+  view();
+  await screen.findByLabelText(/mine my followed channels/i);
+  await userEvent.click(recovery().getByRole("radio", { name: "Customise" }));
+
+  const vod = recovery().getByLabelText("VOD watch seconds");
+  await userEvent.clear(vod);
+  await userEvent.type(vod, "120");
+  await userEvent.click(await screen.findByRole("button", { name: /apply/i }));
+
+  await waitFor(() => {
+    expect(sentConfig().miner.watchStreakRecovery).toEqual({ maxVodWatchSeconds: 120 });
   });
 });
 

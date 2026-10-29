@@ -14,6 +14,12 @@ export const DOORBELL_KINDS: ReadonlyMap<string, { kind: NotifyKind; title: stri
 ]);
 
 /**
+ * The least time between two error notifications. Upstream reports every
+ * failed Twitch request, and an outage fails them all.
+ */
+export const ERROR_NOTIFY_EVERY_MS = 3_600_000;
+
+/**
  * Publishes from the feed rows the doorbell records. The body is the
  * miner's own wording, which names the streamer; see
  * python/helpers/doorbell.py.
@@ -21,8 +27,31 @@ export const DOORBELL_KINDS: ReadonlyMap<string, { kind: NotifyKind; title: stri
 export function watchDoorbell(deps: {
   notifier: Pick<Notifier, "publish">;
   stateService: Pick<EventEmitter, "on">;
+  now?: () => number;
 }): void {
+  let lastErrorAt: number | null = null;
+  let heldBack = 0;
   deps.stateService.on("event", (row: { type: string; message: string | null }) => {
+    if (row.type === "ERROR") {
+      const at = deps.now?.() ?? Date.now();
+      if (lastErrorAt !== null && at - lastErrorAt < ERROR_NOTIFY_EVERY_MS) {
+        heldBack += 1;
+        return;
+      }
+      const more = lastErrorAt !== null && heldBack > 0
+        ? ` (${heldBack} more since the last notice)`
+        : "";
+      lastErrorAt = at;
+      heldBack = 0;
+      deps.notifier.publish({
+        kind: NOTIFY_KIND.MINER_ERROR,
+        title: "Miner error",
+        body: `${row.message ?? "The miner reported an error."}${more}`,
+        link: "/?open=logs",
+        tag: "miner-error",
+      });
+      return;
+    }
     const mapped = DOORBELL_KINDS.get(row.type);
     if (mapped === undefined) return;
     deps.notifier.publish({

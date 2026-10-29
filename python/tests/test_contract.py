@@ -111,6 +111,30 @@ def test_weekly_rewards_basic_configuration_field_names():
     }
 
 
+def test_account_link_fields_we_read():
+    """helpers/state.py _links reads these off the inventory and the
+    per-channel campaigns query."""
+    from TwitchChannelPointsMiner.classes.gql.Integration import GQL
+    from TwitchChannelPointsMiner.classes.gql.data.response import Drops
+    assert params(GQL.drop_channel_campaigns_progress) == ["self", "channel_id"]
+    assert {"is_account_connected", "account_link_url"} <= set(
+        params(Drops.DropCampaignInProgress.__init__))
+    assert {"id", "reward_groups"} <= set(Drops.DropsCampaign.__dataclass_fields__)
+    assert "rewards" in Drops.DropsRewardGroup.__dataclass_fields__
+    assert {"is_account_connected", "account_link_url"} <= set(
+        Drops.DropsReward.__dataclass_fields__)
+    assert "campaigns" in Drops.DropChannelCampaignsProgressResponse.__dataclass_fields__
+
+
+def test_watch_streak_recovery_takes_the_same_configuration():
+    """run.py builds both options from one dataclass, and the Settings
+    page offers the same fields for each."""
+    from TwitchChannelPointsMiner.classes import WatchStreakRecovery
+    from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
+    assert WatchStreakRecovery.BasicConfiguration is BasicConfiguration
+    assert "watch_streak_recovery" in params(TwitchChannelPointsMiner.__init__)
+
+
 def test_events_we_rely_on_exist():
     """The backend reads these by name: history queries, the recap, and
     the notification map in notify/sources/doorbell.ts."""

@@ -37,7 +37,7 @@ function harness() {
   const watcher = new CampaignWatcher({
     notifier: { publish, markSeen },
     catalogue: { get: catalogueGet },
-    inventory: { get: async () => ({ progress, earned: {}, fetchedAt: 1, available: true }) },
+    inventory: { get: async () => ({ progress, earned: {}, links: {}, fetchedAt: 1, available: true }) },
     now: () => NOW,
   });
   return {

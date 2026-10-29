@@ -1,7 +1,7 @@
 import type {
   Campaign, CampaignBenefit, CampaignDrop,
 } from "./campaignCatalogue.js";
-import type { DropProgressEntry, InventorySnapshot } from "./inventory.js";
+import type { AccountLink, DropProgressEntry, InventorySnapshot } from "./inventory.js";
 
 /**
  * What a single drop is doing for this viewer.
@@ -44,6 +44,8 @@ export interface ResolvedCampaign extends Omit<Campaign, "drops"> {
   status: CampaignStatus;
   /** Whether watching has nothing left to add; see campaignComplete. */
   complete: boolean;
+  /** Null when Twitch has not said; see LinkMap. */
+  accountLink: AccountLink | null;
 }
 
 /**
@@ -175,6 +177,7 @@ export function resolveCampaign(
     drops,
     status: campaignStatus(drops, inv.available),
     complete: campaignComplete(drops, inv.available),
+    accountLink: inv.links[campaign.id] ?? null,
   };
 }
 

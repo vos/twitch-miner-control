@@ -205,8 +205,11 @@ button). The per-streamer **Drops** setting decides what the miner does
 about it: **Linked accounts**, the default, progresses only campaigns
 whose account is linked; **All campaigns** progresses the rest too; **Off**
 leaves drops alone on that channel. A subscription to a campaign you have
-not linked therefore makes no progress under the default, and its pool is
-swapped out after 45 minutes like any other stalled one.
+not linked therefore makes no progress under the default. The Drops page
+marks such a campaign **Game account not linked**, with a **Link account**
+button when Twitch gives a link, and its subscription row reads **not
+linked**. Its pool is not swapped out as stalled meanwhile, since other
+channels would not link the account.
 
 ### Notifications
 
@@ -219,7 +222,9 @@ campaigns completed or about to end, and new releases. It needs no setup.
 each browser you want them in. Nothing is sent until you do. Every
 browser has its own settings: which events, which streamers count for
 "went live", quiet hours (with miner problems optionally let through),
-and an optional daily digest.
+and an optional daily digest. **Miner error** is off by default: the
+miner reports every failed Twitch request, so it sends at most one an
+hour and counts the rest; the activity feed lists them all.
 
 Browsers only allow this on a secure page:
 

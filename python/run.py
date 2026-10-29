@@ -90,6 +90,7 @@ twitch_miner = TwitchChannelPointsMiner(
     claim_drops_startup=kwargs["claim_drops_startup"],
     gql=kwargs["gql"],
     weekly_rewards=kwargs["weekly_rewards"],
+    watch_streak_recovery=kwargs["watch_streak_recovery"],
     logger_settings=LoggerSettings(
         save=True,
         console_level=20,

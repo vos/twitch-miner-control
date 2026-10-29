@@ -75,7 +75,7 @@ function make(over: {
     pending: { propose } as never,
     inventory: {
       get: async (): Promise<InventorySnapshot> => ({
-        progress: {}, earned: {}, fetchedAt: 1, available: true,
+        progress: {}, earned: {}, links: {}, fetchedAt: 1, available: true,
         ...(typeof over.inventory === "function" ? over.inventory() : over.inventory),
       }),
     },
@@ -1105,6 +1105,33 @@ test("a campaign with nothing left to earn by watching is never stalled", async 
     advance(STALL_AFTER_MS);
   }
   expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("an unlinked campaign is not a stall while the miner skips unlinked ones", async () => {
+  // Other channels would not link the account.
+  const { engine, saveConfig, advance } = stallSetup({
+    inventory: { ...progressAt(10), links: { c1: { linked: false, url: null } } },
+  });
+  for (let i = 0; i < 4; i++) {
+    await engine.pass("timer");
+    advance(STALL_AFTER_MS);
+  }
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
+test("an unlinked campaign can stall when the miner progresses all campaigns", async () => {
+  const { engine, saveConfig, advance } = stallSetup({
+    config: {
+      defaults: { claimDrops: "ALL" },
+      streamers: [manual("alpha"), owned("beta", "s1")] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+    inventory: { ...progressAt(10), links: { c1: { linked: false, url: null } } },
+  });
+  await engine.pass("timer");
+  advance(STALL_AFTER_MS);
+  await engine.pass("timer");
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["alpha", "gamma"]);
 });
 
 test("a drop whose window has not opened is not a stall", async () => {

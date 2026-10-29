@@ -172,6 +172,7 @@ def test_mine_kwargs_default_the_miner_wide_options():
     assert kwargs["claim_drops_startup"] is False
     assert kwargs["gql"] is None
     assert kwargs["weekly_rewards"] is None
+    assert kwargs["watch_streak_recovery"] is None
 
 
 def test_mine_kwargs_carry_priority_and_startup_claim():
@@ -193,6 +194,19 @@ def test_weekly_rewards_false_disables_rather_than_configuring():
 def test_weekly_rewards_dict_becomes_basic_configuration():
     kwargs = build_mine_kwargs(cfg(miner={"weekly_rewards": {"max_concurrent": 4}}))
     assert kwargs["weekly_rewards"].max_concurrent == 4
+
+
+def test_watch_streak_recovery_false_disables_rather_than_configuring():
+    kwargs = build_mine_kwargs(cfg(miner={"watch_streak_recovery": False}))
+    assert kwargs["watch_streak_recovery"] is False
+
+
+def test_watch_streak_recovery_dict_becomes_basic_configuration():
+    kwargs = build_mine_kwargs(cfg(miner={
+        "watch_streak_recovery": {"max_vod_watch_seconds": 120},
+    }))
+    assert kwargs["watch_streak_recovery"].max_vod_watch_seconds == 120
+    assert kwargs["watch_streak_recovery"].max_concurrent == 3
 
 
 # --- the drop slot --------------------------------------------------------

@@ -135,8 +135,12 @@ export const PRIORITIES = [
   "POINTS_ASCENDING", "POINTS_DESCENDING", "WATCH_SESSION", "WEEKLY_REWARDS",
 ] as const;
 
-/** Field names are upstream's dataclass, not example.py's (which are wrong). */
-const weeklyRewardsSchema = z.union([
+/**
+ * Weekly rewards and watch streak recovery: both watch a clip, then a VOD,
+ * tuned by the same upstream dataclass. Field names are that dataclass's,
+ * not example.py's (which are wrong).
+ */
+const clipVodWatcherSchema = z.union([
   z.literal(false),
   z.object({
     maxConcurrent: z.number().int().positive().optional(),
@@ -156,7 +160,8 @@ const minerSchema = z
       attempts: z.number().int().positive(),
       attemptIntervalSeconds: z.number().nonnegative(),
     }).strict().optional(),
-    weeklyRewards: weeklyRewardsSchema.optional(),
+    weeklyRewards: clipVodWatcherSchema.optional(),
+    watchStreakRecovery: clipVodWatcherSchema.optional(),
   })
   .strict();
 
@@ -165,18 +170,22 @@ export const MINER_TO_PYTHON: Record<string, string> = {
   claimDropsStartup: "claim_drops_startup",
   gql: "gql",
   weeklyRewards: "weekly_rewards",
+  watchStreakRecovery: "watch_streak_recovery",
+};
+
+const CLIP_VOD_WATCHER_TO_PYTHON = {
+  maxConcurrent: "max_concurrent",
+  maxClipWatchSeconds: "max_clip_watch_seconds",
+  maxVodWatchSeconds: "max_vod_watch_seconds",
+  intervalSeconds: "interval_seconds",
+  maxFailuresPerStreamer: "max_failures_per_streamer",
+  failureCooldownSeconds: "failure_cooldown_seconds",
 };
 
 const MINER_NESTED_TO_PYTHON: Record<string, Record<string, string>> = {
   gql: { attempts: "attempts", attemptIntervalSeconds: "attempt_interval_seconds" },
-  weeklyRewards: {
-    maxConcurrent: "max_concurrent",
-    maxClipWatchSeconds: "max_clip_watch_seconds",
-    maxVodWatchSeconds: "max_vod_watch_seconds",
-    intervalSeconds: "interval_seconds",
-    maxFailuresPerStreamer: "max_failures_per_streamer",
-    failureCooldownSeconds: "failure_cooldown_seconds",
-  },
+  weeklyRewards: CLIP_VOD_WATCHER_TO_PYTHON,
+  watchStreakRecovery: CLIP_VOD_WATCHER_TO_PYTHON,
 };
 
 export function minerToPython(miner: Record<string, unknown>) {

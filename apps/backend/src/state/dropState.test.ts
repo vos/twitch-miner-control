@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { resolveCampaign, resolveDrop } from "./dropState.js";
 import type { Campaign, CampaignDrop } from "./campaignCatalogue.js";
 import type {
-  EarnedMap, InventoryMap, InventorySnapshot,
+  EarnedMap, InventoryMap, InventorySnapshot, LinkMap,
 } from "./inventory.js";
 
 const drop = (over: Partial<CampaignDrop> = {}): CampaignDrop => ({
@@ -27,7 +27,8 @@ const snapshot = (
   progress: InventoryMap,
   available = true,
   earned: EarnedMap = {},
-): InventorySnapshot => ({ progress, earned, fetchedAt: 1_000, available });
+  links: LinkMap = {},
+): InventorySnapshot => ({ progress, earned, links, fetchedAt: 1_000, available });
 
 // --- drop states ---
 
@@ -250,6 +251,14 @@ test("a campaign with no progress is untouched", () => {
   expect(resolveCampaign(campaign([drop()]), snapshot({})).status).toBe(
     "untouched",
   );
+});
+
+test("a campaign carries its account link, or null when Twitch has not said", () => {
+  const link = { linked: false, url: "https://example.com/link" };
+  expect(resolveCampaign(campaign([drop()]), snapshot({}, true, {}, { c1: link })).accountLink)
+    .toEqual(link);
+  expect(resolveCampaign(campaign([drop()]), snapshot({}, true, {}, { other: link })).accountLink)
+    .toBeNull();
 });
 
 test("a campaign is unknown when the inventory is unavailable", () => {
