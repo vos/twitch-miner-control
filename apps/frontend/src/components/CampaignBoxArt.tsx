@@ -93,11 +93,11 @@ export function CampaignBoxArt({ url, displayName, slug, width = 88 }: {
     // it, and navigating it away to glance at a category loses that.
     // Matches the channel links in the subscriptions panel.
     <a
-      // ?filter=drops narrows the directory to channels actually running
-      // drops for this game, which is the point of arriving here from a
-      // drops page. It is the same URL Twitch's own campaign list uses
-      // for "go to a participating live channel".
-      href={`https://twitch.tv/directory/category/${slug}?filter=drops`}
+      // ?tl=DropsEnabled is Twitch's Drops Enabled tag filter: the
+      // directory opens narrowed to channels running drops for this game,
+      // with the tag shown as an active filter -- the point of arriving
+      // here from a drops page.
+      href={`https://twitch.tv/directory/category/${slug}?tl=DropsEnabled`}
       target="_blank"
       rel="noreferrer noopener"
       aria-label={`${displayName} on Twitch`}

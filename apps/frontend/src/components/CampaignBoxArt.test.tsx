@@ -37,10 +37,11 @@ test("links the art to the game's Twitch category when there is a slug", () => {
   // without a coloured anchor competing with the card's other accents.
   renderApp(<CampaignBoxArt url={null} displayName="Once Human" slug="once-human" />);
   const link = screen.getByRole("link", { name: /once human on twitch/i });
-  // ?filter=drops narrows the directory to channels actually running
-  // drops, which is Twitch's own link for "a participating live channel".
+  // ?tl=DropsEnabled is Twitch's own Drops Enabled tag filter: the
+  // directory opens narrowed to channels running drops, with the tag
+  // shown as an active filter.
   expect(link.getAttribute("href"))
-    .toBe("https://twitch.tv/directory/category/once-human?filter=drops");
+    .toBe("https://twitch.tv/directory/category/once-human?tl=DropsEnabled");
 });
 
 test("opens the category in a new tab, this page being a live control panel", () => {

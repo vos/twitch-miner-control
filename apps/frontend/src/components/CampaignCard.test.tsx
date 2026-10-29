@@ -397,7 +397,7 @@ test("the box art links to the game's Twitch category", () => {
   renderApp(<CampaignCard campaign={campaign()} />);
   expect(
     screen.getByRole("link", { name: /a game on twitch/i }).getAttribute("href"),
-  ).toBe("https://twitch.tv/directory/category/a-game?filter=drops");
+  ).toBe("https://twitch.tv/directory/category/a-game?tl=DropsEnabled");
 });
 
 test("links out to the Twitch drops list", () => {
