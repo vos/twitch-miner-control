@@ -687,12 +687,12 @@ test("a stopped miner watches nothing, a restarted one falls back to gains", asy
   const { service } = make([alpha(100), alpha(100), alpha(100)], ["alpha"]);
   await service.refresh();
   service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
-  service.resetWatchSlots(false);
+  service.minerRunning(false);
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(false);
 
   // Running again, before it has announced anything.
-  service.resetWatchSlots(true);
+  service.minerRunning(true);
   await service.refresh();
   expect(service.snapshot().streamers[0].watching).toBe(true);
 });
@@ -1597,4 +1597,316 @@ test("a gift expiring between polls is pushed by the next poll", async () => {
   expect(frames).toHaveLength(1);
   expect(service.snapshot().streamers[0].giftSub).toBeNull();
   expect(service.snapshot().giftSubs).toEqual([]);
+});
+
+// --- the miner's events carry the facts ---
+
+test("a gain moves the balance at once, without asking Twitch", async () => {
+  const { service, request } = make([alpha(100)]);
+  await service.refresh();
+  const changes = vi.fn();
+  service.on("change", changes);
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  expect(service.snapshot().streamers[0].points).toBe(110);
+  expect(changes).toHaveBeenCalledOnce();
+  await new Promise((r) => setTimeout(r, 80));
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("a gain lands in the point history", async () => {
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  clock += 1000;
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  expect(history.latest("alpha")).toBe(110);
+});
+
+test("a gain lands in the point history with nobody watching", async () => {
+  const { service } = make([]);
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  expect(history.latest("alpha")).toBe(110);
+});
+
+test("a gain updates what the card derives from the balance", async () => {
+  const { service } = make([alpha(100)]);
+  clock = 10_000;
+  await service.refresh();
+  clock += 60_000;
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 25), balance: 125 });
+  const card = service.snapshot().streamers[0];
+  expect(card.gainedStream).toBe(25);
+  expect(card.lastActivity?.type).toBe("GAIN_FOR_WATCH");
+});
+
+test("a gain leaves everything only a poll can know alone", async () => {
+  const raw = alpha(100);
+  Object.assign(raw.streamers[0], { multiplier: 1.2, claimPending: true, goal: null });
+  const { service } = make([raw]);
+  await service.refresh();
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  const card = service.snapshot().streamers[0];
+  expect(card.multiplier).toBe(1.2);
+  expect(card.displayName).toBe("Alpha");
+  expect(card.liveSince).toBe(1000);
+});
+
+test("a gain with no balance still falls back to a refresh", async () => {
+  vi.useFakeTimers();
+  const { service, request } = make([alpha(100), alpha(110)]);
+  await service.refresh();
+  service.ring("GAIN_FOR_WATCH", gain("alpha", 10));
+  await vi.advanceTimersByTimeAsync(200);
+  expect(request).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
+});
+
+test("a stale poll cannot put a balance back that an event moved on", async () => {
+  // The poll was sent before the gain, so it answers with the old balance.
+  // A follow-up pass has to correct the card, and the old figure must not
+  // reach the history as a dip.
+  const held = deferred<unknown>();
+  const queue: unknown[] = [alpha(110)];
+  const request = vi.fn(async () => (request.mock.calls.length === 1 ? held.promise : queue.shift()));
+  const service = new StateService({
+    client: { request } as never, history, streamers,
+    getStreamers: () => ["alpha"], debounceMs: 1, now: () => clock,
+  });
+  const first = service.refresh();
+  await tick();
+  await tick();
+  clock += 500;
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  held.resolve(alpha(100));
+  await first;
+  await new Promise((r) => setTimeout(r, 20));
+  expect(history.seriesSince("alpha", 0).map((p) => p.balance)).toEqual([110]);
+  expect(service.snapshot().streamers[0].points).toBe(110);
+});
+
+test("a channel configured with capitals keeps one point history", async () => {
+  // The roster keeps a name as typed and the miner's events are lower-cased,
+  // so the two have to land on the same series.
+  const raw = alpha(100);
+  raw.streamers[0].username = "Alpha";
+  const { service } = make([raw], ["Alpha"]);
+  await service.refresh();
+  clock += 1000;
+  service.ring("GAIN_FOR_WATCH", { ...gain("alpha", 10), balance: 110 });
+  expect(history.latest("Alpha")).toBe(110);
+  expect(history.latest("alpha")).toBeNull();
+  expect(service.snapshot().streamers[0].points).toBe(110);
+});
+
+test("an error row says which part of the miner reported it", async () => {
+  const { service } = make([alpha(100)]);
+  await service.refresh();
+  const events = vi.fn();
+  service.on("event", events);
+  service.ring("ERROR", { message: "boom", context: "Drops Claimer" });
+  expect(events.mock.calls[0][0].context).toBe("Drops Claimer");
+});
+
+test("spending points moves the balance the same way", async () => {
+  const { service, request } = make([alpha(100)]);
+  await service.refresh();
+  service.ring("POINTS_SPENT", { streamer: "alpha", balance: 40 });
+  expect(service.snapshot().streamers[0].points).toBe(40);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("a claimed bonus clears the card's claim flag without a poll", async () => {
+  const raw = alpha(100);
+  Object.assign(raw.streamers[0], { claimPending: true });
+  const { service, request } = make([raw]);
+  await service.refresh();
+  service.ring("BONUS_CLAIM", { streamer: "alpha" });
+  await new Promise((r) => setTimeout(r, 80));
+  expect(service.snapshot().streamers[0].claimPending).toBe(false);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("an announced watch slot moves the badge without a poll", async () => {
+  const { service, request } = make([alpha(100)]);
+  await service.refresh();
+  service.ring("CHANGING_WATCH_SLOTS", { watching: ["alpha"] });
+  await new Promise((r) => setTimeout(r, 80));
+  expect(service.snapshot().streamers[0].watching).toBe(true);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("an event that only adds to the feed asks Twitch for nothing", async () => {
+  const { service, request } = make([alpha(100)]);
+  await service.refresh();
+  service.ring("JOIN_RAID", { streamer: "alpha", message: "raid" });
+  await new Promise((r) => setTimeout(r, 80));
+  expect(request).toHaveBeenCalledOnce();
+  expect(service.snapshot().streamers[0].lastActivity?.type).toBe("JOIN_RAID");
+});
+
+test("a stream going live still refreshes, for the stream id only Twitch has", async () => {
+  vi.useFakeTimers();
+  const { service, request } = make([alpha(100, false), alpha(100)]);
+  await service.refresh();
+  service.ring("STREAMER_ONLINE", { streamer: "alpha" });
+  await vi.advanceTimersByTimeAsync(200);
+  expect(request).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
+});
+
+test("an event type this side has never heard of refreshes to be safe", async () => {
+  vi.useFakeTimers();
+  const { service, request } = make([alpha(100), alpha(100)]);
+  await service.refresh();
+  service.ring("SOMETHING_NEW", { streamer: "alpha" });
+  await vi.advanceTimersByTimeAsync(200);
+  expect(request).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
+});
+
+function withDrops(drops: object, roster = ["alpha"], responses: unknown[] = [alpha(100)]) {
+  const queue = [...responses];
+  const request = vi.fn(async () => queue.shift());
+  const service = new StateService({
+    client: { request } as never, history, streamers,
+    getStreamers: () => roster, debounceMs: 50, now: () => clock, drops: drops as never,
+  });
+  return { service, request };
+}
+
+const moving = {
+  id: "d1", name: "Crate", minutes: 21, required: 60, claimable: false,
+  benefits: [], endsAt: null, linked: true, linkUrl: null,
+};
+const seenDrop = {
+  id: "d1", name: "Crate", minutes: 21, required: 60, benefits: [], endsAt: null,
+};
+
+test("drop progress moves the badge at once, without asking Twitch", async () => {
+  const observe = vi.fn(() => moving);
+  const { service, request } = withDrops({
+    resolve: async () => new Map([["alpha", { ...moving, minutes: 20 }]]), observe, forget: vi.fn(),
+  });
+  await service.refresh();
+  service.ring("DROP_STATUS", { streamer: "alpha", drop: seenDrop });
+  await new Promise((r) => setTimeout(r, 80));
+  expect(observe).toHaveBeenCalledWith("alpha", seenDrop);
+  expect(service.snapshot().streamers[0].drop?.minutes).toBe(21);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("drop progress reaches the cache with nobody watching", async () => {
+  const observe = vi.fn(() => moving);
+  const { service } = withDrops({ resolve: async () => new Map(), observe, forget: vi.fn() });
+  service.ring("DROP_STATUS", { streamer: "alpha", drop: seenDrop });
+  expect(observe).toHaveBeenCalledOnce();
+});
+
+test("drop progress stays out of the feed and the card's activity line", async () => {
+  const { service } = withDrops({
+    resolve: async () => new Map(), observe: () => moving, forget: vi.fn(),
+  });
+  await service.refresh();
+  const events = vi.fn();
+  service.on("event", events);
+  service.ring("DROP_STATUS", { streamer: "alpha", message: "1/60", drop: seenDrop });
+  expect(events).not.toHaveBeenCalled();
+  expect(history.recentEvents(10)).toEqual([]);
+});
+
+test("a claim attempt forgets the drop and refreshes for the next one", async () => {
+  vi.useFakeTimers();
+  const forget = vi.fn();
+  const { service, request } = withDrops(
+    { resolve: async () => new Map(), observe: vi.fn(), forget }, ["alpha"], [alpha(100), alpha(100)],
+  );
+  await service.refresh();
+  service.ring("DROP_CLAIM", { streamer: null, drop: seenDrop });
+  await vi.advanceTimersByTimeAsync(200);
+  expect(forget).toHaveBeenCalledWith("d1");
+  expect(request).toHaveBeenCalledTimes(2);
+  vi.useRealTimers();
+});
+
+// --- polling backs off while events carry the state ---
+
+function polling(connected: () => boolean, responses: unknown[]) {
+  const queue = [...responses];
+  const request = vi.fn(async () => queue.shift() ?? alpha(100));
+  const service = new StateService({
+    client: { request } as never, history, streamers,
+    getStreamers: () => ["alpha"], intervalMs: 60_000, clientsConnected: connected,
+    now: () => clock,
+  });
+  return { service, request };
+}
+
+test("with the miner running and nobody watching, polls drop to the slow clock", async () => {
+  vi.useFakeTimers();
+  const { service, request } = polling(() => false, [alpha(100)]);
+  service.minerRunning(true);
+  await service.start();
+  expect(request).toHaveBeenCalledOnce();
+  for (let minute = 1; minute < 5; minute++) {
+    clock += 60_000;
+    await vi.advanceTimersByTimeAsync(60_000);
+  }
+  expect(request).toHaveBeenCalledOnce();
+  clock += 60_000;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  service.stop();
+  vi.useRealTimers();
+});
+
+test("a skipped poll still marks the miner session alive", async () => {
+  vi.useFakeTimers();
+  const { service } = polling(() => false, [alpha(100)]);
+  history.openMinerSession(clock);
+  service.minerRunning(true);
+  await service.start();
+  const beat = vi.spyOn(history, "beatMinerSession");
+  clock += 60_000;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(beat).toHaveBeenCalledWith(clock);
+  service.stop();
+  vi.useRealTimers();
+});
+
+test("a stopped miner keeps the ordinary poll, since no events are coming", async () => {
+  vi.useFakeTimers();
+  const { service, request } = polling(() => false, [alpha(100)]);
+  service.minerRunning(false);
+  await service.start();
+  clock += 60_000;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  service.stop();
+  vi.useRealTimers();
+});
+
+test("an open dashboard keeps the ordinary poll, for what no event reports", async () => {
+  vi.useFakeTimers();
+  const { service, request } = polling(() => true, [alpha(100)]);
+  service.minerRunning(true);
+  await service.start();
+  clock += 60_000;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  service.stop();
+  vi.useRealTimers();
+});
+
+test("a failing poll is retried on the ordinary clock", async () => {
+  vi.useFakeTimers();
+  const { service, request } = polling(() => false, [new Error("x"), new Error("x")]);
+  // The error objects resolve rather than throw through this queue, so
+  // make the failure real.
+  request.mockRejectedValue(new Error("down"));
+  service.minerRunning(true);
+  await service.start();
+  clock += 60_000;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  service.stop();
+  vi.useRealTimers();
 });

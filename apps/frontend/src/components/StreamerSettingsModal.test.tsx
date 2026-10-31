@@ -69,7 +69,7 @@ test("the filter condition's measure is editable, not fixed", async () => {
   // options in the DOM, so an unscoped count collects all of them. The
   // dropdown wrapper is display:none, hence hidden:true throughout.
   const listbox = document.getElementById(measure.getAttribute("aria-controls") ?? "");
-  expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(6);
+  expect(listbox?.querySelectorAll('[role="option"]')).toHaveLength(8);
   await userEvent.click(screen.getByRole("option", { name: "Odds", hidden: true }));
   expect(onChange).toHaveBeenCalledWith({
     makePredictions: true,

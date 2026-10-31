@@ -66,16 +66,17 @@ export const NESTED_TO_PYTHON: Record<string, Record<string, string>> = {
   filterCondition: { by: "by", where: "where", value: "value" },
 };
 
-/** Upstream marks DECISION_USERS/DECISION_POINTS as keys that do not exist. */
 export const OUTCOME_KEYS = [
   "percentage_users", "odds_percentage", "odds",
   "top_points", "total_users", "total_points",
+  "decision_users", "decision_points",
 ] as const;
 
 export const STRATEGIES = [
   "MOST_VOTED", "HIGH_ODDS", "PERCENTAGE", "SMART_MONEY", "SMART",
   "NUMBER_1", "NUMBER_2", "NUMBER_3", "NUMBER_4",
   "NUMBER_5", "NUMBER_6", "NUMBER_7", "NUMBER_8",
+  "NUMBER_9", "NUMBER_10",
 ] as const;
 
 const filterConditionSchema = z
@@ -131,7 +132,7 @@ export const usernameSchema = z.string().regex(/^[a-zA-Z0-9_]{4,25}$/);
 export const accountUsernameSchema = z.union([z.literal(""), usernameSchema]);
 
 export const PRIORITIES = [
-  "ORDER", "STREAK", "DROPS", "SUBSCRIBED",
+  "ORDER", "STREAK", "DROPS", "DROPS_ENDING_SOONEST", "SUBSCRIBED",
   "POINTS_ASCENDING", "POINTS_DESCENDING", "WATCH_SESSION", "WEEKLY_REWARDS",
 ] as const;
 
@@ -156,6 +157,7 @@ const minerSchema = z
   .object({
     priority: z.array(z.enum(PRIORITIES)).optional(),
     claimDropsStartup: z.boolean().optional(),
+    disableAtInNickname: z.boolean().optional(),
     gql: z.object({
       attempts: z.number().int().positive(),
       attemptIntervalSeconds: z.number().nonnegative(),
@@ -168,6 +170,7 @@ const minerSchema = z
 export const MINER_TO_PYTHON: Record<string, string> = {
   priority: "priority",
   claimDropsStartup: "claim_drops_startup",
+  disableAtInNickname: "disable_at_in_nickname",
   gql: "gql",
   weeklyRewards: "weekly_rewards",
   watchStreakRecovery: "watch_streak_recovery",

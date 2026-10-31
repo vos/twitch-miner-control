@@ -42,7 +42,7 @@ export interface Recap {
   };
 }
 
-const EVENT_TYPES = ["BONUS_CLAIM", "JOIN_RAID", "DROP_CLAIM", "GAIN_FOR_WATCH_STREAK"] as const;
+const EVENT_TYPES = ["BONUS_CLAIM", "JOIN_RAID", "GAIN_FOR_WATCH_STREAK"] as const;
 
 function bounds(kind: PeriodKind, now: number, offset: number): { from: number; end: number } {
   return kind === "week"
@@ -158,7 +158,7 @@ export function buildRecap(deps: InsightsDeps, now: number, kind: PeriodKind, of
       longestStreak,
       bonusClaims: events.BONUS_CLAIM,
       raids: events.JOIN_RAID,
-      dropsClaimed: events.DROP_CLAIM,
+      dropsClaimed: deps.history.countClaims(from, to),
       watchStreakBonuses: events.GAIN_FOR_WATCH_STREAK,
     },
   };
@@ -191,7 +191,7 @@ export function buildDaySummary(deps: InsightsDeps, day: string, now: number): D
     day,
     earned: summary.totals.earned,
     minedMs: summary.totals.minedMs,
-    dropsClaimed: deps.history.countEvents(["DROP_CLAIM"], from, to).DROP_CLAIM,
+    dropsClaimed: deps.history.countClaims(from, to),
     top: top === null ? null : { ...top, displayName },
     hasData: summary.hasData,
   };

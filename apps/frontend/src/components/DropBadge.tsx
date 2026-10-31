@@ -1,4 +1,4 @@
-import { Badge, Popover, Progress, Text } from "@mantine/core";
+import { Anchor, Badge, Popover, Progress, Text } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { formatSpan } from "../lib/formatSpan.js";
 import classes from "./DropBadge.module.css";
@@ -31,6 +31,10 @@ export function DropBadge({ drop }: { drop: Drop }) {
   const left = Math.max(0, drop.required - drop.minutes);
   const benefits = drop.benefits ?? [];
   const endsAt = drop.endsAt ?? null;
+  // ALL mode earns an unlinked campaign's drops, but the miner only claims
+  // on a linked account, so a finished one is not ready for anything yet.
+  const unlinked = drop.linked === false;
+  const ready = drop.claimable && !unlinked;
 
   return (
     <Popover
@@ -60,12 +64,18 @@ export function DropBadge({ drop }: { drop: Drop }) {
           onClick={toggle}
           aria-expanded={opened}
           aria-label={
-            drop.claimable
+            ready
               ? `${drop.name} drop ready to claim`
-              : `${drop.name} drop, ${drop.minutes} of ${drop.required} minutes`
+              : drop.claimable
+                ? `${drop.name} drop earned, link the game account to claim it`
+                : `${drop.name} drop, ${drop.minutes} of ${drop.required} minutes`
           }
         >
-          {drop.claimable ? "drop ready" : `drop ${drop.minutes}/${drop.required}m`}
+          {ready
+            ? "drop ready"
+            : drop.claimable
+              ? "link to claim"
+              : `drop ${drop.minutes}/${drop.required}m`}
         </Badge>
       </Popover.Target>
       <Popover.Dropdown data-testid="drop-detail">
@@ -83,9 +93,23 @@ export function DropBadge({ drop }: { drop: Drop }) {
           {/* "0 minutes to go" on a finished drop reads as though it were
               still counting; what changed is that it can be collected. */}
           {left === 0
-            ? `${drop.minutes}/${drop.required}m · ready to claim`
+            ? `${drop.minutes}/${drop.required}m · ${unlinked ? "needs a linked account" : "ready to claim"}`
             : `${drop.minutes}/${drop.required}m · ${left} min to go`}
         </Text>
+
+        {unlinked && (
+          <Text size="xs" mt={6} data-testid="drop-unlinked">
+            The miner only claims drops on a linked game account.
+            {drop.linkUrl && (
+              <>
+                {" "}
+                <Anchor href={drop.linkUrl} target="_blank" rel="noopener noreferrer" inherit>
+                  Link it
+                </Anchor>
+              </>
+            )}
+          </Text>
+        )}
 
         {benefits.length > 0 && (
           <Text size="xs" mt={6} data-testid="drop-benefits">

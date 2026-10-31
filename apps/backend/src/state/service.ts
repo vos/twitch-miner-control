@@ -5,7 +5,7 @@ import { downsample, gainWindow } from "./gains.js";
 import { clip, intersect, total } from "./spans.js";
 import { normaliseUsername } from "./roster.js";
 import type { ProfileRowData } from "./profiles.js";
-import type { DropProgress, DropsTarget } from "./drops.js";
+import type { DropProgress, DropsTarget, ObservedDrop } from "./drops.js";
 import type { GiftSub, GiftSubsCache } from "./giftSubs.js";
 import { roundViewers } from "./viewers.js";
 
@@ -139,14 +139,7 @@ export interface StreamerState {
    * none -- including when the miner is not claiming drops for it, in
    * which case we have not looked rather than found nothing.
    */
-  drop: {
-    name: string;
-    minutes: number;
-    required: number;
-    claimable: boolean;
-    benefits: string[];
-    endsAt: number | null;
-  } | null;
+  drop: DropProgress | null;
   /** The channel's category, or null when it has none set. */
   game: string | null;
   /**
@@ -249,6 +242,57 @@ const LIVENESS_TRUST_MS = 15 * 60_000;
 const QUANTUM_MS = 5 * 60_000;
 const quantise = (ms: number) => Math.floor(ms / QUANTUM_MS) * QUANTUM_MS;
 
+/**
+ * How often to poll while the miner runs and nobody is watching.
+ *
+ * Everything stored from a poll reaches this process another way in that
+ * state: balances and watch slots arrive on the miner's events, and a stream
+ * starting or ending rings a refresh of its own. This pass reconciles what an
+ * event missed, so it can sit well off the ordinary 60s poll, which spends
+ * two GQL requests per channel.
+ */
+export const IDLE_POLL_MS = 5 * 60_000;
+
+/**
+ * What the miner's events say besides their type.
+ *
+ * `watching` is its whole watch-slot set; see StreamerState.watching. The
+ * rest is optional because an event type carries only what applies to it.
+ */
+export interface DoorbellFacts extends EventFacts {
+  watching?: string[];
+  /** The exact balance after a points event. */
+  balance?: number | null;
+  drop?: ObservedDrop;
+  /** Twitch's reason for refusing a prediction. */
+  errorCode?: string | null;
+  /** Which part of the miner reported an error. */
+  context?: string | null;
+}
+
+/** Events that change a card only through a balance, which they carry. */
+const isPointsEvent = (type: string) => type.startsWith("GAIN_FOR_") || type === "POINTS_SPENT";
+
+/**
+ * Events whose whole effect is on the feed or on facts they carry, so
+ * nothing about them needs asking Twitch. Anything not listed refreshes,
+ * which is the safe answer for an event type added upstream.
+ */
+const SETTLED_BY_EVENT: ReadonlySet<string> = new Set([
+  "BONUS_CLAIM", "CHANGING_WATCH_SLOTS", "CHAT_MENTION", "DROP_STATUS", "ERROR",
+  "JOIN_RAID", "MOMENT_CLAIM", "PREDICTION_EVENT_CLOSED", "PREDICTION_EVENT_START",
+  "PREDICTION_FAILED", "PREDICTION_FILTERS", "PREDICTION_LOSE", "PREDICTION_MADE",
+  "PREDICTION_REFUND", "PREDICTION_WIN", "WATCH_STREAK_MISSING",
+  "WATCH_STREAK_PROGRESS", "WATCH_STREAK_RECOVERY",
+]);
+
+/**
+ * Events that update a badge and are not themselves news. Drop progress
+ * arrives a minute at a time per watched channel, which would bury the feed
+ * and push everything else off the card's activity line.
+ */
+const NOT_IN_FEED: ReadonlySet<string> = new Set(["DROP_STATUS"]);
+
 export interface StateSnapshot {
   streamers: StreamerState[];
   /**
@@ -331,6 +375,8 @@ export interface StateServiceDeps {
    */
   drops?: {
     resolve(targets: DropsTarget[]): Promise<Map<string, DropProgress>>;
+    observe(login: string, seen: ObservedDrop): DropProgress | null;
+    forget(dropId: string): void;
   };
   /**
    * The account's gift subs, fetched on their own triggers (see
@@ -390,6 +436,13 @@ export class StateService extends EventEmitter {
    * them; null when it has not announced them to this process yet.
    */
   private watchSlots: ReadonlySet<string> | null = null;
+  /** Whether the miner is running, and so whether events are arriving. */
+  private miner = false;
+  /**
+   * When an event last set each channel's balance. A poll sent before that
+   * answers with the older figure, which must not reach the history.
+   */
+  private readonly balanceEventAt = new Map<string, number>();
   /**
    * Whether `this.streamers` is missing the fields a dashboard renders.
    *
@@ -551,6 +604,7 @@ export class StateService extends EventEmitter {
       return;
     }
     const epoch = this.errorEpoch;
+    const askedAt = this.now();
 
     // Nothing drawable is being held -- a cold start, or the first pass
     // after a stretch with nobody watching. Paint from the database now
@@ -590,7 +644,8 @@ export class StateService extends EventEmitter {
       // close a session against a balance it had not written yet.
       const started: StreamsFrame["started"] = [];
       for (const s of data.streamers) {
-        if (typeof s.points === "number") {
+        const overtaken = (this.balanceEventAt.get(s.username) ?? 0) > askedAt;
+        if (typeof s.points === "number" && !overtaken) {
           this.deps.history.recordPoints(s.username, s.points, at);
         }
 
@@ -793,12 +848,7 @@ export class StateService extends EventEmitter {
       // An offline channel is never being watched, whatever the last
       // gain says: the guard keeps a stale event from outliving the
       // stream it came from when a channel drops inside the window.
-      watching: (() => {
-        if (s.isOnline !== true) return false;
-        if (this.watchSlots !== null) return this.watchSlots.has(normaliseUsername(s.username));
-        const gained = this.deps.history.lastWatchGain(s.username);
-        return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
-      })(),
+      watching: this.isWatched(s, at),
       online24h: quantise(total(online)),
       mined24h: quantise(mined24h),
       minedTotal: quantise(minedTotal),
@@ -807,6 +857,13 @@ export class StateService extends EventEmitter {
           ? null
           : Math.round((gained24h / (mined24h / HOUR_MS)) * 10) / 10,
     };
+  }
+
+  private isWatched(s: { username: string; isOnline: boolean | null }, at: number): boolean {
+    if (s.isOnline !== true) return false;
+    if (this.watchSlots !== null) return this.watchSlots.has(normaliseUsername(s.username));
+    const gained = this.deps.history.lastWatchGain(s.username);
+    return gained !== null && at - gained <= WATCH_GAIN_TTL_MS;
   }
 
   /**
@@ -967,37 +1024,117 @@ export class StateService extends EventEmitter {
   }
 
   /**
-   * Doorbell: something happened, refresh soon. Bursts coalesce.
+   * Doorbell: the miner reports something that happened.
    *
-   * `watching`, when present, is the miner's whole watch-slot set as of
-   * this event; see StreamerState.watching.
+   * The event's own facts go straight onto the store and the held cards,
+   * so the dashboard moves at once and Twitch is not asked for what the
+   * miner just said. A refresh follows only for what an event cannot
+   * carry; those bursts coalesce.
    */
-  ring(eventType: string, facts: EventFacts & { watching?: string[] } = {}): void {
-    const { watching, ...recorded } = facts;
+  ring(eventType: string, facts: DoorbellFacts = {}): void {
+    const { watching, balance, drop, errorCode, context, ...recorded } = facts;
     const ts = this.now();
-    this.deps.history.recordEvent(eventType, ts, recorded);
+    if (!NOT_IN_FEED.has(eventType)) {
+      this.deps.history.recordEvent(eventType, ts, recorded);
+      // Pushed straight to connected clients, in the row shape /api/events
+      // serves. Emitted per ring rather than alongside the debounced
+      // "change": a burst coalesces into one refresh, but each ring is its
+      // own feed row and dropping any would leave a hole in the log.
+      this.emit("event", {
+        ts, type: eventType, message: recorded.message ?? null, earned: recorded.earned ?? null,
+        errorCode: errorCode ?? undefined,
+        context: context ?? undefined,
+      });
+    }
     if (watching !== undefined) this.watchSlots = new Set(watching.map(normaliseUsername));
-    // Pushed straight to connected clients, in the row shape /api/events
-    // serves. Emitted per ring rather than alongside the debounced
-    // "change": a burst coalesces into one refresh, but each ring is its
-    // own feed row and dropping any would leave a hole in the log.
-    this.emit("event", {
-      ts, type: eventType, message: recorded.message ?? null, earned: recorded.earned ?? null,
-    });
-    if (this.debounceTimer) return;
+    this.applyEvent(eventType, facts, ts);
+
+    const settled = SETTLED_BY_EVENT.has(eventType)
+      || (isPointsEvent(eventType) && typeof balance === "number");
+    // A poll already out was built before this event, so it still needs the
+    // follow-up that a refresh during one arranges.
+    if ((settled && this.inFlight === null) || this.debounceTimer) return;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       void this.refresh();
     }, this.deps.debounceMs ?? 2000);
   }
 
+  /** Puts what an event says onto the store and the held cards. */
+  private applyEvent(eventType: string, facts: DoorbellFacts, ts: number): void {
+    const login = facts.streamer ? normaliseUsername(facts.streamer) : null;
+    const change: Partial<RawStreamerState> = {};
+    if (login !== null && typeof facts.balance === "number") {
+      // Under the roster's spelling, which is what polls record it under.
+      const stored = this.roster.find((name) => normaliseUsername(name) === login) ?? login;
+      this.deps.history.recordPoints(stored, facts.balance, ts);
+      this.balanceEventAt.set(stored, ts);
+      change.points = facts.balance;
+    }
+    if (eventType === "BONUS_CLAIM") change.claimPending = false;
+
+    let drop: DropProgress | null = null;
+    if (eventType === "DROP_STATUS" && login !== null && facts.drop !== undefined) {
+      drop = this.deps.drops?.observe(login, facts.drop) ?? null;
+    }
+    if (eventType === "DROP_CLAIM" && facts.drop !== undefined) {
+      this.deps.drops?.forget(facts.drop.id);
+    }
+
+    // Nothing is held to update: the next derive reads what was stored above.
+    if (this.undrawn) return;
+    if (login !== null) this.rederive(login, change, drop);
+    if (facts.watching !== undefined) {
+      this.streamers = this.streamers.map((s) => ({ ...s, watching: this.isWatched(s, ts) }));
+    }
+    if (login !== null || facts.watching !== undefined) this.emit("change", this.snapshot());
+  }
+
+  /** Rebuilds one held card, keeping what only a poll can know. */
+  private rederive(
+    login: string,
+    change: Partial<RawStreamerState>,
+    drop: DropProgress | null,
+  ): void {
+    const held = this.streamers.find((s) => normaliseUsername(s.username) === login);
+    if (held === undefined) return;
+    const at = this.now();
+    const profile: ProfileRowData = {
+      avatarUrl: held.avatarUrl, game: held.game, title: held.streamTitle, viewers: held.viewers,
+    };
+    const shown = drop ?? held.drop;
+    const card = this.deriveOne(
+      { ...held, ...change, streamStartedAt: held.liveSince },
+      at,
+      at - DAY_MS,
+      new Map([[login, profile]]),
+      new Map(shown === null ? [] : [[login, shown]]),
+    );
+    this.streamers = this.streamers.map((s) => (s === held ? card : s));
+  }
+
   /**
-   * Resets the announced watch slots when the miner process changes state.
-   * A miner that is not running watches nothing; a newly running one has
-   * not announced its choice yet, so the inference applies until it does.
+   * Hears the miner process change state. A miner that is not running
+   * watches nothing; a newly running one has not announced its choice yet,
+   * so the inference applies until it does.
    */
-  resetWatchSlots(minerRunning: boolean): void {
-    this.watchSlots = minerRunning ? null : new Set();
+  minerRunning(running: boolean): void {
+    this.miner = running;
+    this.watchSlots = running ? null : new Set();
+  }
+
+  /** Whether this tick should ask Twitch; see IDLE_POLL_MS. */
+  private pollDue(): boolean {
+    if (!this.miner || this.deps.clientsConnected?.() !== false) return true;
+    return this.lastUpdated === null || this.now() - this.lastUpdated >= IDLE_POLL_MS;
+  }
+
+  private tick(): void {
+    if (this.pollDue()) {
+      void this.refresh();
+    } else {
+      this.deps.history.beatMinerSession(this.now());
+    }
   }
 
   /**
@@ -1013,7 +1150,7 @@ export class StateService extends EventEmitter {
     // Already running: there is no new boot pass to report, and the
     // caller must not be handed a promise for one that settled long ago.
     if (this.ticker) return Promise.resolve();
-    this.ticker = setInterval(() => void this.refresh(), this.deps.intervalMs ?? 60_000);
+    this.ticker = setInterval(() => this.tick(), this.deps.intervalMs ?? 60_000);
     // Arming the interval alone left the first tick a full period away, so
     // for 60s after every restart the dashboard rendered a confident total
     // of 0 built from no data at all. Kick one refresh immediately so the

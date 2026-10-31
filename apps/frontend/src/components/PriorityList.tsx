@@ -20,7 +20,8 @@ import { IconGripVertical, IconPlus, IconX } from "@tabler/icons-react";
  * frontend cannot import across the package boundary.
  */
 export const PRIORITY_LABELS: Array<[string, string]> = [
-  ["STREAK", "Watch streaks"], ["DROPS", "Drops"], ["SUBSCRIBED", "Subscribed"],
+  ["STREAK", "Watch streaks"], ["DROPS", "Drops"],
+  ["DROPS_ENDING_SOONEST", "Drops ending soonest"], ["SUBSCRIBED", "Subscribed"],
   ["WATCH_SESSION", "Watch session"], ["WEEKLY_REWARDS", "Weekly rewards"],
   ["ORDER", "List order"], ["POINTS_ASCENDING", "Fewest points first"],
   ["POINTS_DESCENDING", "Most points first"],

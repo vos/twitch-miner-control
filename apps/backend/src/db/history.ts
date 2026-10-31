@@ -17,6 +17,16 @@ export interface EventFacts {
   earned?: number | null;
 }
 
+/** A drop reward Twitch confirms was claimed. */
+export interface DropClaim {
+  /** Twitch's id for this reward. */
+  id: string;
+  name: string;
+  campaignId: string;
+  /** Epoch ms. */
+  earnedAt: number;
+}
+
 export interface SessionRow {
   streamId: string;
   start: number;
@@ -409,6 +419,28 @@ export class History {
           ORDER BY start_ts ASC`,
       )
       .all(fromTs) as { streamer: string; start: number; end: number | null }[];
+  }
+
+  /** Stores claims, returning the ones not already held. */
+  recordClaims(claims: readonly DropClaim[]): DropClaim[] {
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO drop_claims (id, name, campaign_id, earned_at) VALUES (?, ?, ?, ?)",
+    );
+    return this.db.transaction(() => claims.filter(
+      (c) => insert.run(c.id, c.name, c.campaignId, c.earnedAt).changes > 0,
+    ))();
+  }
+
+  hasClaims(): boolean {
+    return this.db.prepare("SELECT 1 FROM drop_claims LIMIT 1").get() !== undefined;
+  }
+
+  /** How many claims were earned in `[fromTs, toTs)`. */
+  countClaims(fromTs: number, toTs: number): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM drop_claims WHERE earned_at >= ? AND earned_at < ?")
+      .get(fromTs, toTs) as { n: number };
+    return row.n;
   }
 
   /**

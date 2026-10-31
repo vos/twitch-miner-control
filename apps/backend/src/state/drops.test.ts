@@ -206,3 +206,86 @@ test("normalises logins so config and live state agree", async () => {
   const out = await cache.resolve([{ username: "Alpha", channelId: "42" }]);
   expect(out.get("alpha")).toEqual(drop());
 });
+
+const seen = (over: object = {}) => ({
+  id: "d1", name: "Crate", minutes: 46, required: 60, benefits: ["Charm"], endsAt: 5, ...over,
+});
+
+test("a progress event moves the held drop without asking Twitch", async () => {
+  const { cache, request } = make([{ drops: { alpha: drop({ id: "d1", minutes: 45 }) } }]);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(cache.observe("alpha", seen())?.minutes).toBe(46);
+  const out = await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(out.get("alpha")?.minutes).toBe(46);
+  expect(request).toHaveBeenCalledOnce();
+});
+
+test("a progress event keeps what only the helper knows about the drop", async () => {
+  const { cache } = make([{ drops: { alpha: drop({
+    id: "d1", linked: false, linkUrl: "https://example.com", claimable: false,
+  }) } }]);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(cache.observe("alpha", seen())).toMatchObject({
+    linked: false, linkUrl: "https://example.com",
+  });
+});
+
+test("a progress event does not reset the clock that rereads Twitch", async () => {
+  // The helper's answer also carries the claimable state, which progress
+  // events do not, so the TTL keeps running underneath them.
+  const { cache, request } = make([
+    { drops: { alpha: drop({ id: "d1" }) } },
+    { drops: { alpha: drop({ id: "d1", claimable: true }) } },
+  ]);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  clock += DROPS_TTL_MS - 1;
+  cache.observe("alpha", seen());
+  clock += 2;
+  const out = await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(out.get("alpha")?.claimable).toBe(true);
+});
+
+test("the drop the miner is actually progressing replaces another on the badge", async () => {
+  const { cache } = make([{ drops: { alpha: drop({ id: "d1", linked: false }) } }]);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(cache.observe("alpha", seen({ id: "d2", name: "Hat" }))).toMatchObject({
+    id: "d2", name: "Hat", claimable: false, linked: false,
+  });
+});
+
+test("a progress event fills in a channel asked about and found empty", async () => {
+  const { cache } = make([{ drops: { alpha: null } }]);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  expect(cache.observe("alpha", seen())).toMatchObject({ id: "d1", linked: true });
+});
+
+test("a progress event for a channel never asked about waits for the helper", async () => {
+  // Only the helper can say whether the account is linked.
+  const { cache } = make([]);
+  expect(cache.observe("alpha", seen())).toBeNull();
+});
+
+test("a progress event for a channel not claiming drops is ignored", async () => {
+  let on = true;
+  const { cache } = make([{ drops: { alpha: drop({ id: "d1" }) } }], () => on);
+  await cache.resolve([{ username: "alpha", channelId: "42" }]);
+  on = false;
+  expect(cache.observe("alpha", seen())).toBeNull();
+});
+
+test("a claim forgets the drop on every channel holding it", async () => {
+  // Campaigns span channels, and the claim event names no channel.
+  const { cache, request } = make([
+    { drops: { alpha: drop({ id: "d1" }), beta: drop({ id: "d1" }) } },
+    { drops: { alpha: drop({ id: "d2", name: "Next" }), beta: drop({ id: "d2", name: "Next" }) } },
+  ]);
+  const both = [
+    { username: "alpha", channelId: "42" }, { username: "beta", channelId: "43" },
+  ];
+  await cache.resolve(both);
+  cache.forget("d1");
+  const out = await cache.resolve(both);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(out.get("alpha")?.name).toBe("Next");
+});

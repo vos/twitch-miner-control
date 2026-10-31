@@ -120,11 +120,19 @@ test("channels mined at the same time count once: mined is time spent mining", (
   expect(totals.streams).toBe(3);
 });
 
+test("a recap counts claims Twitch confirmed, not attempts", () => {
+  // An unlinked campaign's drops are retried forever and never claimed.
+  seed();
+  for (let i = 0; i < 50; i++) history.recordEvent("DROP_CLAIM", at(9, 14, 10), { message: "Claim Y" });
+  history.recordClaims([{ id: "r1", name: "X", campaignId: "c1", earnedAt: at(9, 14, 9) }]);
+  expect(buildRecap(deps(), NOW, "week", 0).highlights.dropsClaimed).toBe(1);
+});
+
 // --- one day, for the digest ---
 
 test("a day's summary adds up that day alone", () => {
   seed();
-  history.recordEvent("DROP_CLAIM", at(9, 14, 9), { message: "Claim X", streamer: "alpha" });
+  history.recordClaims([{ id: "r1", name: "X", campaignId: "c1", earnedAt: at(9, 14, 9) }]);
   expect(buildDaySummary(deps(), "2026-09-14", NOW)).toEqual({
     day: "2026-09-14",
     earned: 400,

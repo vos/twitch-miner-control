@@ -494,3 +494,10 @@ test("a selected priority is no longer offered as an add-button", async () => {
   expect(screen.queryByRole("button", { name: "Watch streaks" })).not.toBeInTheDocument();
   expect(screen.getAllByTestId("priority-row")).toHaveLength(1);
 });
+
+test("mentions without an @ can be switched on", async () => {
+  view();
+  await userEvent.click(await screen.findByLabelText(/mentions without an @/i));
+  await userEvent.click(await screen.findByRole("button", { name: /apply & restart/i }));
+  await waitFor(() => expect(sentConfig().miner.disableAtInNickname).toBe(true));
+});

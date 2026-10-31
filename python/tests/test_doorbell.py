@@ -1,17 +1,24 @@
+import datetime
 import threading
 import time
+from types import SimpleNamespace
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.classes.Translator import Translator
 from TwitchChannelPointsMiner.classes.entities.Raid import Raid
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
+from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.events.Event import (
     ChangingWatchSlots,
+    DropClaim,
     DropClaimAvailable,
+    DropProgress,
     Error,
     GainForClaim,
     GiftSubReceived,
     JoinRaid,
+    PointsSpent,
+    PredictionFailed,
     Shutdown,
     StreamerOnline,
     StreamViewCount,
@@ -84,6 +91,65 @@ def test_handle_drops_rather_than_blocks_when_queue_is_full():
     release.set()
     handler.shutdown()
     assert handler.dropped > 0
+
+
+def _drop(minutes=20, required=60, benefits=("Sharky",)):
+    end = datetime.datetime(2026, 11, 15, 12, tzinfo=datetime.timezone.utc)
+    return Drop(
+        _id="d1", name="Charm", benefits=list(benefits), minutes_required=required,
+        subs_required=0, end_at=end, start_at=end, current_minutes_watched=minutes,
+    )
+
+
+def test_gain_carries_the_exact_balance():
+    seen = []
+    _send(_handler(seen), GainForClaim(streamer=_streamer(), amount=50, balance=1234567))
+    assert seen[0]["balance"] == 1234567
+
+
+def test_spending_points_carries_the_exact_balance():
+    seen = []
+    _send(_handler(seen), PointsSpent(streamer=_streamer(), amount=50, balance=900))
+    assert seen[0]["balance"] == 900
+    assert seen[0]["earned"] is None
+
+
+def test_drop_progress_carries_the_drop_as_fields():
+    """The badge moves on these: the message is display text, and the
+    streamer and minutes in it must not be read back out of it."""
+    seen = []
+    _send(_handler(seen), DropProgress(streamer=_streamer(), drop=_drop(), progress=33))
+    assert seen[0]["streamer"] == "forsen"
+    assert seen[0]["drop"] == {
+        "id": "d1", "name": "Charm", "minutes": 20, "required": 60,
+        "benefits": ["Sharky"], "endsAt": 1794744000000,
+    }
+
+
+def test_drop_minutes_are_clamped_to_what_the_drop_needs():
+    seen = []
+    _send(_handler(seen), DropProgress(streamer=_streamer(), drop=_drop(71), progress=100))
+    assert seen[0]["drop"]["minutes"] == 60
+
+
+def test_a_claim_attempt_names_the_drop_it_was_for():
+    seen = []
+    _send(_handler(seen), DropClaim(streamer=None, drop=_drop()))
+    assert seen[0]["drop"]["id"] == "d1"
+
+
+def test_an_error_says_which_part_of_the_miner_reported_it():
+    seen = []
+    _send(_handler(seen), Error(context="Drops Claimer", message="boom", error=None))
+    assert seen[0]["context"] == "Drops Claimer"
+
+
+def test_a_failed_prediction_carries_twitchs_error_code():
+    seen = []
+    _send(_handler(seen), PredictionFailed(
+        streamer=_streamer(), prediction_event=SimpleNamespace(), error_code="MUST_ACCEPT_TOS",
+    ))
+    assert seen[0]["errorCode"] == "MUST_ACCEPT_TOS"
 
 
 def test_gain_carries_streamer_and_exact_amount_as_fields():

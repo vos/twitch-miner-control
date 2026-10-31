@@ -121,6 +121,10 @@ class FakeGQL:
         return self.follows
 
 
+def _one(h, username):
+    return h._state([username])[0]
+
+
 def handler(**kw):
     session = SimpleNamespace(
         gql=FakeGQL(**kw), reload_cookies=lambda: True, is_logged_in=lambda: True
@@ -618,7 +622,7 @@ def test_one_reports_stream_identity_and_start():
         stream_id="STREAM-1",
         started_at=datetime.datetime(2026, 9, 6, 8, 15, tzinfo=datetime.timezone.utc),
     )
-    out = h._one("alpha")
+    out = _one(h, "alpha")
     assert out["streamId"] == "STREAM-1"
     assert out["streamStartedAt"] == 1788682500000
     assert out["isOnline"] is True
@@ -626,7 +630,7 @@ def test_one_reports_stream_identity_and_start():
 
 def test_one_reports_nulls_when_offline():
     h = handler(balances={"alpha": 10}, live={"42": False})
-    out = h._one("alpha")
+    out = _one(h, "alpha")
     assert out["streamId"] is None
     assert out["streamStartedAt"] is None
     assert out["isOnline"] is False
@@ -641,7 +645,7 @@ def test_stream_start_is_json_serialisable():
 def test_unknown_channel_returns_the_same_keys():
     """Every path through _one must agree on its shape."""
     h = handler(balances={})
-    out = h._one("ghost")
+    out = _one(h, "ghost")
     assert out["streamId"] is None
     assert out["streamStartedAt"] is None
 
@@ -726,34 +730,34 @@ def test_one_sums_active_multipliers_into_a_single_factor():
     is the fact we actually have -- multipliers have sources other than a
     sub, so the UI must not be handed a bare boolean called isSubscribed.
     """
-    out = _ctx(multipliers=(1.2,))._one("alpha")
+    out = _one(_ctx(multipliers=(1.2,)), "alpha")
     assert out["multiplier"] == 1.2
 
 
 def test_one_combines_several_multipliers():
-    out = _ctx(multipliers=(1.2, 0.3))._one("alpha")
+    out = _one(_ctx(multipliers=(1.2, 0.3)), "alpha")
     assert out["multiplier"] == 1.5
 
 
 def test_one_reports_no_multiplier_as_null_not_one():
     """1.0 would be a claim that a neutral multiplier is active; null says
     Twitch gave us none, which is what the card needs to hide the badge."""
-    out = _ctx(multipliers=())._one("alpha")
+    out = _one(_ctx(multipliers=()), "alpha")
     assert out["multiplier"] is None
 
 
 def test_one_flags_an_unclaimed_bonus():
-    out = _ctx(claim="claim-1")._one("alpha")
+    out = _one(_ctx(claim="claim-1"), "alpha")
     assert out["claimPending"] is True
 
 
 def test_one_reports_no_claim_when_none_is_waiting():
-    out = _ctx(claim=None)._one("alpha")
+    out = _one(_ctx(claim=None), "alpha")
     assert out["claimPending"] is False
 
 
 def test_one_reports_the_active_community_goal():
-    out = _ctx(goals=(goal(),))._one("alpha")
+    out = _one(_ctx(goals=(goal(),)), "alpha")
     assert out["goal"] == {
         "title": "New emotes", "contributed": 3000, "needed": 10000,
     }
@@ -762,15 +766,15 @@ def test_one_reports_the_active_community_goal():
 def test_one_ignores_a_finished_or_out_of_stock_goal():
     """A goal that has ended is not something the viewer can contribute to,
     so surfacing it would put a dead progress bar on the card."""
-    assert _ctx(goals=(goal(status="ENDED"),))._one("alpha")["goal"] is None
-    assert _ctx(goals=(goal(in_stock=False),))._one("alpha")["goal"] is None
+    assert _one(_ctx(goals=(goal(status="ENDED"),)), "alpha")["goal"] is None
+    assert _one(_ctx(goals=(goal(in_stock=False),)), "alpha")["goal"] is None
 
 
 def test_one_picks_one_goal_when_a_channel_runs_several():
     """The card has room for one. The least-complete is the one still
     worth contributing to."""
-    out = _ctx(goals=(goal(title="Nearly", contributed=9000),
-                      goal(title="Fresh", contributed=100)))._one("alpha")
+    out = _one(_ctx(goals=(goal(title="Nearly", contributed=9000),
+                      goal(title="Fresh", contributed=100))), "alpha")
     assert out["goal"]["title"] == "Fresh"
 
 
@@ -788,7 +792,7 @@ def test_one_survives_a_response_without_the_newer_fields():
             ),
         )
     )
-    out = h._one("alpha")
+    out = _one(h, "alpha")
     assert out["multiplier"] is None
     assert out["claimPending"] is False
     assert out["goal"] is None
@@ -797,7 +801,7 @@ def test_one_survives_a_response_without_the_newer_fields():
 
 def test_unknown_channel_reports_the_new_fields_too():
     """Every path through _one must agree on its shape."""
-    out = handler(balances={})._one("ghost")
+    out = _one(handler(balances={}), "ghost")
     assert out["multiplier"] is None
     assert out["claimPending"] is False
     assert out["goal"] is None
@@ -860,7 +864,7 @@ def test_profiles_survives_a_response_without_the_newer_fields():
 
 
 def _group(name="Crate", required=60, watched=0, status="IN_PROGRESS", subs=0,
-           rewards=("Weapon Charm",), linked=True):
+           rewards=("Weapon Charm",), linked=True, link_url=None):
     """One drop as DropChannelCampaignsProgress reports it: a reward group."""
     return SimpleNamespace(
         id=f"group-{name}", name=name,
@@ -868,7 +872,8 @@ def _group(name="Crate", required=60, watched=0, status="IN_PROGRESS", subs=0,
             minutes_watched=required, subs=subs, turbo_subs=0,
         )),
         rewards=[
-            SimpleNamespace(name=reward, is_account_connected=linked)
+            SimpleNamespace(name=reward, is_account_connected=linked,
+                            account_link_url=link_url)
             for reward in rewards
         ],
         self_edge=SimpleNamespace(
@@ -903,7 +908,8 @@ def test_drops_reports_the_next_unclaimed_drop():
     out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
     assert out["ok"] is True
     assert out["data"]["drops"]["alpha"] == {
-        "name": "Crate", "minutes": 45, "required": 60, "claimable": False,
+        "id": "group-Crate", "name": "Crate", "minutes": 45, "required": 60, "claimable": False,
+        "linked": True, "linkUrl": None,
         "benefits": ["Weapon Charm"], "endsAt": 1789473600000,
     }
 
@@ -916,6 +922,18 @@ def test_drops_reports_a_campaign_that_has_not_started():
     row = _next_drop_row(h)
     assert row["minutes"] == 0
     assert row["required"] == 60
+
+
+def test_drops_says_when_the_game_account_is_not_linked():
+    """ALL mode progresses these, but the miner only claims a drop on a
+    linked account, so the card must not promise a claim."""
+    h = _drops_handler(_campaign(_group(
+        "Crate", required=60, watched=20, linked=False,
+        link_url="https://example.com/link",
+    )))
+    row = _next_drop_row(h, allowUnlinked=["alpha"])
+    assert row["linked"] is False
+    assert row["linkUrl"] == "https://example.com/link"
 
 
 def test_drops_picks_the_nearest_drop_when_several_remain():
@@ -1380,10 +1398,11 @@ def test_directory_fails_for_a_slug_twitch_does_not_know():
     assert out["code"] == "GQL"
 
 
-def _earned_edge(cid="c1", name="Crate"):
-    """One claimed reward as earnedDropRewards reports it."""
-    return {"node": {"campaign": {"id": cid}, "item": {"name": name},
-                     "status": "CLAIMED"}}
+def _earned_edge(cid="c1", name="Crate", status="CLAIMED", reward_id=None,
+                 earned_at="2026-10-31T07:42:44.59Z"):
+    """One reward as earnedDropRewards reports it."""
+    return {"node": {"id": reward_id or f"r-{cid}-{name}", "campaign": {"id": cid},
+                     "item": {"name": name}, "status": status, "earnedAt": earned_at}}
 
 
 def _earned_handler(campaigns=None, edges=None, error=None):
@@ -1417,6 +1436,34 @@ def test_inventory_reports_rewards_claimed_in_a_finished_campaign():
     out = h.handle({"id": 1, "op": "inventory"})
     assert out["ok"] is True
     assert out["data"]["earned"] == {"c1": ["Crate", "Charm"]}
+
+
+def test_inventory_lists_each_verified_claim_with_when_it_was_earned():
+    """The miner announces a claim before attempting it, so this is what
+    says one really happened."""
+    h = _earned_handler(campaigns=[], edges=[_earned_edge("c1", "Crate")])
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["data"]["claims"] == [{
+        "id": "r-c1-Crate", "name": "Crate", "campaignId": "c1",
+        "earnedAt": 1793432564590,
+    }]
+
+
+def test_a_reward_still_waiting_to_be_claimed_is_not_a_claim():
+    """What an unlinked campaign leaves behind: earned, never collected."""
+    h = _earned_handler(campaigns=[], edges=[_earned_edge(status="CLAIMABLE")])
+    assert h.handle({"id": 1, "op": "inventory"})["data"]["claims"] == []
+
+
+def test_a_claim_with_an_unreadable_date_is_skipped():
+    h = _earned_handler(campaigns=[], edges=[_earned_edge(earned_at="soon")])
+    assert h.handle({"id": 1, "op": "inventory"})["data"]["claims"] == []
+
+
+def test_failed_rewards_query_reports_claims_as_unknown():
+    """Null, not empty: nothing was learned, which is not "no claims"."""
+    h = _earned_handler(campaigns=[], error=RuntimeError("boom"))
+    assert h.handle({"id": 1, "op": "inventory"})["data"]["claims"] is None
 
 
 def test_inventory_earned_rewards_are_grouped_by_campaign():
@@ -1624,3 +1671,88 @@ def test_channel_campaigns_reports_auth_failure():
     out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42"]})
     assert out["ok"] is False
     assert out["code"] == "AUTH"
+
+
+class BatchingGQL(FakeGQL):
+    """FakeGQL plus the batch call, answering through the single calls."""
+
+    def __init__(self, fail_batches=(), **kw):
+        super().__init__(**kw)
+        self.batches = []
+        self.fail_batches = fail_batches
+        self.singles = 0
+        self.parser = SimpleNamespace(
+            parse_channel_points_context_response=lambda r: r,
+            parse_with_is_stream_live_query=lambda r: r,
+            parse_drop_channel_campaigns_progress=lambda r: r,
+            parse_video_player_stream_info_overlay_channel_data=lambda r: r,
+        )
+
+    def post_gql_request_batch(self, operation_name, request_json, parser):
+        self.batches.append((operation_name, len(request_json)))
+        if operation_name in self.fail_batches:
+            raise RuntimeError("batch refused")
+        answers = {
+            "ChannelPointsContext": lambda v: FakeGQL.get_channel_points_context(
+                self, v["channelLogin"]),
+            "WithIsStreamLiveQuery": lambda v: FakeGQL.with_is_stream_live_query(
+                self, v["id"]),
+            "DropChannelCampaignsProgress": lambda v: SimpleNamespace(
+                campaigns=[_campaign(_group("Crate", required=60, watched=45))]),
+        }
+        return [answers[operation_name](r["variables"]) for r in request_json]
+
+    def get_channel_points_context(self, username):
+        self.singles += 1
+        return super().get_channel_points_context(username)
+
+
+def _batching(**kw):
+    gql = BatchingGQL(**kw)
+    session = SimpleNamespace(gql=gql, login=None, is_logged_in=lambda: True)
+    return Handler(session), gql
+
+
+def test_state_asks_for_a_whole_roster_in_one_request():
+    h, gql = _batching(balances={"alpha": 100, "beta": 200})
+    out = h.handle({"id": 1, "op": "state", "streamers": ["alpha", "beta"]})
+    assert [r["points"] for r in out["data"]["streamers"]] == [100, 200]
+    assert ("ChannelPointsContext", 2) in gql.batches
+    assert gql.singles == 0
+
+
+def test_drops_ask_for_every_channel_in_one_request():
+    h, gql = _batching()
+    out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42", "beta": "43"}})
+    assert gql.batches == [("DropChannelCampaignsProgress", 2)]
+    assert out["data"]["drops"]["alpha"]["name"] == "Crate"
+    assert out["data"]["drops"]["beta"]["name"] == "Crate"
+
+
+def test_state_splits_a_long_roster_into_chunks_twitch_accepts():
+    names = [f"user{i}" for i in range(45)]
+    h, gql = _batching(balances={n: 1 for n in names})
+    h.handle({"id": 1, "op": "state", "streamers": names})
+    sizes = [n for op, n in gql.batches if op == "ChannelPointsContext"]
+    assert sizes == [20, 20, 5]
+
+
+def test_a_refused_batch_falls_back_to_asking_one_at_a_time():
+    """One bad channel fails a whole batch, and it must not cost the others."""
+    h, gql = _batching(balances={"alpha": 100, "beta": 200},
+                       fail_batches=("ChannelPointsContext",))
+    out = h.handle({"id": 1, "op": "state", "streamers": ["alpha", "beta"]})
+    assert [r["points"] for r in out["data"]["streamers"]] == [100, 200]
+    assert gql.singles == 2
+
+
+def test_an_auth_failure_in_a_batch_is_reported_rather_than_retried_singly():
+    h, gql = _batching(balances={"alpha": 100})
+    def refuse(*a):
+        raise _http_error(401)
+    gql.post_gql_request_batch = refuse
+    h.session.reload_cookies = lambda: None
+    h.session.is_logged_in = lambda: False
+    out = h.handle({"id": 1, "op": "state", "streamers": ["alpha"]})
+    assert out["code"] == "AUTH"
+    assert gql.singles == 0

@@ -730,6 +730,52 @@ test("doorbell ignores a watch-slot set it cannot trust", async () => {
   expect(spy.mock.calls.map((c) => c[1]?.watching)).toEqual([undefined, undefined, undefined]);
 });
 
+test("doorbell forwards an exact balance and refuses a nonsense one", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  await ring({ balance: 1234567 });
+  for (const balance of [-1, 1.5, "10", 1e16]) await ring({ balance });
+  expect(spy.mock.calls.map((c) => c[1]?.balance)).toEqual([1234567, null, null, null, null]);
+});
+
+test("doorbell forwards a well-formed drop", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  const drop = {
+    id: "d1", name: "Charm", minutes: 20, required: 60, benefits: ["Sharky"], endsAt: 5,
+  };
+  await ring({ event: "DROP_STATUS", streamer: "forsen", drop });
+  expect(spy.mock.calls[0][1]?.drop).toEqual(drop);
+});
+
+test("doorbell drops a drop it cannot trust", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  const good = {
+    id: "d1", name: "Charm", minutes: 20, required: 60, benefits: [], endsAt: 5,
+  };
+  for (const drop of [
+    "d1", { ...good, id: "" }, { ...good, minutes: -1 }, { ...good, required: 0 },
+    { ...good, minutes: 61 }, { ...good, benefits: [1] }, { ...good, name: 7 },
+  ]) await ring({ event: "DROP_STATUS", drop });
+  expect(spy.mock.calls.every((c) => c[1]?.drop === undefined)).toBe(true);
+});
+
+test("doorbell forwards a prediction's error code and refuses free text", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  await ring({ event: "PREDICTION_FAILED", errorCode: "MUST_ACCEPT_TOS" });
+  await ring({ event: "PREDICTION_FAILED", errorCode: "<b>nope</b>" });
+  expect(spy.mock.calls.map((c) => c[1]?.errorCode)).toEqual(["MUST_ACCEPT_TOS", null]);
+});
+
+test("doorbell forwards an error's source and bounds it", async () => {
+  const spy = vi.spyOn(ctx.state, "ring");
+  await ring({ event: "ERROR", context: "WebSocket Pool - Hermes" });
+  await ring({ event: "ERROR", context: "x".repeat(81) });
+  await ring({ event: "ERROR", context: 7 });
+  await ring({ event: "ERROR", context: "line\nbreak" });
+  expect(spy.mock.calls.map((c) => c[1]?.context)).toEqual([
+    "WebSocket Pool - Hermes", null, null, null,
+  ]);
+});
+
 test("doorbell rejects a non-string event", async () => {
   const res = await ctx.app.inject({
     method: "POST", url: "/internal/doorbell",

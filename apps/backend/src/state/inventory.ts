@@ -1,3 +1,5 @@
+import type { DropClaim } from "../db/history.js";
+
 /**
  * How long fetched drop progress is trusted.
  *
@@ -128,6 +130,8 @@ export interface InventoryDeps {
    * cannot report it; see _links in python/helpers/state.py.
    */
   probeChannels?: () => string[];
+  /** Receives every claim Twitch reports, on each fetch that could read them. */
+  onClaims?: (claims: DropClaim[]) => void;
   now?: () => number;
 }
 
@@ -166,6 +170,7 @@ export class InventoryCache {
           inventory: InventoryMap;
           earned?: EarnedMap;
           links?: LinkMap;
+          claims?: DropClaim[] | null;
         }>("inventory", { channelIds: this.deps.probeChannels?.() ?? [] });
         this.progress = res.inventory ?? {};
         // Optional: the helper degrades this half to {} on its own
@@ -177,6 +182,7 @@ export class InventoryCache {
         this.links = res.links ?? {};
         this.fetchedAt = this.now();
         this.available = true;
+        if (res.claims) this.deps.onClaims?.(res.claims);
       } catch {
         // Keep the last known progress, if any -- a stale bar beats a
         // vanished one -- but stop claiming the map is complete.

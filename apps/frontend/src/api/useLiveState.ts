@@ -126,6 +126,10 @@ export interface StreamerState {
     benefits: string[];
     /** Campaign deadline in epoch ms, or null when unknown. */
     endsAt: number | null;
+    /** False when the miner will not claim it: the game account is unlinked. */
+    linked?: boolean;
+    /** Where to link that account, when Twitch says. */
+    linkUrl?: string | null;
   } | null;
   /** The active gift sub the account holds for this channel, or null. */
   giftSub?: GiftSub | null;

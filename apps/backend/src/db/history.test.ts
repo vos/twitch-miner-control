@@ -486,3 +486,21 @@ test("countEvents counts each asked-for type in a half-open window", () => {
   expect(history.countEvents(["BONUS_CLAIM", "JOIN_RAID", "DROP_CLAIM"], 1000, 2000))
     .toEqual({ BONUS_CLAIM: 2, JOIN_RAID: 1, DROP_CLAIM: 0 });
 });
+
+const claim = (id: string, earnedAt: number) => ({ id, name: `Reward ${id}`, campaignId: "c1", earnedAt });
+
+test("recording claims returns only the ones not seen before", () => {
+  expect(history.recordClaims([claim("a", 1), claim("b", 2)]).map((c) => c.id)).toEqual(["a", "b"]);
+  expect(history.recordClaims([claim("a", 1), claim("c", 3)]).map((c) => c.id)).toEqual(["c"]);
+});
+
+test("claims are counted by when they were earned", () => {
+  history.recordClaims([claim("a", 1000), claim("b", 1500), claim("c", 2000)]);
+  expect(history.countClaims(1000, 2000)).toBe(2);
+});
+
+test("hasClaims says whether anything has been recorded yet", () => {
+  expect(history.hasClaims()).toBe(false);
+  history.recordClaims([claim("a", 1)]);
+  expect(history.hasClaims()).toBe(true);
+});

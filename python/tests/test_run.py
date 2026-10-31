@@ -121,3 +121,50 @@ def test_miner_starts_with_a_drop_subscription_pool(tmp_path):
     # mine() and so never reaches the session.
     assert "AttributeError" not in combined, combined
     assert "Start session" in combined, combined
+
+
+def _bootstrap(tmp_path):
+    """Runs run.py up to mine(), and reports how it left the logger.
+
+    mine() would start a real session, so it is replaced with a probe.
+    """
+    probe = """
+import logging, os, runpy, sys
+from helpers.vendor import import_miner
+import_miner()
+from TwitchChannelPointsMiner import TwitchChannelPointsMiner as Miner
+from TwitchChannelPointsMiner.classes.Settings import Settings
+
+def mine(self, **kwargs):
+    logging.getLogger("probe").info("format probe")
+    self.queue_listener.stop()
+    print("LESS", Settings.logger.less, flush=True)
+    os._exit(0)
+
+Miner.mine = mine
+runpy.run_path(sys.argv[1], run_name="__main__")
+"""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(CONFIG), encoding="utf-8")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT / "python"), str(REPO_ROOT / "vendor" / "miner")]
+    )
+    env["MINER_CONFIG"] = str(config_path)
+    env["DOORBELL_TOKEN"] = "test-token"
+    done = subprocess.run(
+        [sys.executable, "-c", probe, str(RUN_SCRIPT)],
+        capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=45,
+    )
+    return done.stdout + done.stderr
+
+
+def test_console_lines_keep_the_level_the_logs_page_colours_by(tmp_path):
+    """apps/frontend/src/lib/logLevel.ts reads " - ERROR - " out of each line."""
+    output = _bootstrap(tmp_path)
+    line = next(l for l in output.splitlines() if "format probe" in l)
+    assert " - INFO - " in line
+
+
+def test_events_render_as_readable_text(tmp_path):
+    assert "LESS True" in _bootstrap(tmp_path)

@@ -9,14 +9,16 @@ import { normaliseUsername } from "./roster.js";
  * syncs campaigns on a 30-60 minute background timer, which is the scale
  * this belongs on.
  *
- * Ten minutes is invisible in the UI because drop progress moves in
- * 30/60/120-minute steps -- a 120-minute drop advances about 8% between
- * refreshes, so the bar is never meaningfully stale.
+ * The minutes on a watched channel move between fetches, by observe().
+ * This clock is what picks up everything progress events do not carry:
+ * a drop turning claimable, and channels the miner is not watching.
  */
 export const DROPS_TTL_MS = 600_000;
 
 /** The next drop a channel has still to earn. */
 export interface DropProgress {
+  /** The id the miner's progress events name this drop by. */
+  id: string;
   name: string;
   /** Minutes watched toward it, clamped to `required` by the helper. */
   minutes: number;
@@ -27,7 +29,17 @@ export interface DropProgress {
   benefits: string[];
   /** Campaign deadline in epoch ms, or null when not reported. */
   endsAt: number | null;
+  /**
+   * Whether the campaign's game account is connected. ALL mode earns an
+   * unlinked campaign's drops, but the miner claims only on a linked account.
+   */
+  linked: boolean;
+  /** Where to connect it, when Twitch says. */
+  linkUrl: string | null;
 }
+
+/** A drop as the miner's progress event describes it. */
+export type ObservedDrop = Omit<DropProgress, "claimable" | "linked" | "linkUrl">;
 
 export interface DropsCacheDeps {
   client: { request<T>(op: string, params?: object): Promise<T> };
@@ -128,5 +140,39 @@ export class DropsCache {
       if (drop) out.set(login, drop);
     }
     return out;
+  }
+
+  /**
+   * Applies a progress event, returning what the card should now show.
+   *
+   * Null when there is nothing to show: a channel not claiming drops, or
+   * one never asked about, where only the helper can say whether the
+   * account is linked. The fetch clock is left alone, so the next read
+   * still picks up what progress events do not carry.
+   *
+   * A different drop from the one held replaces it. The helper reports the
+   * nearest drop on the channel; this is the one really moving.
+   */
+  observe(login: string, seen: ObservedDrop): DropProgress | null {
+    const key = normaliseUsername(login);
+    const entry = this.cached.get(key);
+    if (entry === undefined || !this.deps.eligible(key)) return null;
+    const held = entry.drop;
+    const drop: DropProgress = held?.id === seen.id
+      ? { ...held, minutes: seen.minutes, required: seen.required }
+      : { ...seen, claimable: false, linked: held?.linked ?? true, linkUrl: held?.linkUrl ?? null };
+    this.cached.set(key, { ...entry, drop });
+    return drop;
+  }
+
+  /**
+   * Forgets a drop the miner has tried to claim, so the next read asks what
+   * comes after it. Every channel holding it goes: a campaign spans
+   * channels, and the claim event names none.
+   */
+  forget(dropId: string): void {
+    for (const [login, entry] of this.cached) {
+      if (entry.drop?.id === dropId) this.cached.delete(login);
+    }
   }
 }

@@ -26,6 +26,17 @@ export function openDb(path: string): Db {
     );
     CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
 
+    -- Drop rewards Twitch confirms were claimed. The DROP_CLAIM event is sent
+    -- before the attempt and repeats for a drop Twitch refuses, so it says
+    -- nothing about whether one was collected.
+    CREATE TABLE IF NOT EXISTS drop_claims (
+      id          TEXT PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      campaign_id TEXT    NOT NULL,
+      earned_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_drop_claims_earned_at ON drop_claims (earned_at);
+
     CREATE TABLE IF NOT EXISTS streamer_sessions (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       streamer  TEXT    NOT NULL,

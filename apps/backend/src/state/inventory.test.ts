@@ -9,7 +9,11 @@ import {
 
 let clock = 1_000_000;
 
-function make(responses: unknown[], probeChannels?: () => string[]) {
+function make(
+  responses: unknown[],
+  probeChannels?: () => string[],
+  onClaims?: (claims: unknown[]) => void,
+) {
   clock = 1_000_000;
   const queue = [...responses];
   const request = vi.fn(async () => {
@@ -20,6 +24,7 @@ function make(responses: unknown[], probeChannels?: () => string[]) {
   const cache = new InventoryCache({
     client: { request } as never,
     probeChannels,
+    onClaims,
     now: () => clock,
   });
   return { cache, request };
@@ -237,4 +242,20 @@ test("caps the probe", () => {
     { username: `c${i}`, ownedBy: `s${i}` }));
   const state = streamers.map((s, i) => ({ username: s.username, channelId: `${i}`, isOnline: true }));
   expect(linkProbeChannels({ streamers }, state)).toHaveLength(LINK_PROBE_MAX);
+});
+
+test("hands each fetch's verified claims on", async () => {
+  const claims = [{ id: "r1", name: "Crate", campaignId: "c1", earnedAt: 5 }];
+  const onClaims = vi.fn();
+  const { cache } = make([{ inventory: {}, claims }], undefined, onClaims);
+  await cache.get();
+  expect(onClaims).toHaveBeenCalledWith(claims);
+});
+
+test("a fetch that could not read the claims hands nothing on", async () => {
+  // Null means the query failed, and is not news that nothing was claimed.
+  const onClaims = vi.fn();
+  const { cache } = make([{ inventory: {}, claims: null }], undefined, onClaims);
+  await cache.get();
+  expect(onClaims).not.toHaveBeenCalled();
 });

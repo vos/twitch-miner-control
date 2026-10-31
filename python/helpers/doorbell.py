@@ -2,8 +2,8 @@
 
 An EventHandler on the miner's EventManager. Upstream hands every handler
 the typed Event itself, so the facts the backend needs -- which streamer,
-how many points -- cross the wire as fields rather than being recovered
-from display text. The message still rides along, worded by the miner's
+how many points, the balance, a drop's progress -- cross the wire as fields
+rather than being recovered from display text. The message still rides along, worded by the miner's
 own translations, purely so the feed can show it.
 
 The EventManager runs handlers on its task runner's threads, so handle()
@@ -21,8 +21,12 @@ import requests
 
 from TwitchChannelPointsMiner.classes.events.Event import (
     ChangingWatchSlots,
+    DropEvent,
+    Error,
     Event,
     GainPoints,
+    PointsSpent,
+    PredictionFailed,
 )
 from TwitchChannelPointsMiner.classes.events.Events import Events
 from TwitchChannelPointsMiner.classes.events.Handler import EventHandler
@@ -50,8 +54,8 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
 
 # Every event, less the ones that repeat every few seconds or only
-# announce the claim event that follows them. Each ring is a feed row and
-# a state refresh, so these would be noise at a cost.
+# announce the claim event that follows them. Most rings are a feed row,
+# so these would be noise.
 DOORBELL_EVENTS = Events.all() & ~(
     Events.STREAM_UP
     | Events.STREAM_DOWN
@@ -72,6 +76,19 @@ def _clean(message) -> str:
 
 def _login(streamer) -> str | None:
     return normalise_username(streamer.username) if streamer is not None else None
+
+
+def _drop(drop) -> dict:
+    """A drop's figures, for the badge. Upstream joins the benefit names."""
+    return {
+        "id": drop.id,
+        "name": drop.name,
+        # Twitch keeps counting past the requirement.
+        "minutes": min(drop.current_minutes_watched, drop.minutes_required),
+        "required": drop.minutes_required,
+        "benefits": [b for b in drop.benefit.split(", ") if b],
+        "endsAt": int(drop.end_at.timestamp() * 1000),
+    }
 
 
 class DoorbellHandler(EventHandler):
@@ -140,7 +157,16 @@ class DoorbellHandler(EventHandler):
             "message": self._message(event),
             "streamer": _login(getattr(event, "streamer", None)),
             "earned": event.amount if isinstance(event, GainPoints) else None,
+            "balance": (
+                event.balance if isinstance(event, (GainPoints, PointsSpent)) else None
+            ),
         }
+        if isinstance(event, DropEvent):
+            payload["drop"] = _drop(event.drop)
+        if isinstance(event, PredictionFailed):
+            payload["errorCode"] = event.error_code
+        if isinstance(event, Error):
+            payload["context"] = event.context
         if isinstance(event, ChangingWatchSlots):
             with self._watching_lock:
                 self._watching -= {_login(s) for s in event.dropping}

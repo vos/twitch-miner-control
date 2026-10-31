@@ -4,6 +4,7 @@ One request per stdin line, one response per stdout line. Reads go through
 the miner's own GQL layer so persisted-query hashes stay upstream's problem.
 """
 import copy
+import datetime
 import json
 import os
 import re
@@ -31,6 +32,10 @@ import_miner()
 
 from TwitchChannelPointsMiner.JsonParser import InvalidJsonShapeError
 from TwitchChannelPointsMiner.classes.gql.Errors import GQLError
+from TwitchChannelPointsMiner.constants import GQLOperations
+
+# The most requests one GQL batch holds, the size upstream itself sends.
+_BATCH_SIZE = 20
 
 # Word-boundary match for a bare status code, e.g. "401 Client Error" or
 # "HTTP 403" -- but NOT "40100ms" or "8401f" (word boundaries require a
@@ -203,6 +208,19 @@ def _is_linked(campaign) -> bool:
     )
 
 
+def _link_url(campaign) -> str | None:
+    """Where to connect the game account behind a campaign, when Twitch says."""
+    return next(
+        (
+            reward.account_link_url
+            for group in campaign.reward_groups
+            for reward in group.rewards
+            if reward.account_link_url
+        ),
+        None,
+    )
+
+
 def _next_drop(campaigns: list, allow_unlinked: bool) -> dict | None:
     """The nearest unclaimed drop across a channel's campaigns.
 
@@ -245,12 +263,18 @@ def _next_drop(campaigns: list, allow_unlinked: bool) -> dict | None:
         remaining, key=lambda r: r[0] - r[3].current_minutes_watched
     )
     return {
+        # The id the miner's progress events name this drop by.
+        "id": group.id,
         "name": group.name or "Drop",
         # Clamped: Twitch keeps counting past the requirement, and a bar
         # reporting 71/60 reads as a bug rather than a finished drop.
         "minutes": min(edge.current_minutes_watched, required),
         "required": required,
         "claimable": edge.status == "CLAIMABLE",
+        # ALL mode earns an unlinked campaign's drops, but the miner claims
+        # only on a linked account, so the card has to say so.
+        "linked": _is_linked(campaign),
+        "linkUrl": _link_url(campaign),
         # What the drop actually awards. Twitch lists one reward per
         # benefit instance, so a drop granting two of an item repeats the
         # name -- deduped while keeping order, since "Crate, Crate" reads
@@ -313,8 +337,16 @@ _INVENTORY_QUERY = {
 }
 
 
-def _earned_rewards(payload) -> dict:
-    """Claimed rewards grouped by campaign id, from a raw Inventory response.
+def _epoch_ms(iso: object) -> int | None:
+    """Epoch ms from one of Twitch's timestamps, or None if it isn't one."""
+    try:
+        return int(datetime.datetime.fromisoformat(str(iso)).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _claimed_rewards(payload) -> list[dict]:
+    """Every reward Twitch says was claimed, from a raw Inventory response.
 
     The vendored parser keeps only `dropCampaignsInProgress` and discards
     the rest of the response (gql/data/Parser.py), so this reads the raw
@@ -323,13 +355,13 @@ def _earned_rewards(payload) -> dict:
 
     A reward missing either its campaign or its name is skipped: it cannot
     be attributed to a drop, and a guess here marks the wrong drop claimed.
-    Only CLAIMED counts; the field carries a status and an unclaimed one is
-    not a claim.
+    Only CLAIMED counts: an unlinked campaign's rewards stay CLAIMABLE
+    however often the miner tries, and those attempts are not claims.
     """
     data = (payload or {}).get("data") or {}
     inventory = (data.get("currentUser") or {}).get("inventory") or {}
     edges = (inventory.get("earnedDropRewards") or {}).get("edges") or []
-    out: dict = {}
+    out = []
     for edge in edges:
         node = edge.get("node") if isinstance(edge, dict) else None
         if not isinstance(node, dict) or node.get("status") != "CLAIMED":
@@ -338,7 +370,20 @@ def _earned_rewards(payload) -> dict:
         name = (node.get("item") or {}).get("name")
         if not campaign_id or not name:
             continue
-        out.setdefault(campaign_id, []).append(name)
+        out.append({
+            "id": node.get("id"),
+            "name": name,
+            "campaignId": campaign_id,
+            "earnedAt": _epoch_ms(node.get("earnedAt")),
+        })
+    return out
+
+
+def _by_campaign(rewards: list[dict]) -> dict:
+    """Reward names grouped by campaign id."""
+    out: dict = {}
+    for reward in rewards:
+        out.setdefault(reward["campaignId"], []).append(reward["name"])
     return out
 
 
@@ -433,11 +478,18 @@ class Handler:
             if op == "inventory":
                 self._ensure_token()
                 inventory = self.session.gql.get_inventory()
+                rewards = self._earned()
                 return {"id": req_id, "ok": True,
                         "data": {"inventory": self._inventory(inventory),
                                  "links": self._links(
                                      inventory, req.get("channelIds") or []),
-                                 "earned": self._earned()}}
+                                 "earned": _by_campaign(rewards or []),
+                                 # None when the query failed: unknown, not
+                                 # "nothing claimed".
+                                 "claims": None if rewards is None else [
+                                     r for r in rewards
+                                     if r["id"] and r["earnedAt"] is not None
+                                 ]}}
             if op == "gift_subs":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
@@ -516,21 +568,78 @@ class Handler:
         return {"username": username, "channelId": channel_id,
                 "exists": bool(channel_id)}
 
-    def _state(self, usernames: list[str]) -> list[dict]:
-        out = []
-        auth_error = None
-        for username in usernames:
+    def _fetch_all(self, items, operation, variables, parser, single) -> dict:
+        """One answer per item, as few requests as Twitch will take.
+
+        `operation` is the persisted query, `variables` builds each item's
+        variables, `parser` names the miner's parser for one answer, and
+        `single` names the GQL method that asks about one item.
+
+        Twitch answers a batch as a whole, and one unparseable answer fails
+        it, so a refused chunk is asked again item by item: one bad channel
+        must not cost the rest. A failed item's value is the exception. An
+        auth failure is about the session and always propagates, so
+        handle() can report it as AUTH.
+        """
+        gql = self.session.gql
+        out: dict = {}
+        for start in range(0, len(items), _BATCH_SIZE):
+            chunk = items[start:start + _BATCH_SIZE]
             try:
-                out.append(self._one(username))
+                requests_json = [
+                    {**copy.deepcopy(operation), "variables": variables(item)}
+                    for item in chunk
+                ]
+                answers = gql.post_gql_request_batch(
+                    operation["operationName"], requests_json, getattr(gql.parser, parser)
+                )
+                if len(answers) != len(chunk):
+                    raise ValueError("batch answered a different number of requests")
+                out.update(zip(chunk, answers))
             except Exception as exc:
                 if _is_auth_error(exc):
-                    auth_error = exc
-                    break
-                out.append({"username": username, "points": None, "isOnline": None,
-                            "error": str(exc)})
-        if auth_error is not None:
-            raise auth_error
+                    raise
+                for item in chunk:
+                    try:
+                        out[item] = getattr(gql, single)(item)
+                    except Exception as failure:
+                        if _is_auth_error(failure):
+                            raise
+                        out[item] = failure
         return out
+
+    def _campaign_progress(self, channel_ids: list) -> dict:
+        """DropChannelCampaignsProgress per channel id; see _fetch_all."""
+        return self._fetch_all(
+            channel_ids,
+            GQLOperations.DropChannelCampaignsProgress,
+            lambda channel_id: {"channelID": channel_id},
+            "parse_drop_channel_campaigns_progress",
+            "drop_channel_campaigns_progress",
+        )
+
+    def _state(self, usernames: list[str]) -> list[dict]:
+        contexts = self._fetch_all(
+            usernames,
+            GQLOperations.ChannelPointsContext,
+            lambda username: {"channelLogin": username},
+            "parse_channel_points_context_response",
+            "get_channel_points_context",
+        )
+        channel_ids = list({
+            context.community.channel.id
+            for context in contexts.values()
+            if not isinstance(context, Exception)
+            and getattr(context, "community", None) is not None
+        })
+        streams = self._fetch_all(
+            channel_ids,
+            GQLOperations.WithIsStreamLiveQuery,
+            lambda channel_id: {"id": channel_id},
+            "parse_with_is_stream_live_query",
+            "with_is_stream_live_query",
+        )
+        return [self._row(u, contexts[u], streams) for u in usernames]
 
     def _profiles(self, usernames: list[str]) -> dict:
         """Avatar, category, stream title and viewer count per login.
@@ -548,22 +657,21 @@ class Handler:
         avatar would leave a signed-out user staring at monograms with no
         prompt to sign in again.
         """
-        out = {}
-        auth_error = None
-        for username in usernames:
-            try:
-                response = self.session.gql.video_player_stream_info_overlay_channel(
-                    username
-                )
-                out[username] = _profile(response.user)
-            except Exception as exc:
-                if _is_auth_error(exc):
-                    auth_error = exc
-                    break
-                out[username] = _EMPTY_PROFILE.copy()
-        if auth_error is not None:
-            raise auth_error
-        return out
+        answers = self._fetch_all(
+            usernames,
+            GQLOperations.VideoPlayerStreamInfoOverlayChannel,
+            lambda username: {"channel": username},
+            "parse_video_player_stream_info_overlay_channel_data",
+            "video_player_stream_info_overlay_channel",
+        )
+        return {
+            username: (
+                _EMPTY_PROFILE.copy()
+                if isinstance(answer, Exception)
+                else _profile(answer.user)
+            )
+            for username, answer in answers.items()
+        }
 
     def _drops(self, streamers: dict, allow_unlinked: set) -> dict:
         """The next unclaimed drop per channel, or None where there is none.
@@ -580,23 +688,15 @@ class Handler:
         channel id while everything the caller holds is keyed by login.
         `allow_unlinked` holds the logins whose claim_drops mode is ALL.
         """
+        answers = self._campaign_progress(list(set(streamers.values())))
         out = {}
-        auth_error = None
         for login, channel_id in streamers.items():
-            try:
-                campaigns = self.session.gql.drop_channel_campaigns_progress(
-                    channel_id
-                ).campaigns or []
-                out[login] = _next_drop(campaigns, login in allow_unlinked)
-            except Exception as exc:
-                if _is_auth_error(exc):
-                    auth_error = exc
-                    break
-                # One unreachable channel must not cost the whole batch --
-                # the same contract as _state and _profiles.
-                out[login] = None
-        if auth_error is not None:
-            raise auth_error
+            answer = answers[channel_id]
+            # One unreachable channel must not cost the whole batch -- the
+            # same contract as _state and _profiles.
+            out[login] = None if isinstance(answer, Exception) else _next_drop(
+                answer.campaigns or [], login in allow_unlinked
+            )
         return out
 
     def _channel_campaigns(self, channel_ids: list) -> dict:
@@ -615,18 +715,13 @@ class Handler:
         nothing", so one bad channel neither costs the batch nor reads as
         proof against it. An auth failure still propagates.
         """
-        out = {}
-        for channel_id in channel_ids:
-            try:
-                campaigns = self.session.gql.drop_channel_campaigns_progress(
-                    channel_id
-                ).campaigns or []
-                out[channel_id] = [campaign.id for campaign in campaigns]
-            except Exception as exc:
-                if _is_auth_error(exc):
-                    raise
-                out[channel_id] = None
-        return out
+        return {
+            channel_id: (
+                None if isinstance(answer, Exception)
+                else [campaign.id for campaign in answer.campaigns or []]
+            )
+            for channel_id, answer in self._campaign_progress(channel_ids).items()
+        }
 
     def _inventory(self, inventory) -> dict:
         """Global drop progress, keyed campaign id -> drop id.
@@ -706,13 +801,8 @@ class Handler:
         failure still propagates.
         """
         out: dict = {}
-        for channel_id in channel_ids:
-            try:
-                response = self.session.gql.drop_channel_campaigns_progress(
-                    channel_id)
-            except Exception as exc:
-                if _is_auth_error(exc):
-                    raise
+        for response in self._campaign_progress(channel_ids).values():
+            if isinstance(response, Exception):
                 continue
             for campaign in getattr(response, "campaigns", None) or []:
                 rewards = [
@@ -734,36 +824,35 @@ class Handler:
             }
         return out
 
-    def _earned(self) -> dict:
-        """Reward names claimed, keyed by campaign id.
+    def _earned(self) -> list[dict] | None:
+        """Every claimed reward, or None when the query failed.
 
         The other half of the Inventory response, and the only thing that
         still knows about a campaign finished and gone from
-        `dropCampaignsInProgress`. Named rather than keyed by drop id
-        because the response identifies a reward by ITEM id, which is not
-        a drop id -- the catalogue's benefit names are what the two sides
-        share (see dropState.ts, which does the matching).
+        `dropCampaignsInProgress`, and the only proof a claim happened: the
+        miner announces one before attempting it. Rewards carry reward and
+        item ids rather than drop ids, which is why the Drops page matches
+        them by name (see dropState.ts).
 
         Raw rather than through the vendored parser, which keeps only the
         in-progress campaigns; _directory does the same for the same
         reason. One request, so the extra half costs no extra round trip.
 
-        Returns {} rather than raising when the call fails: progress is
-        the half the page is mostly read for, and losing it because this
-        half broke turns a partial answer into none. An empty map costs a
-        finished campaign its "collected" badge -- the behaviour before
-        this existed -- while an auth failure still propagates, since
-        that is about the session rather than about this query.
+        None rather than raising: progress is the half the page is mostly
+        read for, and losing it because this half broke turns a partial
+        answer into none. It costs a finished campaign its "collected"
+        badge until the next fetch, while an auth failure still propagates,
+        since that is about the session rather than about this query.
         """
         request = copy.deepcopy(_INVENTORY_QUERY)
         try:
             return self.session.gql.post_gql_request_single(
-                _INVENTORY_QUERY["operationName"], request, _earned_rewards
+                _INVENTORY_QUERY["operationName"], request, _claimed_rewards
             )
         except Exception as exc:
             if _is_auth_error(exc):
                 raise
-            return {}
+            return None
 
     def _directory(self, slug: str, limit: int) -> list:
         """Live channels streaming a game with drops enabled, by viewers.
@@ -809,8 +898,11 @@ class Handler:
         channels = [_directory_channel(e) for e in edges]
         return [c for c in channels if c is not None]
 
-    def _one(self, username: str) -> dict:
-        context = self.session.gql.get_channel_points_context(username)
+    def _row(self, username: str, context, streams: dict) -> dict:
+        """One streamer's state, from its context and the live lookups."""
+        if isinstance(context, Exception):
+            return {"username": username, "points": None, "isOnline": None,
+                    "error": str(context)}
         community = getattr(context, "community", None)
         if community is None:
             return {"username": username, "channelId": None, "displayName": None,
@@ -818,7 +910,10 @@ class Handler:
                     "streamId": None, "streamStartedAt": None,
                     "multiplier": None, "claimPending": False, "goal": None}
         channel = community.channel
-        live = self.session.gql.with_is_stream_live_query(channel.id)
+        live = streams[channel.id]
+        if isinstance(live, Exception):
+            return {"username": username, "points": None, "isOnline": None,
+                    "error": str(live)}
         stream = live.user.stream
         points = channel.edge.community_points
         return {

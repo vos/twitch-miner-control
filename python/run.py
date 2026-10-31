@@ -78,6 +78,18 @@ COOKIE_AUTH_PLACEHOLDER = "unused-cookie-auth"
 
 kwargs = build_mine_kwargs(cfg)
 
+logger_settings = LoggerSettings(
+    save=True,
+    console_level=20,
+    # Without this, upstream defaults the file handler to DEBUG. Its
+    # TimedRotatingFileHandler keeps 7 days, so growth was bounded --
+    # but bounded at ~1.9GB of keepalives and connection chatter.
+    file_level=_file_level(),
+    # Upstream's default resolves "locales" against the cwd, which
+    # here is the data dir; see helpers/vendor.py.
+    translator=Translator(LOCALES_DIR),
+)
+
 twitch_miner = TwitchChannelPointsMiner(
     username=cfg["username"],
     password=COOKIE_AUTH_PLACEHOLDER,
@@ -87,29 +99,29 @@ twitch_miner = TwitchChannelPointsMiner(
     # what an unconfigured config.json yields -- so passing them through
     # unset is identical to not passing them at all.
     priority=kwargs["priority"],
+    streamer_settings=kwargs["streamer_settings"],
     claim_drops_startup=kwargs["claim_drops_startup"],
+    disable_at_in_nickname=kwargs["disable_at_in_nickname"],
     gql=kwargs["gql"],
     weekly_rewards=kwargs["weekly_rewards"],
     watch_streak_recovery=kwargs["watch_streak_recovery"],
-    logger_settings=LoggerSettings(
-        save=True,
-        console_level=20,
-        # Without this, upstream defaults the file handler to DEBUG. Its
-        # TimedRotatingFileHandler keeps 7 days, so growth was bounded --
-        # but bounded at ~1.9GB of keepalives and connection chatter.
-        file_level=_file_level(),
-        # Upstream's default resolves "locales" against the cwd, which
-        # here is the data dir; see helpers/vendor.py.
-        translator=Translator(LOCALES_DIR),
-    ),
+    logger_settings=logger_settings,
     handlers=[doorbell(DOORBELL_URL, DOORBELL_TOKEN)],
     # Wraps whatever chain upstream builds from `priority`, configured or
     # default, so the drop slot sits on top of it.
     factories=Factories(streamer_selector=DropSlotSelectorFactory(drop_pools(cfg))),
 )
 
+# Drops, streamers and streams then render as readable text instead of their
+# reprs, in the feed and in notifications as well as the log. Set only now:
+# the constructor fixes the console format from this flag, and the less format
+# drops the level the Logs page colours by (apps/frontend/src/lib/logLevel.ts).
+# The cost is websocket error tracebacks in the log.
+logger_settings.less = True
+
 twitch_miner.mine(
     streamers=build_streamers(cfg),
+    blacklist=kwargs["blacklist"],
     followers=kwargs["followers"],
     followers_order=FollowersOrder[kwargs["followers_order"]],
 )

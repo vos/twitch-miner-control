@@ -1,10 +1,18 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.entities.Bet import Condition, DelayMode, Strategy
 from TwitchChannelPointsMiner.classes.entities.Streamer import DropsMode, HLSSettings
-from miner_config import build_mine_kwargs, build_streamers
+from TwitchChannelPointsMiner.classes.StreamerSelector import (
+    FilterSortSelector,
+    NestedSelector,
+    StreamerSelectorFactory,
+)
+from miner_config import PRIORITY_SELECTORS, build_mine_kwargs, build_streamers
 
 BASE = {
     "version": 1,
@@ -170,6 +178,7 @@ def test_mine_kwargs_default_the_miner_wide_options():
     assert kwargs["followers"] is True
     assert kwargs["priority"] is None
     assert kwargs["claim_drops_startup"] is False
+    assert kwargs["disable_at_in_nickname"] is False
     assert kwargs["gql"] is None
     assert kwargs["weekly_rewards"] is None
     assert kwargs["watch_streak_recovery"] is None
@@ -181,10 +190,76 @@ def test_mine_kwargs_carry_priority_and_startup_claim():
         "claim_drops_startup": True,
         "gql": {"attempts": 5, "attempt_interval_seconds": 2},
     }))
-    assert kwargs["priority"] == [Priority.STREAK, Priority.ORDER]
+    assert [type(s) for s in kwargs["priority"]] == [FilterSortSelector, FilterSortSelector]
+    assert [s.reason for s in kwargs["priority"]] == [Priority.STREAK, Priority.ORDER]
     assert kwargs["claim_drops_startup"] is True
     assert kwargs["gql"].attempts == 5
     assert kwargs["gql"].attempt_interval_seconds == 2
+
+
+def _drop_streamer(login, progress=0, ends=None):
+    """A channel with a progressable drop, as the miner's selectors read it."""
+    return SimpleNamespace(
+        channel_id=f"id-{login}",
+        username=login,
+        any_campaign_has_progressable_drop=lambda campaigns: True,
+        max_drop_progress=lambda campaigns: progress,
+        min_drop_end_date=lambda campaigns: ends,
+    )
+
+
+def _selected(priority, streamers):
+    kwargs = build_mine_kwargs(cfg(miner={"priority": priority}))
+    selector = StreamerSelectorFactory().create(kwargs["priority"])
+    assert isinstance(selector, NestedSelector)
+    return selector.select({}, streamers, 1)
+
+
+def test_a_saved_priority_list_still_prefers_the_drop_nearest_done():
+    """A saved list used to reach upstream as Priority names, which picks
+    the legacy selector whose DROPS rule takes the first channel in the
+    roster. Saving the defaults unchanged lost this ordering."""
+    chosen = _selected(["DROPS"], [_drop_streamer("early", 5), _drop_streamer("nearly", 55)])
+    assert chosen == ["id-nearly"]
+
+
+def test_drops_ending_soonest_outranks_progress():
+    soon = _drop_streamer("soon", 5, datetime(2026, 11, 1, tzinfo=timezone.utc))
+    later = _drop_streamer("later", 55, datetime(2026, 12, 1, tzinfo=timezone.utc))
+    assert _selected(["DROPS_ENDING_SOONEST"], [later, soon]) == ["id-soon"]
+
+
+def test_every_upstream_priority_has_a_selector():
+    assert {p.name for p in Priority} <= set(PRIORITY_SELECTORS)
+
+
+def test_defaults_reach_followed_channels():
+    """A followed channel is built by upstream as Streamer(username), so
+    streamer_settings is the only way `defaults` reaches it."""
+    kwargs = build_mine_kwargs(cfg(defaults={"make_predictions": False, "claim_drops": "ALL"}))
+    assert kwargs["streamer_settings"].make_predictions is False
+    assert kwargs["streamer_settings"].claim_drops == DropsMode.ALL
+
+
+def test_streamer_settings_survive_the_defaulting_the_miner_applies():
+    """The constructor calls both of these on what it is given."""
+    settings = build_mine_kwargs(cfg(defaults={}))["streamer_settings"]
+    settings.default()
+    settings.bet.default()
+    assert settings.make_predictions is True
+
+
+def test_a_disabled_channel_is_blacklisted_so_following_cannot_bring_it_back():
+    c = cfg(streamers=[
+        {"username": "Alpha", "enabled": False, "settings": {}},
+        {"username": "beta", "enabled": True, "settings": {}},
+    ])
+    assert build_mine_kwargs(c)["blacklist"] == ["alpha"]
+
+
+def test_mentions_without_an_at_can_be_turned_on():
+    kwargs = build_mine_kwargs(cfg(miner={"disable_at_in_nickname": True}))
+    assert kwargs["disable_at_in_nickname"] is True
 
 
 def test_weekly_rewards_false_disables_rather_than_configuring():

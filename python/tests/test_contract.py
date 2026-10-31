@@ -15,6 +15,7 @@ import sys
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.TwitchChannelPointsMiner import Factories
+from TwitchChannelPointsMiner.classes import StreamerSelector as selectors
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.ClientSession import (
@@ -42,7 +43,7 @@ from TwitchChannelPointsMiner.classes.gql.Errors import GQLError, RetryError
 from TwitchChannelPointsMiner.classes.gql import Integration
 from TwitchChannelPointsMiner.classes.gql.Integration import GQL, GQLFactory
 from TwitchChannelPointsMiner.classes.gql.data.Parser import Parser
-from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION
+from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOperations
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -83,6 +84,45 @@ def test_miner_takes_a_translator_and_a_selector_factory():
     assert params(StreamerSelector.select) == [
         "self", "campaigns", "streamers", "max_amount",
     ]
+
+
+def test_selector_builders_we_map_priorities_onto():
+    """miner_config.PRIORITY_SELECTORS calls each with no arguments, and
+    drops() with an explicit sort."""
+    for name in ("order", "watch_streak", "drops", "subscribed", "points_ascending",
+                 "points_descending", "watch_session", "weekly_rewards"):
+        assert params(getattr(selectors, name)) == ["sorting"]
+    assert selectors.sort_campaign_ending_soonest
+    assert selectors.sort_drop_progress_descending
+
+
+def test_operations_we_batch():
+    """state.py batches these, keyed by the variables each single call sends."""
+    for name, parser in (
+        ("ChannelPointsContext", "parse_channel_points_context_response"),
+        ("WithIsStreamLiveQuery", "parse_with_is_stream_live_query"),
+        ("DropChannelCampaignsProgress", "parse_drop_channel_campaigns_progress"),
+        ("VideoPlayerStreamInfoOverlayChannel",
+         "parse_video_player_stream_info_overlay_channel_data"),
+    ):
+        assert getattr(GQLOperations, name)["operationName"] == name
+        assert callable(getattr(Parser, parser))
+    assert params(GQL.post_gql_request_batch) == [
+        "self", "operation_name", "request_json", "parser",
+    ]
+
+
+def test_miner_takes_defaults_and_a_blacklist():
+    assert "streamer_settings" in params(TwitchChannelPointsMiner.__init__)
+    assert "blacklist" in params(TwitchChannelPointsMiner.mine)
+
+
+def test_miner_takes_the_mention_option():
+    assert "disable_at_in_nickname" in params(TwitchChannelPointsMiner.__init__)
+
+
+def test_error_events_name_their_source():
+    assert "context" in Event.Error.__dataclass_fields__
 
 
 def test_drop_and_playback_settings_we_map():

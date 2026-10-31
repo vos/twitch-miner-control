@@ -217,6 +217,17 @@ export function Settings() {
               e.currentTarget.checked || undefined),
           })}
         />
+        <Switch
+          mt="md"
+          label="Count chat mentions without an @"
+          description="Treat your name anywhere in a chat message as a mention, not only @yourname. Applies to channels where the miner joins chat."
+          checked={draft.miner.disableAtInNickname === true}
+          onChange={(e) => setDraft({
+            ...draft,
+            miner: withKey(draft.miner, "disableAtInNickname",
+              e.currentTarget.checked || undefined),
+          })}
+        />
       </Card>
       <Card withBorder padding="md">
         <Title order={4} mb="xs">Twitch API retries</Title>

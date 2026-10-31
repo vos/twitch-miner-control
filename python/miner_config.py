@@ -6,10 +6,19 @@ mirrors it in Zod.
 """
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.ClipVodWatcher import BasicConfiguration
-from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.StreamerSelector import (
     StreamerSelector,
     StreamerSelectorFactory,
+    drops,
+    order,
+    points_ascending,
+    points_descending,
+    sort_campaign_ending_soonest,
+    sort_drop_progress_descending,
+    subscribed,
+    watch_session,
+    watch_streak,
+    weekly_rewards,
 )
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     BetSettings,
@@ -51,6 +60,23 @@ ALLOWED_BET = frozenset(
      "stealth_mode", "delay", "delay_mode", "filter_condition")
 )
 ALLOWED_FILTER = frozenset(("by", "where", "value"))
+
+# The selectors upstream's default chain is built from. Handing upstream the
+# Priority names instead selects its legacy PrioritySelector, whose DROPS rule
+# takes the first channel in the roster and whose STREAK rule does not sort.
+PRIORITY_SELECTORS = {
+    "ORDER": order,
+    "STREAK": watch_streak,
+    "DROPS": drops,
+    "DROPS_ENDING_SOONEST": lambda: drops(
+        [sort_campaign_ending_soonest, sort_drop_progress_descending]
+    ),
+    "SUBSCRIBED": subscribed,
+    "POINTS_ASCENDING": points_ascending,
+    "POINTS_DESCENDING": points_descending,
+    "WATCH_SESSION": watch_session,
+    "WEEKLY_REWARDS": weekly_rewards,
+}
 
 
 def _reject_unknown(merged, allowed, what):
@@ -126,8 +152,18 @@ def build_mine_kwargs(cfg: dict) -> dict:
     return {
         "followers": bool(cfg.get("followers", False)),
         "followers_order": cfg.get("followersOrder", "ASC"),
-        "priority": [Priority[p] for p in priority] if priority else None,
+        # What a followed channel gets, since upstream builds those itself.
+        "streamer_settings": _settings(cfg.get("defaults") or {}, {}),
+        # build_streamers leaves these out, but the follower list would add
+        # them straight back.
+        "blacklist": [
+            normalise_username(s["username"])
+            for s in cfg["streamers"]
+            if not s.get("enabled", True)
+        ],
+        "priority": [PRIORITY_SELECTORS[p]() for p in priority] if priority else None,
         "claim_drops_startup": bool(miner.get("claim_drops_startup", False)),
+        "disable_at_in_nickname": bool(miner.get("disable_at_in_nickname", False)),
         "gql": AttemptStrategy(**gql) if gql else None,
         "weekly_rewards": (
             BasicConfiguration(**weekly) if isinstance(weekly, dict) else weekly

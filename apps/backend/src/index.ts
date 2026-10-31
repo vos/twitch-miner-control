@@ -35,6 +35,7 @@ import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
 import { dropsEligible, dropsMode } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
+import { syncClaims, verifyClaimAttempts } from "./state/dropClaims.js";
 import { InventoryCache, linkProbeChannels } from "./state/inventory.js";
 import { GiftSubsCache, watchGiftSubs } from "./state/giftSubs.js";
 import type { OwnerLabel } from "./state/service.js";
@@ -413,6 +414,7 @@ const inventoryCache = new InventoryCache({
   client: helper,
   probeChannels: () =>
     linkProbeChannels(loadConfig(configPath), stateService.snapshot().streamers),
+  onClaims: (claims) => syncClaims({ history, notifier }, claims),
 });
 
 // The engine restarts the miner when a subscription resolves to
@@ -464,8 +466,9 @@ let minerStartHeld = false;
 watchHealth({ notifier, supervisor, loginStatus, updates: updateChecker });
 watchStreams({ notifier, stateService });
 watchDoorbell({ notifier, stateService });
+verifyClaimAttempts({ stateService, inventory: inventoryCache });
 watchGiftSubs({ giftSubs, supervisor, stateService });
-supervisor.on("state", () => stateService.resetWatchSlots(supervisor.state === "RUNNING"));
+supervisor.on("state", () => stateService.minerRunning(supervisor.state === "RUNNING"));
 const campaignWatcher = new CampaignWatcher({
   notifier,
   catalogue,

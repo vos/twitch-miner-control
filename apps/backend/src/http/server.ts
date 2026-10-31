@@ -33,6 +33,7 @@ import { campaignQueue } from "../drops/queue.js";
 import { buildCalendar } from "../insights/calendar.js";
 import { buildRecap } from "../insights/recap.js";
 import { gainWindow } from "../state/gains.js";
+import type { ObservedDrop } from "../state/drops.js";
 import type { InventoryCache } from "../state/inventory.js";
 import type { GiftSubsCache } from "../state/giftSubs.js";
 import type { StateService } from "../state/service.js";
@@ -120,6 +121,39 @@ function doorbellLogin(value: unknown): string | null {
 function doorbellEarned(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value < 1e9
     ? value : null;
+}
+
+/** An exact balance. Zero is one: a channel can be spent down to nothing. */
+function doorbellBalance(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value < 1e15
+    ? value : null;
+}
+
+/** Twitch's reason for refusing a prediction, shaped like an event name. */
+function doorbellCode(value: unknown): string | null {
+  return typeof value === "string" && DOORBELL_EVENT.test(value) ? value : null;
+}
+
+/** Which part of the miner reported an error: a short name upstream sets. */
+function doorbellContext(value: unknown): string | null {
+  return typeof value === "string" && /^[\x20-\x7e]{1,80}$/.test(value) ? value : null;
+}
+
+/**
+ * A drop as the miner's event describes it, or undefined when it is not
+ * one this route will trust: the badge renders every field of it.
+ */
+function doorbellDrop(value: unknown): ObservedDrop | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const { id, name, minutes, required, benefits, endsAt } = value as Record<string, unknown>;
+  const text = (v: unknown): v is string =>
+    typeof v === "string" && v !== "" && v.length <= DOORBELL_MESSAGE_MAX;
+  const whole = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
+  const valid = text(id) && text(name)
+    && whole(minutes) && whole(required) && required > 0 && minutes <= required
+    && whole(endsAt)
+    && Array.isArray(benefits) && benefits.every(text);
+  return valid ? { id, name, minutes, required, benefits, endsAt } : undefined;
 }
 
 /**
@@ -1414,6 +1448,10 @@ export function buildServer(deps: ServerDeps): AppServer {
       streamer: doorbellLogin(body?.streamer),
       earned: doorbellEarned(body?.earned),
       watching: doorbellWatching(body?.watching),
+      balance: doorbellBalance(body?.balance),
+      drop: doorbellDrop(body?.drop),
+      errorCode: doorbellCode(body?.errorCode),
+      context: doorbellContext(body?.context),
     });
     return reply.code(204).send();
   });

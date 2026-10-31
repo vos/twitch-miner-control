@@ -2,9 +2,16 @@
 import pathlib
 import re
 
+from TwitchChannelPointsMiner.classes.entities.Bet import OutcomeKeys, Strategy
 from TwitchChannelPointsMiner.classes.entities.Streamer import DropsMode
 
-from miner_config import ALLOWED_BET, ALLOWED_FILTER, ALLOWED_SETTINGS, HLS_MODES
+from miner_config import (
+    ALLOWED_BET,
+    ALLOWED_FILTER,
+    ALLOWED_SETTINGS,
+    HLS_MODES,
+    PRIORITY_SELECTORS,
+)
 
 SOURCE = pathlib.Path("apps/backend/src/config/schema.ts")
 
@@ -43,6 +50,22 @@ def test_zod_schema_maps_exactly_our_allowed_settings():
 
     # (c) The Python-side value set must exactly match miner_config.ALLOWED_SETTINGS.
     assert set(values) == set(ALLOWED_SETTINGS)
+
+
+def _listed(source: str, name: str) -> set[str]:
+    return set(re.findall(r'"([A-Za-z_0-9]+)"', _block(source, name + r" = \[(.*?)\] as const")))
+
+
+def test_every_upstream_strategy_can_be_chosen():
+    assert _listed(SOURCE.read_text(), "STRATEGIES") == {s.name for s in Strategy}
+
+
+def test_every_upstream_filter_measure_can_be_chosen():
+    assert _listed(SOURCE.read_text(), "OUTCOME_KEYS") == {k.value for k in OutcomeKeys}
+
+
+def test_every_priority_in_the_schema_has_a_selector():
+    assert _listed(SOURCE.read_text(), "PRIORITIES") == set(PRIORITY_SELECTORS)
 
 
 def test_nested_maps_match_the_allowed_nested_keys():

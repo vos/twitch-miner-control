@@ -143,7 +143,9 @@ without the submodule, `git submodule update --init` fixes it in place.
 
 A Fastify backend serves the API and the built frontend on one port, and
 runs the miner as a Python child process it can stop and restart. The
-React frontend talks to that API and polls for point updates.
+miner reports what happens as events, which update the dashboard over
+server-sent events as they arrive. Twitch is polled for what events don't
+cover, and much less often while nobody has the dashboard open.
 
 - `apps/backend` — Fastify + SQLite (`better-sqlite3`), TypeScript.
 - `apps/frontend` — React 19 + Mantine, built by Vite.
