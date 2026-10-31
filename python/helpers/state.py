@@ -319,11 +319,11 @@ _DIRECTORY_QUERY = {
 }
 
 
-# The same operation the vendored client already issues for progress,
-# reissued raw so the half its parser discards is reachable. Kept here
-# rather than imported from the miner's constants so a vendor bump cannot
-# silently change the variables we depend on: fetchRewardCampaigns is what
-# makes earnedDropRewards present at all.
+# The same operation the vendored client issues for progress, asking also
+# for the half its parser discards. Kept here rather than imported from the
+# miner's constants because the two differ: fetchRewardCampaigns is what
+# makes earnedDropRewards present at all, and helpers/vendor.py turns it off
+# for the client.
 _INVENTORY_QUERY = {
     "operationName": "Inventory",
     "variables": {"fetchRewardCampaigns": True},
@@ -345,8 +345,12 @@ def _epoch_ms(iso: object) -> int | None:
         return None
 
 
-def _claimed_rewards(payload) -> list[dict]:
+def _claimed_rewards(payload) -> list[dict] | None:
     """Every reward Twitch says was claimed, from a raw Inventory response.
+
+    None when Twitch could not say. It reports a timeout on this field in a
+    successful response, with the field null and the reason in `errors`, and
+    an account with no rewards must not be confused with that.
 
     The vendored parser keeps only `dropCampaignsInProgress` and discards
     the rest of the response (gql/data/Parser.py), so this reads the raw
@@ -360,7 +364,10 @@ def _claimed_rewards(payload) -> list[dict]:
     """
     data = (payload or {}).get("data") or {}
     inventory = (data.get("currentUser") or {}).get("inventory") or {}
-    edges = (inventory.get("earnedDropRewards") or {}).get("edges") or []
+    earned = inventory.get("earnedDropRewards")
+    if earned is None or (payload or {}).get("errors"):
+        return None
+    edges = earned.get("edges") or []
     out = []
     for edge in edges:
         node = edge.get("node") if isinstance(edge, dict) else None
@@ -483,9 +490,12 @@ class Handler:
                         "data": {"inventory": self._inventory(inventory),
                                  "links": self._links(
                                      inventory, req.get("channelIds") or []),
-                                 "earned": _by_campaign(rewards or []),
-                                 # None when the query failed: unknown, not
-                                 # "nothing claimed".
+                                 # None when Twitch could not say: unknown,
+                                 # not "nothing claimed".
+                                 "earned": (
+                                     None if rewards is None
+                                     else _by_campaign(rewards)
+                                 ),
                                  "claims": None if rewards is None else [
                                      r for r in rewards
                                      if r["id"] and r["earnedAt"] is not None
@@ -840,9 +850,9 @@ class Handler:
 
         None rather than raising: progress is the half the page is mostly
         read for, and losing it because this half broke turns a partial
-        answer into none. It costs a finished campaign its "collected"
-        badge until the next fetch, while an auth failure still propagates,
-        since that is about the session rather than about this query.
+        answer into none. The caller keeps the rewards it already holds,
+        while an auth failure still propagates, since that is about the
+        session rather than about this query.
         """
         request = copy.deepcopy(_INVENTORY_QUERY)
         try:

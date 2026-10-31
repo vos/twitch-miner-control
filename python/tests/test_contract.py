@@ -112,6 +112,26 @@ def test_operations_we_batch():
     ]
 
 
+def test_processes_ask_for_the_inventory_without_earned_rewards():
+    """import_miner() turns this off; the miner reads only campaigns in
+    progress, and a timeout on the rewards fails its whole parse."""
+    assert GQLOperations.Inventory["variables"] == {"fetchRewardCampaigns": False}
+
+
+def test_our_inventory_query_is_the_miners_with_rewards_on():
+    """state.py's raw copy stays on the hash the miner uses."""
+    from helpers.state import _INVENTORY_QUERY
+
+    assert _INVENTORY_QUERY["extensions"] == GQLOperations.Inventory["extensions"]
+    assert _INVENTORY_QUERY["variables"] == {"fetchRewardCampaigns": True}
+
+
+def test_inventory_parser_needs_only_the_campaigns_in_progress():
+    source = inspect.getsource(Parser.parse_inventory_response)
+    assert "dropCampaignsInProgress" in source
+    assert "earnedDropRewards" not in source
+
+
 def test_miner_takes_defaults_and_a_blacklist():
     assert "streamer_settings" in params(TwitchChannelPointsMiner.__init__)
     assert "blacklist" in params(TwitchChannelPointsMiner.mine)

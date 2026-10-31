@@ -12,6 +12,9 @@ checkout and then puts the working directory back. Later imports are
 served from sys.modules and never look at the cwd again. Every
 LoggerSettings this app builds must still pass `translator=` explicitly,
 for the same reason.
+
+It also takes earned rewards out of the miner's Inventory query, which
+every process needs and none may miss; see _light_inventory.
 """
 import importlib.util
 import os
@@ -36,6 +39,20 @@ def locales_dir() -> str:
     return os.path.join(miner_root(), "locales")
 
 
+def _light_inventory() -> None:
+    """Stops the miner's Inventory query asking for earned rewards.
+
+    The miner's parser reads only the campaigns in progress, and it rejects
+    a response carrying any error. Twitch can time out on `earnedDropRewards`
+    while answering the rest, which then costs the whole inventory sync, and
+    the miner retries it on every drop progress update for as long as that
+    lasts. helpers/state.py asks for the rewards in a request of its own.
+    """
+    from TwitchChannelPointsMiner.constants import GQLOperations
+
+    GQLOperations.Inventory["variables"] = {"fetchRewardCampaigns": False}
+
+
 def import_miner() -> str:
     """Imports the miner package; returns its locales directory."""
     if "TwitchChannelPointsMiner" not in sys.modules:
@@ -45,4 +62,5 @@ def import_miner() -> str:
             import TwitchChannelPointsMiner  # noqa: F401
         finally:
             os.chdir(cwd)
+        _light_inventory()
     return locales_dir()

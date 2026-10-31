@@ -134,11 +134,13 @@ from helpers.vendor import import_miner
 import_miner()
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner as Miner
 from TwitchChannelPointsMiner.classes.Settings import Settings
+from TwitchChannelPointsMiner.constants import GQLOperations
 
 def mine(self, **kwargs):
     logging.getLogger("probe").info("format probe")
     self.queue_listener.stop()
     print("LESS", Settings.logger.less, flush=True)
+    print("INVENTORY", GQLOperations.Inventory["variables"], flush=True)
     os._exit(0)
 
 Miner.mine = mine
@@ -168,3 +170,8 @@ def test_console_lines_keep_the_level_the_logs_page_colours_by(tmp_path):
 
 def test_events_render_as_readable_text(tmp_path):
     assert "LESS True" in _bootstrap(tmp_path)
+
+
+def test_the_miner_does_not_ask_twitch_for_earned_rewards(tmp_path):
+    """A timeout on that one field fails the miner's whole inventory sync."""
+    assert "INVENTORY {'fetchRewardCampaigns': False}" in _bootstrap(tmp_path)

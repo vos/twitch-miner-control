@@ -1405,7 +1405,7 @@ def _earned_edge(cid="c1", name="Crate", status="CLAIMED", reward_id=None,
                      "item": {"name": name}, "status": status, "earnedAt": earned_at}}
 
 
-def _earned_handler(campaigns=None, edges=None, error=None):
+def _earned_handler(campaigns=None, edges=None, error=None, timed_out=False):
     """A handler whose Inventory call answers BOTH halves of the response.
 
     get_inventory() is the vendored parser's view -- in-progress campaigns
@@ -1417,6 +1417,12 @@ def _earned_handler(campaigns=None, edges=None, error=None):
     def fake_post(operation_name, request_json, parse):
         if error is not None:
             raise error
+        if timed_out:
+            return parse({
+                "errors": [{"message": "service timeout",
+                            "path": ["currentUser", "inventory", "earnedDropRewards"]}],
+                "data": {"currentUser": {"inventory": {"earnedDropRewards": None}}},
+            })
         return parse({"data": {"currentUser": {"inventory": {
             "earnedDropRewards": {"edges": list(edges or [])},
         }}}})
@@ -1464,6 +1470,34 @@ def test_failed_rewards_query_reports_claims_as_unknown():
     """Null, not empty: nothing was learned, which is not "no claims"."""
     h = _earned_handler(campaigns=[], error=RuntimeError("boom"))
     assert h.handle({"id": 1, "op": "inventory"})["data"]["claims"] is None
+
+
+def test_rewards_twitch_timed_out_on_are_unknown_not_empty():
+    """Twitch answers 200 with the field null and the reason in `errors`, so
+    nothing raises: read naively it says this account has never earned one."""
+    h = _earned_handler(campaigns=[], timed_out=True)
+    data = h.handle({"id": 1, "op": "inventory"})["data"]
+    assert data["claims"] is None
+    assert data["earned"] is None
+
+
+def test_a_rewards_timeout_leaves_progress_standing():
+    h = _earned_handler(
+        campaigns=[SimpleNamespace(id="c1", time_based_drops=[
+            _inventory_drop("d1", watched=30),
+        ])],
+        timed_out=True,
+    )
+    out = h.handle({"id": 1, "op": "inventory"})
+    assert out["ok"] is True
+    assert out["data"]["inventory"]["c1"]["d1"]["minutes"] == 30
+
+
+def test_an_account_with_no_rewards_is_a_real_empty_answer():
+    h = _earned_handler(campaigns=[], edges=[])
+    data = h.handle({"id": 1, "op": "inventory"})["data"]
+    assert data["claims"] == []
+    assert data["earned"] == {}
 
 
 def test_inventory_earned_rewards_are_grouped_by_campaign():
@@ -1516,8 +1550,8 @@ def test_inventory_survives_a_failed_earned_rewards_fetch():
 
     Progress is the half the page is mostly read for; losing it because
     the earned-rewards half failed would turn a partial answer into no
-    answer. An empty `earned` costs a finished campaign its "collected"
-    badge, which is the pre-existing behaviour, not a regression.
+    answer. Null says the rewards are unknown, so the caller keeps the
+    ones it already holds.
     """
     h = _earned_handler(
         campaigns=[SimpleNamespace(id="c1", time_based_drops=[
@@ -1528,7 +1562,7 @@ def test_inventory_survives_a_failed_earned_rewards_fetch():
     out = h.handle({"id": 1, "op": "inventory"})
     assert out["ok"] is True
     assert out["data"]["inventory"]["c1"]["d1"]["minutes"] == 30
-    assert out["data"]["earned"] == {}
+    assert out["data"]["earned"] is None
 
 
 def test_inventory_earned_failure_on_an_expired_session_reports_auth():

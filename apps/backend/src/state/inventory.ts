@@ -168,17 +168,17 @@ export class InventoryCache {
       try {
         const res = await this.deps.client.request<{
           inventory: InventoryMap;
-          earned?: EarnedMap;
+          earned?: EarnedMap | null;
           links?: LinkMap;
           claims?: DropClaim[] | null;
         }>("inventory", { channelIds: this.deps.probeChannels?.() ?? [] });
         this.progress = res.inventory ?? {};
-        // Optional: the helper degrades this half to {} on its own
-        // failure rather than losing the progress beside it, and a
-        // helper predating the field omits it entirely. Either way an
-        // empty map costs a finished campaign its "collected" badge --
-        // the behaviour before this existed -- and nothing more.
-        this.earned = res.earned ?? {};
+        // Null when Twitch could not answer this half, which it does on
+        // its own while answering progress. Rewards once earned stay
+        // earned, so the last answer stands: an empty map would make a
+        // finished campaign look unfinished to everything reading it,
+        // the subscription engine included.
+        if (res.earned !== null) this.earned = res.earned ?? {};
         this.links = res.links ?? {};
         this.fetchedAt = this.now();
         this.available = true;

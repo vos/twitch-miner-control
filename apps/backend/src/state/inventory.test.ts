@@ -189,6 +189,25 @@ test("carries the claimed rewards through", async () => {
   expect(out.earned["c1"]).toEqual(["Crate", "Charm"]);
 });
 
+test("rewards Twitch could not answer keep the ones already held", async () => {
+  // A timeout must not read as "nothing was ever earned": a finished
+  // campaign would look unfinished until Twitch recovered.
+  const { cache } = make([
+    { inventory: {}, earned: { c1: ["Crate"] } },
+    { inventory: { c2: {} }, earned: null },
+  ]);
+  await cache.get();
+  clock += INVENTORY_TTL_MS + 1;
+  const out = await cache.get();
+  expect(out.earned["c1"]).toEqual(["Crate"]);
+  expect(out.progress["c2"]).toEqual({});
+});
+
+test("rewards unknown on the very first fetch are simply empty", async () => {
+  const { cache } = make([{ inventory: {}, earned: null }]);
+  expect((await cache.get()).earned).toEqual({});
+});
+
 test("a response with no earned rewards reports an empty map", async () => {
   // A helper predating the field, or one whose earned half degraded.
   const { cache } = make([{ inventory: { c1: { d1: progress } } }]);
