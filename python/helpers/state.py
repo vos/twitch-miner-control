@@ -190,57 +190,76 @@ def _profile(user) -> dict:
         ),
     }
 
-def _next_drop(campaign_ids: list, campaigns: dict) -> dict | None:
+def _is_linked(campaign) -> bool:
+    """Whether the game account behind a campaign is connected.
+
+    Connections are per reward; one is enough for the whole campaign, the
+    same reading as upstream's Campaign.from_gql_stream.
+    """
+    return any(
+        reward.is_account_connected
+        for group in campaign.reward_groups
+        for reward in group.rewards
+    )
+
+
+def _next_drop(campaigns: list, allow_unlinked: bool) -> dict | None:
     """The nearest unclaimed drop across a channel's campaigns.
 
+    `campaigns` is DropChannelCampaignsProgress's answer, in which a
+    reward group is one drop and its `self_edge` this account's progress.
+
     A campaign ladders its drops -- 30, 60, 120 minutes -- so "the drop"
-    for a channel is the next one still to earn. Ordered by minutes
-    required so the answer is the one worth waiting for rather than
-    whichever the API happened to list first.
+    for a channel is the next one still to earn. Ordered by minutes left
+    so the answer is the one worth waiting for rather than whichever the
+    API happened to list first.
+
+    Only what the miner can progress qualifies, or the card shows a bar
+    that never moves: an unlinked campaign outside ALL mode, a drop earned
+    by subscribing, and one that needs a subscription on top of the watch
+    time all stay off it.
 
     A drop is skipped once claimed: it is no longer something the viewer
     can earn, and reporting it would put a finished bar on the card.
-    `claimable` marks the other end -- the minutes are met and Twitch has
-    minted an instance id, so it is sitting there to be collected.
+    `claimable` marks the other end -- the minutes are met and it is
+    sitting there to be collected.
 
     None when the channel has no campaign, or every drop in it is done.
     """
     remaining = []
-    for cid in campaign_ids:
-        campaign = campaigns.get(cid)
-        if campaign is None:
+    for campaign in campaigns:
+        if not allow_unlinked and not _is_linked(campaign):
             continue
-        for drop in getattr(campaign, "time_based_drops", None) or []:
-            edge = getattr(drop, "self_edge", None)
-            if edge is None or getattr(edge, "is_claimed", False):
+        for group in campaign.reward_groups:
+            edge = group.self_edge
+            if edge is None or edge.status == "CLAIMED":
                 continue
-            required = getattr(drop, "required_minutes_watched", 0) or 0
-            if required <= 0:
+            needed = group.progress_criteria.requirements
+            if needed.minutes_watched <= 0 or needed.subs > edge.current_subs:
                 continue
-            remaining.append((required, drop, edge))
+            remaining.append((needed.minutes_watched, campaign, group, edge))
 
     if not remaining:
         return None
-    required, drop, edge = min(remaining, key=lambda r: r[0])
-    watched = getattr(edge, "current_minutes_watched", 0) or 0
-    end_at = getattr(drop, "end_at", None)
+    required, campaign, group, edge = min(
+        remaining, key=lambda r: r[0] - r[3].current_minutes_watched
+    )
     return {
-        "name": getattr(drop, "name", None) or "Drop",
+        "name": group.name or "Drop",
         # Clamped: Twitch keeps counting past the requirement, and a bar
         # reporting 71/60 reads as a bug rather than a finished drop.
-        "minutes": min(watched, required),
+        "minutes": min(edge.current_minutes_watched, required),
         "required": required,
-        "claimable": getattr(edge, "drop_instance_id", None) is not None,
-        # What the drop actually awards. Twitch lists one edge per benefit
-        # instance, so a drop granting two of an item repeats the name --
-        # deduped while keeping order, since "Crate, Crate" reads as a bug.
-        "benefits": list(dict.fromkeys(getattr(drop, "benefits", None) or [])),
+        "claimable": edge.status == "CLAIMABLE",
+        # What the drop actually awards. Twitch lists one reward per
+        # benefit instance, so a drop granting two of an item repeats the
+        # name -- deduped while keeping order, since "Crate, Crate" reads
+        # as a bug.
+        "benefits": list(dict.fromkeys(reward.name for reward in group.rewards)),
         # Epoch ms: end_at is a timezone-aware datetime from upstream's
         # expect_iso_8601, and datetime is not JSON serialisable, so it
         # would raise in serve()'s json.dumps if passed through.
-        "endsAt": (
-            int(end_at.timestamp() * 1000) if end_at is not None else None
-        ),
+        "endsAt": int(campaign.end_at.timestamp() * 1000),
     }
 
 
@@ -254,17 +273,23 @@ def _next_drop(campaign_ids: list, campaigns: dict) -> dict | None:
 # keeping whatever pool it already had rather than emptying it. Replacing
 # the hash is the fix, and this is the only place it appears.
 #
+# Replacing it means matching the variables too: Twitch rejects a query
+# missing one its hash declares, and this one finds the game by `slug`
+# alone, so a wrong slug answers with no channels rather than an error.
+#
 # `systemFilters: ["DROPS_ENABLED"]` makes Twitch do the drops filtering
-# server-side. The alternative -- matching the stream's tags -- does not
-# work: the drops tag is localised per channel ("DropsAktiviert",
-# "DropyZapnute"), so a tag match would silently miss most of them.
+# server-side, and is what a directory link with `?filter=drops` sends.
+# Matching the stream's tags, as `?tl=DropsEnabled` does through
+# `freeformTags`, does not work: the drops tag is localised per channel
+# ("DropsAktiviert", "DropyZapnute"), so it silently misses most of them
+# and can empty a pool for a game whose channels do carry the campaign.
 _DIRECTORY_QUERY = {
     "operationName": "DirectoryPage_Game",
     "extensions": {
         "persistedQuery": {
             "version": 1,
             "sha256Hash":
-                "df4bb6cc45055237bfaf3ead608bbafb79815c7100b6ee126719fac3762ddf8b",
+                "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd",
         }
     },
 }
@@ -282,7 +307,7 @@ _INVENTORY_QUERY = {
         "persistedQuery": {
             "version": 1,
             "sha256Hash":
-                "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+                "3ab317a5753b25125f47d4ce962ebe928ff4e85047b77508340c94ebc20b6230",
         }
     },
 }
@@ -402,7 +427,9 @@ class Handler:
             if op == "drops":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
-                        "data": {"drops": self._drops(req["streamers"])}}
+                        "data": {"drops": self._drops(
+                            req["streamers"],
+                            set(req.get("allowUnlinked") or []))}}
             if op == "inventory":
                 self._ensure_token()
                 inventory = self.session.gql.get_inventory()
@@ -421,7 +448,7 @@ class Handler:
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
                         "data": {"channels": self._directory(
-                            req["game"], req["slug"], req.get("limit", 30))}}
+                            req["slug"], req.get("limit", 30))}}
             if op == "channel_campaigns":
                 self._ensure_token()
                 return {"id": req_id, "ok": True,
@@ -538,43 +565,29 @@ class Handler:
             raise auth_error
         return out
 
-    def _drops(self, streamers: dict) -> dict:
+    def _drops(self, streamers: dict, allow_unlinked: set) -> dict:
         """The next unclaimed drop per channel, or None where there is none.
 
-        Three GQL calls stitched together, because no single one answers
-        the question:
+        DropChannelCampaignsProgress is the one query that answers this,
+        and the one the miner itself syncs a stream's campaigns from: every
+        campaign the channel runs, with this account's progress, started
+        or not. The neighbouring queries each see only part of that. The
+        Inventory holds campaigns already started, and
+        DropsHighlightService_AvailableDrops only those Twitch highlights,
+        which can leave out a campaign the miner is progressing right now.
 
-          - get_available_drops(channel_id) gives the campaign ids this
-            channel is currently running -- ids only, no names, no
-            progress. Per channel, so it is the expensive half.
-          - get_inventory() gives progress for every campaign we have
-            started, across all channels. Global, so it is fetched ONCE
-            for the whole batch rather than per streamer.
-
-        The inventory is global, which is the trap here: it holds
-        campaigns for channels we are not asking about. Only ids the
-        channel itself reported may be attributed to it, or a drop
-        earned elsewhere would show up on the wrong card.
-
-        `streamers` maps login -> channel id, since the available-drops
-        query is keyed by channel id while everything the caller holds
-        is keyed by login.
+        `streamers` maps login -> channel id, since the query is keyed by
+        channel id while everything the caller holds is keyed by login.
+        `allow_unlinked` holds the logins whose claim_drops mode is ALL.
         """
         out = {}
-        # Fetched before the loop: one global call, not one per channel.
-        # An auth failure here is about the session and must propagate.
-        inventory = self.session.gql.get_inventory()
-        campaigns = {
-            c.id: c for c in (getattr(inventory, "campaigns", None) or [])
-        }
-
         auth_error = None
         for login, channel_id in streamers.items():
             try:
-                ids = getattr(
-                    self.session.gql.get_available_drops(channel_id), "ids", None
-                ) or []
-                out[login] = _next_drop(ids, campaigns)
+                campaigns = self.session.gql.drop_channel_campaigns_progress(
+                    channel_id
+                ).campaigns or []
+                out[login] = _next_drop(campaigns, login in allow_unlinked)
             except Exception as exc:
                 if _is_auth_error(exc):
                     auth_error = exc
@@ -593,6 +606,11 @@ class Handler:
         its game; this says which campaign, so a pool is not filled with
         channels running another campaign of the same game.
 
+        DropChannelCampaignsProgress for the reason given on _drops: a
+        channel left out of the highlight query's answer may still run
+        the campaign, and a checked channel that lacks it is dropped from
+        the pool.
+
         None for a channel whose lookup failed: unknown, not "runs
         nothing", so one bad channel neither costs the batch nor reads as
         proof against it. An auth failure still propagates.
@@ -600,9 +618,10 @@ class Handler:
         out = {}
         for channel_id in channel_ids:
             try:
-                out[channel_id] = list(getattr(
-                    self.session.gql.get_available_drops(channel_id), "ids", None
-                ) or [])
+                campaigns = self.session.gql.drop_channel_campaigns_progress(
+                    channel_id
+                ).campaigns or []
+                out[channel_id] = [campaign.id for campaign in campaigns]
             except Exception as exc:
                 if _is_auth_error(exc):
                     raise
@@ -746,7 +765,7 @@ class Handler:
                 raise
             return {}
 
-    def _directory(self, game: str, slug: str, limit: int) -> list:
+    def _directory(self, slug: str, limit: int) -> list:
         """Live channels streaming a game with drops enabled, by viewers.
 
         Raises rather than returning [] on failure. An empty list is the
@@ -757,29 +776,36 @@ class Handler:
         request = copy.deepcopy(_DIRECTORY_QUERY)
         request["variables"] = {
             "imageWidth": 50,
-            # The query needs both: the display name and the URL slug.
-            "name": game,
             "slug": slug,
             "options": {
                 "sort": "RELEVANCE",
                 "recommendationsContext": {"platform": "web"},
                 "requestID": "JIRA-VXP-2397",
+                "freeformTags": None,
                 "tags": [],
+                "broadcasterLanguages": [],
                 "systemFilters": ["DROPS_ENABLED"],
             },
             "sortTypeIsRecency": False,
             "limit": limit,
+            "includeCostreaming": True,
         }
 
         def parse(payload):
             data = (payload or {}).get("data") or {}
-            game_node = data.get("game") or {}
+            game_node = data.get("game")
+            if game_node is None:
+                return None
             streams = game_node.get("streams") or {}
             return streams.get("edges") or []
 
         edges = self.session.gql.post_gql_request_single(
             _DIRECTORY_QUERY["operationName"], request, parse
         )
+        # No game at all: a rejected query, such as a rotated hash, or an
+        # unknown slug. A game nobody is streaming still answers with one.
+        if edges is None:
+            raise ValueError(f"Twitch returned no game for slug {slug!r}")
         channels = [_directory_channel(e) for e in edges]
         return [c for c in channels if c is not None]
 

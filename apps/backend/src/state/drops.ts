@@ -5,9 +5,9 @@ import { normaliseUsername } from "./roster.js";
  *
  * Ten minutes, deliberately far off the 60s state poll. Drops are the
  * one signal on the card that costs calls Twitch is not already being
- * asked for: one global inventory plus one per eligible live channel,
- * every time. Upstream itself syncs campaigns on a 30-60 minute
- * background timer, which is the scale this belongs on.
+ * asked for: one per eligible live channel, every time. Upstream itself
+ * syncs campaigns on a 30-60 minute background timer, which is the scale
+ * this belongs on.
  *
  * Ten minutes is invisible in the UI because drop progress moves in
  * 30/60/120-minute steps -- a 120-minute drop advances about 8% between
@@ -23,10 +23,7 @@ export interface DropProgress {
   required: number;
   /** Minutes met and an instance minted -- it is sitting there to collect. */
   claimable: boolean;
-  /**
-   * What the drop awards, deduped by the helper. Empty when the miner
-   * build's parser predates the field.
-   */
+  /** What the drop awards, deduped by the helper. */
   benefits: string[];
   /** Campaign deadline in epoch ms, or null when not reported. */
   endsAt: number | null;
@@ -40,13 +37,19 @@ export interface DropsCacheDeps {
    * the miner is not syncing its campaigns, so there is nothing to read.
    */
   eligible: (login: string) => boolean;
+  /**
+   * Whether the miner progresses this login's campaigns even with the
+   * game account unlinked. The helper leaves unlinked campaigns off every
+   * other card, since their bar would never move.
+   */
+  allowsUnlinked: (login: string) => boolean;
   now?: () => number;
 }
 
 /** One channel to consider, as the state snapshot knows it. */
 export interface DropsTarget {
   username: string;
-  /** The available-drops query is keyed by this, not by login. */
+  /** The campaign progress query is keyed by this, not by login. */
   channelId: string | null;
 }
 
@@ -61,8 +64,16 @@ export interface DropsTarget {
  * not be able to fail the refresh it rides along with.
  */
 export class DropsCache {
-  private readonly cached = new Map<string, DropProgress | null>();
-  private fetchedAt = 0;
+  /**
+   * The last answer per channel, each on its own clock. A channel with no
+   * entry has never been asked about, which is not the same as a stored
+   * null: going live or being switched on must not wait out another
+   * channel's TTL before its badge can appear.
+   */
+  private readonly cached = new Map<
+    string,
+    { drop: DropProgress | null; fetchedAt: number }
+  >();
 
   constructor(private readonly deps: DropsCacheDeps) {}
 
@@ -82,29 +93,38 @@ export class DropsCache {
     }
 
     const at = this.now();
-    if (wanted.size > 0 && at - this.fetchedAt > DROPS_TTL_MS) {
+    const due = [...wanted].filter(([login]) => {
+      const entry = this.cached.get(login);
+      return entry === undefined || at - entry.fetchedAt > DROPS_TTL_MS;
+    });
+    if (due.length > 0) {
+      const logins = due.map(([login]) => login);
       try {
         const data = await this.deps.client.request<{
           drops: Record<string, DropProgress | null>;
-        }>("drops", { streamers: Object.fromEntries(wanted) });
-        // Replaced wholesale rather than merged: a campaign that has
-        // ended stops being reported, and merging would keep its bar on
-        // the card for a drop that can no longer be earned.
-        this.cached.clear();
-        for (const login of wanted.keys()) {
-          this.cached.set(login, data.drops?.[login] ?? null);
+        }>("drops", {
+          streamers: Object.fromEntries(due),
+          allowUnlinked: logins.filter(this.deps.allowsUnlinked),
+        });
+        // A null is stored rather than skipped: a campaign that has ended
+        // stops being reported, and keeping the old entry would leave its
+        // bar on the card for a drop that can no longer be earned.
+        for (const login of logins) {
+          this.cached.set(login, {
+            drop: data.drops?.[login] ?? null,
+            fetchedAt: at,
+          });
         }
-        this.fetchedAt = at;
       } catch {
         // Swallowed deliberately -- see the class docstring. The previous
-        // values stand and the next pass tries again. fetchedAt is left
-        // alone so a failure does not buy a full TTL of silence.
+        // values stand and the next pass tries again. Their clocks are
+        // left alone so a failure does not buy a full TTL of silence.
       }
     }
 
     const out = new Map<string, DropProgress>();
     for (const login of wanted.keys()) {
-      const drop = this.cached.get(login);
+      const drop = this.cached.get(login)?.drop;
       if (drop) out.set(login, drop);
     }
     return out;

@@ -33,7 +33,7 @@ import type { DirectoryChannel } from "./drops/resolution.js";
 import { PendingRestart } from "./drops/pendingRestart.js";
 import { CampaignCatalogue } from "./state/campaignCatalogue.js";
 import { DropsCache } from "./state/drops.js";
-import { dropsEligible } from "./state/dropsEligible.js";
+import { dropsEligible, dropsMode } from "./state/dropsEligible.js";
 import { normaliseUsername, resolveRoster } from "./state/roster.js";
 import { InventoryCache, linkProbeChannels } from "./state/inventory.js";
 import { GiftSubsCache, watchGiftSubs } from "./state/giftSubs.js";
@@ -319,6 +319,7 @@ const profileCache = new ProfileCache({ streamers, client: helper });
 const dropsCache = new DropsCache({
   client: helper,
   eligible: (login) => dropsEligible(loadConfig(configPath), login),
+  allowsUnlinked: (login) => dropsMode(loadConfig(configPath), login) === "ALL",
 });
 
 const giftSubs = new GiftSubsCache({ client: helper });
@@ -442,7 +443,7 @@ const engine = new SubscriptionEngine({
   catalogue,
   directory: (game) =>
     helper.request<{ channels: DirectoryChannel[] }>("directory", {
-      game: game.name, slug: game.slug, limit: 30,
+      slug: game.slug, limit: 30,
     }).then((r) => r.channels),
   channelCampaigns: (channelIds) =>
     helper.request<{ campaigns: Record<string, string[] | null> }>(

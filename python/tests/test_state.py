@@ -859,43 +859,47 @@ def test_profiles_survives_a_response_without_the_newer_fields():
                    "title": None, "viewers": None}
 
 
-def _drop(name="Crate", required=60, watched=0, claimed=False, instance=None,
-          benefits=("Weapon Charm",), end_at=None):
-    """One time-based drop as the inventory reports it.
-
-    benefits and end_at ride the same response as the progress -- see
-    TimeBasedDropInProgress -- so the fixture carries them too.
-    """
+def _group(name="Crate", required=60, watched=0, status="IN_PROGRESS", subs=0,
+           rewards=("Weapon Charm",), linked=True):
+    """One drop as DropChannelCampaignsProgress reports it: a reward group."""
     return SimpleNamespace(
-        id=f"drop-{name}", name=name, required_minutes_watched=required,
-        benefits=list(benefits),
-        end_at=end_at or datetime.datetime(
-            2026, 9, 15, 12, 0, tzinfo=datetime.timezone.utc),
+        id=f"group-{name}", name=name,
+        progress_criteria=SimpleNamespace(requirements=SimpleNamespace(
+            minutes_watched=required, subs=subs, turbo_subs=0,
+        )),
+        rewards=[
+            SimpleNamespace(name=reward, is_account_connected=linked)
+            for reward in rewards
+        ],
         self_edge=SimpleNamespace(
-            current_minutes_watched=watched, is_claimed=claimed,
-            drop_instance_id=instance, has_preconditions_met=True, current_subs=0,
+            status=status, current_minutes_watched=watched, current_subs=0,
         ),
     )
 
 
-def _drops_handler(available=None, inventory=None):
-    h = handler(balances={"alpha": 10}, live={"42": True})
-    h.session.gql.get_available_drops = lambda channel_id: SimpleNamespace(
-        ids=list(available if available is not None else [])
+def _campaign(*groups, end_at=None):
+    return SimpleNamespace(
+        id="c1", reward_groups=list(groups),
+        end_at=end_at or datetime.datetime(
+            2026, 9, 15, 12, 0, tzinfo=datetime.timezone.utc),
     )
-    h.session.gql.get_inventory = lambda: SimpleNamespace(
-        campaigns=list(inventory if inventory is not None else [])
+
+
+def _drops_handler(*campaigns):
+    h = handler(balances={"alpha": 10}, live={"42": True})
+    h.session.gql.drop_channel_campaigns_progress = lambda channel_id: SimpleNamespace(
+        campaigns=list(campaigns)
     )
     return h
 
 
+def _next_drop_row(h, **params):
+    request = {"id": 1, "op": "drops", "streamers": {"alpha": "42"}, **params}
+    return h.handle(request)["data"]["drops"]["alpha"]
+
+
 def test_drops_reports_the_next_unclaimed_drop():
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop("Crate", required=60, watched=45),
-        ])],
-    )
+    h = _drops_handler(_campaign(_group("Crate", required=60, watched=45)))
     out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
     assert out["ok"] is True
     assert out["data"]["drops"]["alpha"] == {
@@ -904,109 +908,151 @@ def test_drops_reports_the_next_unclaimed_drop():
     }
 
 
+def test_drops_reports_a_campaign_that_has_not_started():
+    """A campaign nobody has watched yet is absent from the inventory, and
+    the highlight query leaves out most campaigns, so neither can answer
+    this. The miner targets such a campaign all the same."""
+    h = _drops_handler(_campaign(_group("Crate", required=60, watched=0)))
+    row = _next_drop_row(h)
+    assert row["minutes"] == 0
+    assert row["required"] == 60
+
+
 def test_drops_picks_the_nearest_drop_when_several_remain():
     """A campaign ladders its drops at 30/60/120 minutes. The one still
     worth waiting for is the next one, not the last."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop("Emote", required=120, watched=45),
-            _drop("Crate", required=60, watched=45),
-        ])],
-    )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
+    h = _drops_handler(_campaign(
+        _group("Emote", required=120, watched=45),
+        _group("Crate", required=60, watched=45),
+    ))
+    row = _next_drop_row(h)
     assert row["name"] == "Crate"
     assert row["required"] == 60
 
 
-def test_drops_skips_a_drop_already_claimed():
+def test_drops_prefers_a_drop_nearly_earned_over_a_shorter_unstarted_one():
+    # Unstarted campaigns are reported too, and one with a short first
+    # drop must not hide the bar that is about to finish.
     h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop("Crate", required=60, watched=60, claimed=True),
-            _drop("Emote", required=120, watched=60),
-        ])],
+        _campaign(_group("Crate", required=60, watched=55)),
+        _campaign(_group("Emote", required=30, watched=0)),
     )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
-    assert row["name"] == "Emote"
+    assert _next_drop_row(h)["name"] == "Crate"
+
+
+def test_drops_skips_a_drop_already_claimed():
+    h = _drops_handler(_campaign(
+        _group("Crate", required=60, watched=60, status="CLAIMED"),
+        _group("Emote", required=120, watched=60),
+    ))
+    assert _next_drop_row(h)["name"] == "Emote"
 
 
 def test_drops_flags_a_drop_ready_to_claim():
-    """An instance id with the minutes met is a drop sitting there to be
-    collected -- a different thing from one still accruing."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop("Crate", required=60, watched=60, instance="inst-1"),
-        ])],
-    )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
-    assert row["claimable"] is True
+    """A drop sitting there to be collected is a different thing from one
+    still accruing."""
+    h = _drops_handler(_campaign(
+        _group("Crate", required=60, watched=60, status="CLAIMABLE"),
+    ))
+    assert _next_drop_row(h)["claimable"] is True
 
 
 def test_drops_reports_null_for_a_channel_with_no_campaign():
-    h = _drops_handler(available=[], inventory=[])
-    out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
-    assert out["data"]["drops"]["alpha"] is None
+    h = _drops_handler()
+    assert _next_drop_row(h) is None
+
+
+def test_drops_reports_null_when_twitch_lists_no_campaigns():
+    # An offline channel answers null rather than an empty list.
+    h = _drops_handler()
+    h.session.gql.drop_channel_campaigns_progress = (
+        lambda channel_id: SimpleNamespace(campaigns=None)
+    )
+    assert _next_drop_row(h) is None
 
 
 def test_drops_reports_null_when_every_drop_is_claimed():
     # Nothing left to earn here, so the card must not imply there is.
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop("Crate", required=60, watched=60, claimed=True),
-        ])],
-    )
-    out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
+    h = _drops_handler(_campaign(
+        _group("Crate", required=60, watched=60, status="CLAIMED"),
+    ))
+    assert _next_drop_row(h) is None
+
+
+def test_drops_skips_a_drop_earned_by_subscribing():
+    """Sitewide sub campaigns run on nearly every channel. Watching cannot
+    earn them, so they would pin a bar at 0/0 on every card."""
+    h = _drops_handler(_campaign(_group("Apple TV", required=0, subs=1)))
+    assert _next_drop_row(h) is None
+
+
+def test_drops_skips_a_watched_drop_that_also_needs_a_subscription():
+    # The miner will not progress it (Drop.has_enough_subs), so the bar
+    # would never fill.
+    h = _drops_handler(_campaign(_group("Crate", required=60, subs=1)))
+    assert _next_drop_row(h) is None
+
+
+def test_drops_skips_a_drop_without_progress():
+    # Twitch omits it when its integrity check fails, which leaves whether
+    # the drop was already claimed unknown.
+    group = _group("Crate")
+    group.self_edge = None
+    h = _drops_handler(_campaign(group))
+    assert _next_drop_row(h) is None
+
+
+def test_drops_skips_an_unlinked_campaign_by_default():
+    """LINKED, the default mode: the miner will not progress a campaign
+    whose game account is unconnected, so its bar would never move."""
+    h = _drops_handler(_campaign(_group("Crate", linked=False)))
+    assert _next_drop_row(h) is None
+
+
+def test_drops_reports_an_unlinked_campaign_where_the_mode_allows_it():
+    h = _drops_handler(_campaign(_group("Crate", linked=False)))
+    assert _next_drop_row(h, allowUnlinked=["alpha"])["name"] == "Crate"
+
+
+def test_drops_allows_unlinked_campaigns_per_channel():
+    h = _drops_handler(_campaign(_group("Crate", linked=False)))
+    out = h.handle({
+        "id": 1, "op": "drops", "streamers": {"alpha": "42", "beta": "43"},
+        "allowUnlinked": ["beta"],
+    })
     assert out["data"]["drops"]["alpha"] is None
+    assert out["data"]["drops"]["beta"]["name"] == "Crate"
 
 
-def test_drops_ignores_a_campaign_the_channel_does_not_carry():
-    """The inventory is global -- it holds every campaign in progress,
-    including ones for channels we are not looking at. Only the ids the
-    channel itself reports may be attributed to it."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="OTHER", time_based_drops=[
-            _drop("Crate", required=60, watched=45),
-        ])],
-    )
-    out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
-    assert out["data"]["drops"]["alpha"] is None
-
-
-def test_drops_fetches_the_inventory_once_for_the_whole_batch():
-    """The inventory is not per channel. Fetching it per streamer would
-    multiply the cost of the one call that is already global."""
-    h = _drops_handler(available=["c1"], inventory=[])
-    calls = []
-    inner = h.session.gql.get_inventory
-    h.session.gql.get_inventory = lambda: (calls.append(1), inner())[1]
-    h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42", "beta": "43"}})
-    assert len(calls) == 1
+def test_drops_treats_a_campaign_as_linked_when_any_reward_is():
+    # The miner's reading (Campaign.from_gql_stream): connections are per
+    # reward, one is enough for the whole campaign.
+    group = _group("Crate", rewards=("Charm", "Crate"), linked=False)
+    group.rewards[1].is_account_connected = True
+    h = _drops_handler(_campaign(group))
+    assert _next_drop_row(h)["name"] == "Crate"
 
 
 def test_drops_survives_one_channel_failing():
-    h = _drops_handler(available=["c1"], inventory=[])
+    h = _drops_handler()
 
     def flaky(channel_id):
         if channel_id == "42":
             raise RuntimeError("channel lookup failed")
-        return SimpleNamespace(ids=[])
+        return SimpleNamespace(campaigns=[_campaign(_group("Crate"))])
 
-    h.session.gql.get_available_drops = flaky
+    h.session.gql.drop_channel_campaigns_progress = flaky
     out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42", "beta": "43"}})
     assert out["ok"] is True
     assert out["data"]["drops"]["alpha"] is None
-    assert out["data"]["drops"]["beta"] is None
+    assert out["data"]["drops"]["beta"]["name"] == "Crate"
 
 
 def test_drops_reports_auth_failure_rather_than_an_empty_roster():
     response = requests.Response()
     response.status_code = 401
     h = _drops_handler()
-    h.session.gql.get_inventory = lambda: (_ for _ in ()).throw(
+    h.session.gql.drop_channel_campaigns_progress = lambda channel_id: (_ for _ in ()).throw(
         requests.exceptions.HTTPError(response=response)
     )
     h.session.is_logged_in = lambda: False
@@ -1025,62 +1071,25 @@ def test_drops_requires_the_streamers_field():
 def test_drops_reports_what_the_drop_actually_awards():
     """The benefit names are what make a drop worth chasing -- "Crate"
     alone says nothing about the reward."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop(benefits=("Weapon Charm", "500 Credits"), watched=10),
-        ])],
-    )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
-    assert row["benefits"] == ["Weapon Charm", "500 Credits"]
+    h = _drops_handler(_campaign(_group(rewards=("Weapon Charm", "500 Credits"))))
+    assert _next_drop_row(h)["benefits"] == ["Weapon Charm", "500 Credits"]
 
 
 def test_drops_dedupes_repeated_benefit_names():
-    # Twitch lists one edge per benefit instance, so a drop awarding two
+    # Twitch lists one reward per benefit instance, so a drop awarding two
     # of the same item repeats the name.
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop(benefits=("Crate", "Crate", "Emote")),
-        ])],
-    )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
-    assert row["benefits"] == ["Crate", "Emote"]
+    h = _drops_handler(_campaign(_group(rewards=("Crate", "Crate", "Emote"))))
+    assert _next_drop_row(h)["benefits"] == ["Crate", "Emote"]
 
 
 def test_drops_reports_the_campaign_deadline_as_epoch_ms():
     """A datetime is not JSON serialisable and would raise in serve()."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            _drop(end_at=datetime.datetime(
-                2026, 10, 1, 0, 0, tzinfo=datetime.timezone.utc)),
-        ])],
-    )
+    h = _drops_handler(_campaign(_group(), end_at=datetime.datetime(
+        2026, 10, 1, 0, 0, tzinfo=datetime.timezone.utc,
+    )))
     out = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})
     assert out["data"]["drops"]["alpha"]["endsAt"] == 1790812800000
     json.dumps(out)
-
-
-def test_drops_survives_a_drop_without_benefits_or_deadline():
-    """A miner build whose parser predates these fields must still report
-    the progress rather than failing the batch."""
-    h = _drops_handler(
-        available=["c1"],
-        inventory=[SimpleNamespace(id="c1", time_based_drops=[
-            SimpleNamespace(
-                id="d1", name="Crate", required_minutes_watched=60,
-                self_edge=SimpleNamespace(
-                    current_minutes_watched=45, is_claimed=False,
-                    drop_instance_id=None,
-                ),
-            ),
-        ])],
-    )
-    row = h.handle({"id": 1, "op": "drops", "streamers": {"alpha": "42"}})["data"]["drops"]["alpha"]
-    assert row["benefits"] == []
-    assert row["endsAt"] is None
-    assert row["minutes"] == 45
 
 
 _UNSET = object()
@@ -1265,7 +1274,7 @@ def test_inventory_link_probe_reports_auth_failure():
     assert out["code"] == "AUTH"
 
 
-def _directory_handler(edges=None, error=None):
+def _directory_handler(edges=None, error=None, payload=None):
     h = handler(balances={"alpha": 10}, live={"42": True})
     captured = {}
 
@@ -1274,7 +1283,9 @@ def _directory_handler(edges=None, error=None):
         captured["json"] = request_json
         if error is not None:
             raise error
-        return parse({"data": {"game": {"streams": {"edges": list(edges or [])}}}})
+        return parse(payload or {
+            "data": {"game": {"streams": {"edges": list(edges or [])}}},
+        })
 
     h.session.gql.post_gql_request_single = fake_post
     return h, captured
@@ -1290,7 +1301,7 @@ def test_directory_lists_live_channels_for_a_game():
         _edge("alpha", "42", 500), _edge("beta", "43", 20),
     ])
     out = h.handle({"id": 1, "op": "directory",
-                    "game": "Once Human", "slug": "once-human", "limit": 30})
+                    "slug": "once-human", "limit": 30})
     assert out["ok"] is True
     assert out["data"]["channels"] == [
         {"login": "alpha", "channelId": "42", "viewers": 500},
@@ -1303,31 +1314,40 @@ def test_directory_asks_twitch_to_filter_by_drops():
     'DropsAktiviert' or 'DropyZapnute' ourselves."""
     h, captured = _directory_handler([_edge()])
     h.handle({"id": 1, "op": "directory",
-              "game": "Once Human", "slug": "once-human", "limit": 30})
-    options = captured["json"]["variables"]["options"]
-    assert options["systemFilters"] == ["DROPS_ENABLED"]
-    assert captured["json"]["variables"]["name"] == "Once Human"
-    assert captured["json"]["variables"]["slug"] == "once-human"
+              "slug": "once-human", "limit": 30})
+    variables = captured["json"]["variables"]
+    assert variables["options"]["systemFilters"] == ["DROPS_ENABLED"]
+    assert variables["slug"] == "once-human"
+
+
+def test_directory_sends_what_the_persisted_query_requires():
+    # Twitch rejects the query outright without includeCostreaming.
+    h, captured = _directory_handler([_edge()])
+    h.handle({"id": 1, "op": "directory", "slug": "once-human", "limit": 30})
+    variables = captured["json"]["variables"]
+    assert variables["includeCostreaming"] is True
+    assert variables["options"]["broadcasterLanguages"] == []
+    assert "name" not in variables
 
 
 def test_directory_is_empty_when_nobody_is_live():
     h, _ = _directory_handler([])
     out = h.handle({"id": 1, "op": "directory",
-                    "game": "Once Human", "slug": "once-human", "limit": 30})
+                    "slug": "once-human", "limit": 30})
     assert out["data"]["channels"] == []
 
 
 def test_directory_skips_an_edge_with_no_broadcaster():
     h, _ = _directory_handler([{"node": {"id": "s1", "viewersCount": 5}}, _edge()])
     out = h.handle({"id": 1, "op": "directory",
-                    "game": "Once Human", "slug": "once-human", "limit": 30})
+                    "slug": "once-human", "limit": 30})
     assert [c["login"] for c in out["data"]["channels"]] == ["alpha"]
 
 
 def test_directory_reports_zero_viewers_rather_than_dropping_a_channel():
     h, _ = _directory_handler([_edge("alpha", "42", None)])
     out = h.handle({"id": 1, "op": "directory",
-                    "game": "Once Human", "slug": "once-human", "limit": 30})
+                    "slug": "once-human", "limit": 30})
     assert out["data"]["channels"][0]["viewers"] == 0
 
 
@@ -1336,7 +1356,26 @@ def test_directory_propagates_a_failure_rather_than_saying_nobody_is_live():
     A failed query is in no position to make it."""
     h, _ = _directory_handler(error=RuntimeError("gql exploded"))
     out = h.handle({"id": 1, "op": "directory",
-                    "game": "Once Human", "slug": "once-human", "limit": 30})
+                    "slug": "once-human", "limit": 30})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+
+
+def test_directory_fails_when_twitch_rejects_the_query():
+    """A rotated hash answers with errors and no data. Reported as nobody
+    live, it would empty the pool instead of keeping it."""
+    h, _ = _directory_handler(payload={"errors": [
+        {"message": "PersistedQueryNotFound"},
+    ]})
+    out = h.handle({"id": 1, "op": "directory",
+                    "slug": "once-human", "limit": 30})
+    assert out["ok"] is False
+    assert out["code"] == "GQL"
+
+
+def test_directory_fails_for_a_slug_twitch_does_not_know():
+    h, _ = _directory_handler(payload={"data": {"game": None}})
+    out = h.handle({"id": 1, "op": "directory", "slug": "nope", "limit": 30})
     assert out["ok"] is False
     assert out["code"] == "GQL"
 
@@ -1541,13 +1580,16 @@ def test_gift_subs_propagates_a_failure_rather_than_reporting_none():
 def _campaigns_handler(by_channel):
     h = handler(balances={"alpha": 10}, live={"42": True})
 
-    def available(channel_id):
+    def progress(channel_id):
         ids = by_channel[channel_id]
         if isinstance(ids, Exception):
             raise ids
-        return SimpleNamespace(ids=ids)
+        return SimpleNamespace(
+            campaigns=None if ids is None
+            else [SimpleNamespace(id=campaign_id) for campaign_id in ids]
+        )
 
-    h.session.gql.get_available_drops = available
+    h.session.gql.drop_channel_campaigns_progress = progress
     return h
 
 
@@ -1556,6 +1598,14 @@ def test_channel_campaigns_lists_each_channels_campaign_ids():
     out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42", "43"]})
     assert out["ok"] is True
     assert out["data"]["campaigns"] == {"42": ["c1", "c2"], "43": []}
+
+
+def test_channel_campaigns_reads_no_campaigns_when_twitch_lists_none():
+    # Twitch answers null, not an empty list, for a channel that runs none.
+    # That is a real answer, unlike the null reported for a failed lookup.
+    h = _campaigns_handler({"42": None})
+    out = h.handle({"id": 1, "op": "channel_campaigns", "channelIds": ["42"]})
+    assert out["data"]["campaigns"] == {"42": []}
 
 
 def test_channel_campaigns_reports_null_for_a_channel_that_failed():

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { dropsEligible } from "./dropsEligible.js";
+import { dropsEligible, dropsMode } from "./dropsEligible.js";
 
 const config = (over: object = {}) => ({
   defaults: {},
@@ -66,4 +66,14 @@ test("a default of false applies to a streamer that sets nothing", () => {
 test("every mode but NONE syncs drops, since LINKED only narrows which progress", () => {
   expect(dropsEligible(config({ defaults: { claimDrops: "ALL" } }), "alpha")).toBe(true);
   expect(dropsEligible(config({ defaults: { claimDrops: "LINKED" } }), "alpha")).toBe(true);
+});
+
+test("the mode resolves the way eligibility does: own, then defaults, then LINKED", () => {
+  const cfg = config({
+    defaults: { claimDrops: "ALL" },
+    streamers: [{ username: "Alpha", enabled: true, settings: { claimDrops: "LINKED" } }],
+  });
+  expect(dropsMode(cfg, "alpha")).toBe("LINKED");
+  expect(dropsMode(cfg, "ghost")).toBe("ALL");
+  expect(dropsMode(config(), "ghost")).toBe("LINKED");
 });

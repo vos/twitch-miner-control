@@ -1,45 +1,36 @@
-import type { AppConfig, StreamerSettingsInput } from "../config/schema.js";
+import type { AppConfig, DropsMode } from "../config/schema.js";
 import { normaliseUsername } from "./roster.js";
 
 /**
- * Whether the miner is claiming drops for this channel.
- *
- * The precondition for fetching drop data at all. Upstream's
- * `should_sync_campaigns` requires `claim_drops` before it syncs a
- * streamer's campaigns, so with the setting off there is no inventory
- * progress to read and a badge would be reporting on something the
- * miner is not doing.
+ * The claim_drops mode the miner runs a channel in.
  *
  * Resolved the way the miner resolves it: a streamer's own setting wins,
  * otherwise the defaults apply -- which is also how a followed channel
  * with no config entry of its own gets its settings.
  *
- * Unset anywhere is ON, because that is what the miner does with it:
+ * Unset anywhere is LINKED, because that is what the miner does with it:
  * StreamerSettings maps an unset claim_drops to DropsMode.LINKED. Reading
  * absent as "off" here made the dashboard report no drops at all for a
  * default config -- every streamer inherits nothing -- while the miner
  * beside it was claiming drops for all of them.
  */
-export function dropsEligible(config: AppConfig, username: string): boolean {
+export function dropsMode(config: AppConfig, username: string): DropsMode {
   const login = normaliseUsername(username);
   const entry = config.streamers.find(
     (s) => normaliseUsername(s.username) === login,
   );
-  const own = claimDrops(entry?.settings);
-  // `?? true` last: an explicit NONE at either level still wins, but
-  // absent at both follows the miner's own default.
-  return own ?? claimDrops(config.defaults) ?? true;
+  return entry?.settings?.claimDrops ?? config.defaults.claimDrops ?? "LINKED";
 }
 
 /**
- * Reads `claimDrops` off a settings object: whether its mode syncs drops.
+ * Whether the miner is claiming drops for this channel.
  *
- * Both LINKED and ALL do -- the miner syncs a channel's campaigns for
- * anything but NONE (StreamSystem.update_campaigns), and LINKED only
- * narrows which of them it then progresses. Undefined for "unset", so the
- * caller can tell it from an explicit NONE.
+ * The precondition for fetching drop data at all. Both LINKED and ALL
+ * count: the miner syncs a channel's campaigns for anything but NONE
+ * (StreamSystem.update_campaigns), and LINKED only narrows which of them
+ * it then progresses. With the setting off a badge would be reporting on
+ * something the miner is not doing.
  */
-function claimDrops(settings: StreamerSettingsInput | undefined): boolean | undefined {
-  const mode = settings?.claimDrops;
-  return mode === undefined ? undefined : mode !== "NONE";
+export function dropsEligible(config: AppConfig, username: string): boolean {
+  return dropsMode(config, username) !== "NONE";
 }
