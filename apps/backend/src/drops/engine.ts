@@ -15,6 +15,7 @@ import {
   resolveSubscription,
   type DirectoryChannel,
 } from "./resolution.js";
+import { normaliseUsername } from "../state/roster.js";
 import { NULL_LOG, type AppLog } from "../appLog/port.js";
 import { COMPONENT, EVENT } from "../appLog/types.js";
 
@@ -417,7 +418,7 @@ export class SubscriptionEngine {
 
       let directory: DirectoryChannel[] | null = null;
       try {
-        directory = await this.deps.directory(game);
+        directory = watchable(await this.deps.directory(game), config);
       } catch (cause) {
         // Left null: resolution reports this as degraded. Caught per
         // subscription so one failing lookup does not sink the others.
@@ -683,6 +684,25 @@ export class SubscriptionEngine {
       carrying: [...carries.values()].filter(Boolean).length,
     };
   }
+}
+
+/**
+ * The directory without the channels the user switched off.
+ *
+ * The miner skips a disabled row and reconcile never touches a manual
+ * one, so such a channel in a pool holds a slot nobody watches, and as
+ * an incumbent it would read as live while collecting nothing.
+ */
+function watchable(
+  directory: DirectoryChannel[],
+  config: AppConfig,
+): DirectoryChannel[] {
+  const off = new Set(
+    config.streamers
+      .filter((s) => !s.enabled)
+      .map((s) => normaliseUsername(s.username)),
+  );
+  return directory.filter((c) => !off.has(normaliseUsername(c.login)));
 }
 
 /** How each rebuild reason reads in the log. */

@@ -1254,6 +1254,67 @@ test("a rebuild prefers channels Twitch says carry the campaign", async () => {
     .toMatchObject({ checked: 2, carrying: 1 });
 });
 
+test("a rebuild passes over a channel the user switched off", async () => {
+  // Reconcile leaves a manual row alone and the miner skips a disabled
+  // one, so picking it would hold a pool slot nobody ever watches.
+  const { engine, saveConfig } = make({
+    config: {
+      streamers: [{ ...manual("Beta"), enabled: false }] as never,
+      subscriptions: [sub()],
+    },
+    directory: async () => [
+      { login: "beta", channelId: "id-beta", viewers: 500 },
+      { login: "gamma", channelId: "id-gamma", viewers: 50 },
+      { login: "delta", channelId: "id-delta", viewers: 40 },
+    ],
+  });
+  await engine.pass();
+  const { streamers } = written(saveConfig);
+  expect(streamers.filter((s) => s.ownedBy === "s1").map((s) => s.username))
+    .toEqual(["gamma", "delta"]);
+  expect(streamers[0]).toMatchObject({ username: "Beta", enabled: false });
+});
+
+test("a switched-off channel does not use up a campaign check", async () => {
+  const channelCampaigns = vi.fn(async () => ({}));
+  const { engine } = make({
+    config: {
+      streamers: [{ ...manual("beta"), enabled: false }] as never,
+      subscriptions: [sub()],
+    },
+    channelCampaigns,
+  });
+  await engine.pass();
+  expect(channelCampaigns).toHaveBeenCalledWith(["id-gamma"]);
+});
+
+test("a switched-off channel does not count as a live pool member", async () => {
+  // Live on the directory, but the miner is not watching it, so this pool
+  // collects nothing and must be rebuilt rather than kept.
+  const { engine, saveConfig } = make({
+    config: {
+      streamers: [{ ...owned("beta", "s1"), enabled: false }] as never,
+      subscriptions: [sub({ poolSize: 1 })],
+    },
+  });
+  await engine.pass();
+  expect(written(saveConfig).streamers.map((s) => s.username)).toEqual(["gamma"]);
+});
+
+test("a directory of only switched-off channels resolves to no pool", async () => {
+  const { engine, saveConfig } = make({
+    config: {
+      streamers: [
+        { ...manual("beta"), enabled: false },
+        { ...manual("gamma"), enabled: false },
+      ] as never,
+      subscriptions: [sub()],
+    },
+  });
+  await engine.pass();
+  expect(saveConfig).not.toHaveBeenCalled();
+});
+
 test("a failing campaign check rebuilds from the directory alone", async () => {
   const log = memoryLog();
   const { engine, saveConfig } = make({
