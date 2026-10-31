@@ -524,3 +524,60 @@ test("a missing interpreter is announced as a failed spawn", async () => {
   await until(() => s.state === "CRASHED");
   expect(crashes[0]).toMatchObject({ kind: "spawnFailed", err: expect.any(String) });
 });
+
+// --- shutdown is final ---
+
+test("shutdown stops a running miner", async () => {
+  const s = make("normal");
+  await s.start();
+  await s.shutdown();
+  expect(s.state).toBe("STOPPED");
+  expect(s.livePids()).toEqual([]);
+});
+
+test("a start after shutdown spawns nothing", async () => {
+  // Boot can reach its start after the signal: stopping found no child, so
+  // a miner spawned now outlives this process.
+  const s = make("normal");
+  await s.shutdown();
+  await s.start();
+  expect(s.livePids()).toEqual([]);
+  expect(s.state).toBe("STOPPED");
+});
+
+test("a restart after shutdown spawns nothing", async () => {
+  // A deferred restart's countdown can run out during shutdown.
+  const s = make("normal");
+  await s.start();
+  await s.shutdown();
+  await s.restart();
+  expect(s.livePids()).toEqual([]);
+  expect(s.state).toBe("STOPPED");
+});
+
+test("a start issued just before shutdown is stopped by it", async () => {
+  const s = make("normal");
+  const starting = s.start();
+  const closing = s.shutdown();
+  await Promise.all([starting, closing]);
+  expect(s.livePids()).toEqual([]);
+  expect(s.state).toBe("STOPPED");
+});
+
+test("a crash restart pending at shutdown does not resurrect the miner", async () => {
+  const s = make("delayed_crash", { fastExitMs: 0, backoffBaseMs: 100, env: { FAKE_MODE: "delayed_crash", DIE_AFTER_MS: "20" } });
+  await s.start();
+  await until(() => s.state === "RESTARTING");
+  await s.shutdown();
+  await settle(250);
+  expect(s.livePids()).toEqual([]);
+  expect(s.state).toBe("STOPPED");
+});
+
+test("an ordinary stop can still be followed by a start", async () => {
+  const s = make("normal");
+  await s.start();
+  await s.stop();
+  await s.start();
+  expect(s.state).toBe("RUNNING");
+});

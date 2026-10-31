@@ -120,6 +120,8 @@ export class Supervisor extends EventEmitter {
   private buffer = new LogBuffer();
   private lock: Promise<void> = Promise.resolve();
   private intentionalStop = false;
+  /** Set by shutdown(), and never cleared: nothing may spawn after it. */
+  private closed = false;
   private startedAt = 0;
   /**
    * Timestamps (Date.now()) of unintentional crashes still inside the
@@ -233,7 +235,7 @@ export class Supervisor extends EventEmitter {
   }
 
   private async spawnOnce(): Promise<void> {
-    if (this.child && this.child.exitCode === null) return;
+    if (this.closed || (this.child && this.child.exitCode === null)) return;
     this.setState("STARTING");
     this.intentionalStop = false;
     this.startedAt = Date.now();
@@ -429,6 +431,21 @@ export class Supervisor extends EventEmitter {
   }
 
   /**
+   * Stops the miner for good, for when this process is exiting.
+   *
+   * A plain stop() leaves the supervisor startable, which is what lets the
+   * operator press Start again. During shutdown that is a leak: anything
+   * still on its way to start() or restart() -- the boot pass, a deferred
+   * restart, a request in flight -- would spawn a miner after the stop, and
+   * it would outlive this process. A start already underway is safe either
+   * way, since this queues behind it on the same lock.
+   */
+  shutdown(): Promise<void> {
+    this.closed = true;
+    return this.stop();
+  }
+
+  /**
    * @param finalState state to settle into once the process is confirmed
    * gone. terminate() itself is also used mid-restart() (where the
    * caller wants to stay in RESTARTING rather than have terminate()
@@ -501,6 +518,7 @@ export class Supervisor extends EventEmitter {
 
   restart(): Promise<void> {
     return this.serialize(async () => {
+      if (this.closed) return;
       this.setState("RESTARTING");
       // Pass "RESTARTING" through so terminate() re-asserts the state
       // we're already in instead of settling into STOPPED -- otherwise

@@ -507,6 +507,8 @@ const loggedIn = await helper
   .catch(() => ({ loggedIn: false }));
 if (loggedIn.loggedIn) loginStatus.markLoggedIn();
 
+let shuttingDown = false;
+
 server = app;
 // Derives in full, then hands over to the live client count: from the
 // next poll on, a refresh with nobody watching writes history and skips
@@ -531,6 +533,8 @@ void (async () => {
   } finally {
     minerStartHeld = false;
   }
+  // The signal handler has already stopped everything these would arm.
+  if (shuttingDown) return;
   if (loggedIn.loggedIn && loadConfig(configPath).username) await supervisor.start();
   engine.start();
   campaignWatcher.start();
@@ -547,7 +551,6 @@ void (async () => {
 // Children are not killed when this process exits, so a SIGTERM from a
 // service manager would otherwise orphan the miner and both helpers --
 // and an orphaned miner keeps mining against a config nobody can change.
-let shuttingDown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     if (shuttingDown) return;
@@ -571,7 +574,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         : Promise.resolve();
       loginRunner.cancel();
       await Promise.allSettled([
-        supervisor.stop(), helper.stop(), app.close(), loginDone,
+        supervisor.shutdown(), helper.stop(), app.close(), loginDone,
       ]);
       db.close();
       // Last, and awaited: this is the final event of the run, and
