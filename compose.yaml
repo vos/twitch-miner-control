@@ -11,9 +11,9 @@ services:
     # the fixed 8080:8080 host port already limits this to one instance.
     container_name: twitch-miner-control
     init: true            # reap orphaned Python children
-    # Longer than the 20s the backend gives the miner to stop, so Docker
+    # Longer than the 60s the backend gives the miner to stop, so Docker
     # never kills a shutdown that is still running.
-    stop_grace_period: 30s
+    stop_grace_period: 75s
     ports:
       - "8080:8080"
     environment:

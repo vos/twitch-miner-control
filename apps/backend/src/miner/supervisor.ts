@@ -62,8 +62,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * connection, so SIGTERM is not guaranteed to be timely -- shutdown
  * must still complete in bounded time and never leak a process holding
  * Twitch cookies.
+ *
+ * A healthy miner exits in about 5s, and stop() returns as soon as it
+ * does, so this only ever costs time for a miner that is truly stuck. It
+ * has to outlast the slowest clean exit: the miner's watch loop finishes
+ * both watch slots before it looks at the shutdown flag, and each request
+ * there can block for 23s (3.05s connect + 20s read timeout) when Twitch
+ * is slow. Docker's stop_grace_period in both compose files must stay
+ * above this.
  */
-export const STOP_GRACE_MS = 20_000;
+export const STOP_GRACE_MS = 60_000;
 
 /**
  * Width of the sliding crash-rate window used to decide whether the
@@ -498,10 +506,11 @@ export class Supervisor extends EventEmitter {
       // never fire kill() on an already-reaped pid or keep the event
       // loop alive after shutdown.
       const killTimer = setTimeout(() => {
-        this.logLine("miner ignored SIGTERM; sending SIGKILL");
+        const msg = `miner still running ${this.grace}ms after SIGTERM; sending SIGKILL`;
+        this.logLine(msg);
         this.log.warn({
           type: EVENT.MINER_SIGKILL,
-          msg: `miner ignored SIGTERM for ${this.grace}ms; sending SIGKILL`,
+          msg,
           graceMs: this.grace,
           pid: child.pid ?? null,
         });

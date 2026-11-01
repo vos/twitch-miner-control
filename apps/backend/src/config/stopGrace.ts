@@ -3,18 +3,17 @@ import { STOP_GRACE_MS } from "../miner/supervisor.js";
 /**
  * Resolves MINER_STOP_GRACE_MS to the Supervisor's `graceMs`.
  *
- * The miner's own shutdown is slow by design: upstream's `end()` joins
- * every background thread (campaign sync, minute watcher, websocket
- * pool), and those threads sleep on long intervals, so a SIGTERM'd miner
- * routinely takes ~15s to exit. Production wants to absorb that wait --
- * a clean exit flushes the miner's report and releases its Twitch
- * session. A dev loop does not: `node --watch` blocks on the old process
- * before restarting, so the same 15s is paid on every single edit.
+ * The miner's own shutdown takes a few seconds by design: upstream's
+ * `end()` joins every background thread (campaign sync, minute watcher,
+ * websocket pool), and those threads poll for shutdown every 5s, so a
+ * SIGTERM'd miner takes about 5s to exit. `node --watch` blocks on the old
+ * process before restarting, so a dev loop pays that on every edit.
  *
  * Lowering this in .env trades the miner's clean exit for a fast restart.
- * It is deliberately not lowered by default: SIGKILL skips upstream's
- * report and leaves the session to time out server-side, which is fine
- * for a dev miner and wrong for a real one.
+ * Anything under about 5s does so on every stop: SIGKILL skips upstream's
+ * report and leaves the session to time out server-side. That is fine for
+ * a throwaway dev miner and wrong for a real one, so the default never
+ * cuts a shutdown short.
  *
  * Invalid values fall back to the default rather than throwing or
  * yielding NaN -- a NaN grace makes setTimeout fire immediately, which

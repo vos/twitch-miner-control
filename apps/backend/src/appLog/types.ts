@@ -61,7 +61,7 @@ export const EVENT = {
   MINER_RESTART_SCHEDULED: "miner.restart.scheduled",
   /** The crash-rate cap tripped; no further automatic restarts. */
   MINER_GAVE_UP: "miner.restart.gaveUp",
-  /** SIGTERM was ignored and the grace period ran out. */
+  /** The grace period after SIGTERM ran out with the miner still running. */
   MINER_SIGKILL: "miner.sigkill",
 
   // --- the deferred restart -----------------------------------------

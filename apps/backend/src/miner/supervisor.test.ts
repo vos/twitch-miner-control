@@ -485,6 +485,10 @@ test("records a SIGKILL escalation", async () => {
   const event = log.ofType("miner.sigkill")[0];
   expect(event).toBeDefined();
   expect(event?.graceMs).toBe(100);
+  // SIGTERM says nothing about whether the miner reacted: by the time this
+  // fires, a real one has usually acknowledged it and is mid-shutdown.
+  expect(event?.msg).toBe("miner still running 100ms after SIGTERM; sending SIGKILL");
+  expect(s.logs().lines).toContain("miner still running 100ms after SIGTERM; sending SIGKILL");
 });
 
 test("a supervisor with no logger behaves identically", () => {

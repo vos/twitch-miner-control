@@ -14,9 +14,9 @@ services:
     image: ghcr.io/vos/twitch-miner-control:latest
     container_name: twitch-miner-control
     init: true            # reap orphaned Python children
-    # Longer than the 20s the backend gives the miner to stop, so Docker
+    # Longer than the 60s the backend gives the miner to stop, so Docker
     # never kills a shutdown that is still running.
-    stop_grace_period: 30s
+    stop_grace_period: 75s
     ports:
       # Publishing on every interface is what makes this reachable from
       # other machines on your LAN, which is the point. It is also why the
